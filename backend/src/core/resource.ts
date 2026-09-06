@@ -49,6 +49,19 @@ export interface ResourceDefinition {
    * demás empresas. También bloquea el alta de empresas desde un rol de empresa.
    */
   adminOnlyActions?: Array<'create' | 'update' | 'delete'>;
+  /**
+   * Columnas que solo el ADMIN de la plataforma puede CAMBIAR, dentro de un recurso que
+   * los demás roles sí pueden editar. Es más fino que `adminOnlyActions`: `companies`
+   * necesita que una empresa mantenga su ficha (nombre, correo, teléfono, logo) pero no
+   * pueda tocar `status` ni `tax_id`, que son estado de plataforma y dato fiscal
+   * verificado, no datos de la ficha.
+   *
+   * Se compara contra el valor anterior: reenviar el mismo valor NO es un cambio y se
+   * admite. Hace falta porque el formulario del Portal Empresa devuelve la ficha completa
+   * al guardar, así que rechazar la mera presencia de la columna rompería una edición
+   * legítima. Es el mismo criterio que ya se aplica al rol propio en `PUT /users/:id`.
+   */
+  adminOnlyColumns?: string[];
   /** Business rule to run after a successful update (e.g. activating users of an approved company). */
   afterUpdate?: (id: number, previous: Record<string, unknown>, data: Record<string, unknown>) => Promise<void>;
 }
@@ -79,6 +92,30 @@ function companyScope(req: Request, definition: ResourceDefinition): { sql: stri
   }
   const placeholders = user.companyIds.map(() => '?').join(', ');
   return { sql: `${definition.companyScopeExpression} IN (${placeholders})`, params: [...user.companyIds] };
+}
+
+/**
+ * Impide que un actor que no es ADMIN cambie las columnas reservadas a la plataforma.
+ *
+ * Compara con la fila anterior en lugar de rechazar la presencia de la clave: el
+ * formulario del Portal Empresa reenvía la ficha entera al guardar, así que rechazar por
+ * presencia dejaría a una empresa sin poder editar su propio correo o teléfono.
+ */
+function assertAdminOnlyColumnsUnchanged(req: Request, definition: ResourceDefinition, data: Row, previous: Row): void {
+  const reserved = definition.adminOnlyColumns;
+  if (!reserved || reserved.length === 0 || req.user?.role === 'ADMIN') return;
+
+  // `null`, `undefined` y cadena vacía son el mismo «sin valor» a efectos de comparar.
+  const normalize = (value: unknown): string => (value === null || value === undefined ? '' : String(value));
+
+  for (const column of reserved) {
+    if (!Object.prototype.hasOwnProperty.call(data, column)) continue;
+    if (normalize(data[column]) === normalize(previous[column])) continue;
+
+    throw ApiError.forbidden(
+      `Solo un administrador de la plataforma puede cambiar «${column}» de ${definition.entityName.toLowerCase()}`,
+    );
+  }
 }
 
 function pickWritable(definition: ResourceDefinition, body: Row): Row {
@@ -228,6 +265,7 @@ export function createResourceRouter(definition: ResourceDefinition): Router {
       const previous = await findRowOrFail(req, definition, id);
 
       const data = pickWritable(definition, req.body as Row);
+      assertAdminOnlyColumnsUnchanged(req, definition, data, previous);
       if (definition.companyScopeColumn && data[definition.companyScopeColumn] !== undefined) {
         enforceCompanyOwnership(req, definition, data);
       }

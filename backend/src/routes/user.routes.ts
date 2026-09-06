@@ -146,10 +146,26 @@ router.get(
   }),
 );
 
+/**
+ * Cifras de la plataforma entera, exclusivas del ADMIN.
+ *
+ * Era el único endpoint del archivo que no aplicaba `visibilityScope`, y `users.view` lo
+ * tienen también CUSTOMER y OPERATOR: cualquier cliente registrado obtenía el tamaño real
+ * de la plataforma y cuántos administradores hay.
+ *
+ * Se restringe por ROL en vez de acotar por empresa porque estas cifras no tienen una
+ * versión con sentido para una empresa —«administradores» o «clientes totales» no son
+ * suyos— y el Portal Empresa nunca las pide: la pantalla de usuarios solo llama a este
+ * endpoint cuando su `scope` es `admin`. Es el mismo criterio de `/dashboard/admin`.
+ */
 router.get(
   '/stats',
   requirePermission('users.view'),
-  asyncHandler(async (_req, res) => {
+  asyncHandler(async (req, res) => {
+    if (requireAuth(req).role !== 'ADMIN') {
+      throw ApiError.forbidden('Solo el administrador de la plataforma puede ver estas cifras');
+    }
+
     const stats = await queryOne(
       `SELECT COUNT(*) AS total,
         SUM(u.status = 'ACTIVE') AS active,

@@ -125,10 +125,12 @@ export function CompanyNotificationsPage() {
   );
 }
 
-const COMPANY_FIELDS: Array<{ name: keyof Company & string; label: string; type?: 'text' | 'email' }> = [
+const COMPANY_FIELDS: Array<{ name: keyof Company & string; label: string; type?: 'text' | 'email'; adminOnly?: boolean }> = [
   { name: 'name', label: 'Nombre comercial' },
   { name: 'legal_name', label: 'Razón social' },
-  { name: 'tax_id', label: 'RUC' },
+  // El RUC es el dato fiscal que verifica la plataforma: el backend rechaza cambiarlo
+  // desde un rol de empresa, así que aquí se muestra pero no se ofrece editar.
+  { name: 'tax_id', label: 'RUC', adminOnly: true },
   { name: 'email', label: 'Correo de contacto', type: 'email' },
   { name: 'phone', label: 'Teléfono' },
   { name: 'logo_url', label: 'URL del logotipo' },
@@ -238,7 +240,8 @@ export function CompanyProfilePage() {
                 label={field.label}
                 type={field.type ?? 'text'}
                 value={values[field.name] ?? ''}
-                disabled={!canEdit}
+                disabled={!canEdit || (field.adminOnly && user?.role !== 'ADMIN')}
+                hint={field.adminOnly && user?.role !== 'ADMIN' ? 'Solo un administrador de la plataforma puede cambiarlo.' : undefined}
                 onChange={(event) => setDraft({ ...values, [field.name]: event.target.value })}
               />
             ))}

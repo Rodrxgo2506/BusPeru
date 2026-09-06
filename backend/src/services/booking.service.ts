@@ -136,13 +136,24 @@ export async function createBookingOnConnection(
   segment?: SegmentContext,
 ): Promise<{ bookingId: number; bookingCode: string; total: number }> {
   {
+    // La empresa y la ruta se comprueban en ESTA misma consulta, no en una aparte: así la
+    // validación entra dentro del bloqueo que ya serializa las reservas del viaje y no se
+    // abre una ventana entre comprobar y crear. Ocultar el viaje en la búsqueda no bastaba:
+    // entrando por su id se podía comprar de una empresa que la plataforma había retirado.
     const [tripRows] = await connection.query(
-      `SELECT t.id, t.base_price, t.status, t.departure_datetime, t.bus_id, t.available_seats
-       FROM trips t WHERE t.id = ? LIMIT 1 FOR UPDATE`,
+      `SELECT t.id, t.base_price, t.status, t.departure_datetime, t.bus_id, t.available_seats,
+              r.status AS route_status, co.status AS company_status
+       FROM trips t
+       JOIN routes r ON r.id = t.route_id
+       JOIN companies co ON co.id = r.company_id
+       WHERE t.id = ? LIMIT 1 FOR UPDATE`,
       [input.trip_id],
     );
     const trip = (tripRows as Record<string, unknown>[])[0];
     if (!trip) throw ApiError.notFound('El viaje no existe');
+    if (trip.company_status !== 'ACTIVE' || trip.route_status !== 'ACTIVE') {
+      throw ApiError.badRequest('El viaje ya no admite reservas');
+    }
     if (!['SCHEDULED', 'BOARDING', 'DELAYED'].includes(String(trip.status))) {
       throw ApiError.badRequest('El viaje ya no admite reservas');
     }

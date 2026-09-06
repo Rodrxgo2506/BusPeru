@@ -2,8 +2,8 @@ import '../test/helpers/testEnv';
 import assert from 'node:assert/strict';
 import { after, before, describe, it } from 'node:test';
 import { del, get, post, put } from './helpers/api';
-import { queryOne } from '../config/database';
-import { at, TEST_PASSWORD } from './helpers/fixtures';
+import { execute, queryOne } from '../config/database';
+import { at, freeSeats, TEST_PASSWORD } from './helpers/fixtures';
 import { prepareSuite, teardownSuite, type SuiteContext } from './helpers/suite';
 
 /**
@@ -452,6 +452,302 @@ describe('Límites de privilegio de los roles de empresa', () => {
         (await post('/auth/login', { email: 'operador-a@test.pe', password: CLAVE_INTRUSA })).status,
         401,
       );
+    });
+  });
+
+  /**
+   * BP-02 · regresión de la auditoría del 06/09/2026.
+   *
+   * `status` y `tax_id` estaban entre las columnas escribibles de `companies`, y
+   * `adminOnlyActions` solo cubría el alta y la baja. Como suspender una empresa no le
+   * quita la sesión a su administrador, este deshacía la sanción con una petición.
+   */
+  describe('BP-02 · el estado y el RUC de la empresa son de la plataforma', () => {
+    /** Suspende la empresa A, ejecuta la comprobación y la deja como estaba. */
+    async function conEmpresaSuspendida(comprobacion: () => Promise<void>): Promise<void> {
+      await execute("UPDATE companies SET status = 'SUSPENDED' WHERE id = ?", [ctx.fixtures.companyA]);
+      try {
+        await comprobacion();
+      } finally {
+        await execute("UPDATE companies SET status = 'ACTIVE' WHERE id = ?", [ctx.fixtures.companyA]);
+      }
+    }
+
+    async function estadoEmpresaA() {
+      return queryOne<{ status: string; tax_id: string | null; name: string; phone: string | null }>(
+        'SELECT status, tax_id, name, phone FROM companies WHERE id = ?',
+        [ctx.fixtures.companyA],
+      );
+    }
+
+    it('un COMPANY_ADMIN no puede reactivar su propia empresa suspendida', async () => {
+      await conEmpresaSuspendida(async () => {
+        const res = await put(`/companies/${ctx.fixtures.companyA}`, { status: 'ACTIVE' }, ctx.sessions.companyAdmin.token);
+        assert.equal(res.status, 403);
+        assert.equal((await estadoEmpresaA())?.status, 'SUSPENDED', 'la sanción debe seguir en pie');
+      });
+    });
+
+    it('tampoco puede darse de baja a sí misma', async () => {
+      const res = await put(`/companies/${ctx.fixtures.companyA}`, { status: 'INACTIVE' }, ctx.sessions.companyAdmin.token);
+      assert.equal(res.status, 403);
+      assert.equal((await estadoEmpresaA())?.status, 'ACTIVE');
+    });
+
+    it('ni cambiar el RUC verificado', async () => {
+      const res = await put(`/companies/${ctx.fixtures.companyA}`, { tax_id: '20999999999' }, ctx.sessions.companyAdmin.token);
+      assert.equal(res.status, 403);
+      assert.equal((await estadoEmpresaA())?.tax_id, '20111111111');
+    });
+
+    it('mezclarlo con campos legítimos no abre ningún bypass', async () => {
+      const antes = await estadoEmpresaA();
+
+      const res = await put(
+        `/companies/${ctx.fixtures.companyA}`,
+        { name: 'Nombre colado', phone: '+51 900 123 456', status: 'ACTIVE', tax_id: '20999999999' },
+        ctx.sessions.companyAdmin.token,
+      );
+      assert.equal(res.status, 403);
+
+      const despues = await estadoEmpresaA();
+      assert.equal(despues?.name, antes?.name, 'la petición se rechaza entera');
+      assert.equal(despues?.phone, antes?.phone);
+      assert.equal(despues?.tax_id, antes?.tax_id);
+    });
+
+    it('pero sigue editando la ficha de su empresa con normalidad', async () => {
+      const res = await put(
+        `/companies/${ctx.fixtures.companyA}`,
+        { name: 'Empresa A', email: 'contacto-a@test.pe', phone: '+51 955 000 111', description: 'Transporte interprovincial' },
+        ctx.sessions.companyAdmin.token,
+      );
+      assert.equal(res.status, 200);
+      assert.equal(res.body.data.phone, '+51 955 000 111');
+      assert.equal(res.body.data.email, 'contacto-a@test.pe');
+    });
+
+    it('y puede guardar el formulario completo, que reenvía el RUC sin cambiarlo', async () => {
+      const actual = await estadoEmpresaA();
+      const res = await put(
+        `/companies/${ctx.fixtures.companyA}`,
+        { name: actual?.name, tax_id: actual?.tax_id, phone: '+51 955 222 333' },
+        ctx.sessions.companyAdmin.token,
+      );
+      assert.equal(res.status, 200, 'el Portal Empresa reenvía la ficha entera al guardar');
+      assert.equal(res.body.data.phone, '+51 955 222 333');
+    });
+
+    it('un OPERATOR no gana ninguna capacidad: sigue sin poder escribir', async () => {
+      assert.equal((await put(`/companies/${ctx.fixtures.companyA}`, { phone: '+51 999 999 999' }, ctx.sessions.operator.token)).status, 403);
+      assert.equal((await put(`/companies/${ctx.fixtures.companyA}`, { status: 'INACTIVE' }, ctx.sessions.operator.token)).status, 403);
+    });
+
+    it('un CUSTOMER tampoco', async () => {
+      assert.equal((await put(`/companies/${ctx.fixtures.companyA}`, { status: 'INACTIVE' }, ctx.sessions.customer.token)).status, 403);
+    });
+
+    it('el ADMIN conserva el estado y el RUC como capacidad administrativa', async () => {
+      await conEmpresaSuspendida(async () => {
+        const reactivada = await put(`/companies/${ctx.fixtures.companyA}`, { status: 'ACTIVE' }, ctx.sessions.admin.token);
+        assert.equal(reactivada.status, 200);
+        assert.equal(reactivada.body.data.status, 'ACTIVE');
+      });
+
+      const ruc = await put(`/companies/${ctx.fixtures.companyA}`, { tax_id: '20555555555' }, ctx.sessions.admin.token);
+      assert.equal(ruc.status, 200);
+      assert.equal(ruc.body.data.tax_id, '20555555555');
+
+      const vuelta = await put(`/companies/${ctx.fixtures.companyA}`, { tax_id: '20111111111' }, ctx.sessions.admin.token);
+      assert.equal(vuelta.status, 200);
+    });
+  });
+
+  /**
+   * BP-04 · regresión de la auditoría del 06/09/2026.
+   *
+   * `GET /users/stats` era el único endpoint del archivo sin alcance, y `users.view` lo
+   * tienen también CUSTOMER y OPERATOR: cualquier cliente registrado obtenía el tamaño de
+   * la plataforma y cuántos administradores hay.
+   */
+  describe('BP-04 · las cifras de usuarios son solo del ADMIN', () => {
+    it('un CUSTOMER ya no recibe las cifras globales', async () => {
+      const res = await get('/users/stats', ctx.sessions.customer.token);
+      assert.equal(res.status, 403);
+      assert.equal(res.body.data, undefined, 'ni siquiera parcialmente');
+    });
+
+    it('un OPERATOR tampoco', async () => {
+      const res = await get('/users/stats', ctx.sessions.operator.token);
+      assert.equal(res.status, 403);
+      assert.equal(res.body.data, undefined);
+    });
+
+    it('un COMPANY_ADMIN tampoco: el Portal Empresa nunca pide estas cifras', async () => {
+      assert.equal((await get('/users/stats', ctx.sessions.companyAdmin.token)).status, 403);
+    });
+
+    it('sin sesión responde 401 como el resto de la API', async () => {
+      assert.equal((await get('/users/stats')).status, 401);
+    });
+
+    it('el ADMIN las sigue recibiendo completas: el panel no se rompe', async () => {
+      const res = await get('/users/stats', ctx.sessions.admin.token);
+      assert.equal(res.status, 200);
+      for (const clave of ['total', 'active', 'suspended', 'pending', 'customers', 'admins', 'company_users']) {
+        assert.ok(res.body.data[clave] !== undefined, `falta la métrica ${clave} que usa el panel`);
+      }
+      assert.ok(Number(res.body.data.total) > 0);
+    });
+
+    it('no hay otra vía en el listado de usuarios para deducir las mismas cifras', async () => {
+      // El listado sí sigue disponible, pero acotado: un cliente solo se ve a sí mismo.
+      const listado = await get('/users?limit=100', ctx.sessions.customer.token);
+      assert.equal(listado.status, 200);
+      assert.equal(listado.body.pagination.total, 1, 'el alcance del listado sigue siendo su propia fila');
+
+      // Y filtrar por rol no amplía nada.
+      const admins = await get('/users?role=ADMIN&limit=100', ctx.sessions.customer.token);
+      assert.equal(admins.body.pagination.total, 0, 'no puede contar administradores');
+    });
+  });
+
+  /**
+   * BP-05 · regresión de la auditoría del 06/09/2026.
+   *
+   * `POST /support/tickets` insertaba `company_id` y `booking_id` tal como llegaban: se
+   * podía abrir un ticket apuntando a la reserva de otro —y la respuesta devolvía su
+   * `booking_code`— y contra una empresa sin ninguna relación con el autor.
+   */
+  describe('BP-05 · la reserva y la empresa del ticket las decide el servidor', () => {
+    let reservaPropia: { id: number; booking_code: string };
+    let reservaAjena: { id: number; booking_code: string };
+
+    before(async () => {
+      const propia = await post(
+        '/bookings',
+        { trip_id: ctx.fixtures.tripA, seat_ids: [at(await freeSeats(ctx.fixtures.tripA), 0).id] },
+        ctx.sessions.customer.token,
+      );
+      reservaPropia = propia.body.data;
+
+      // Una reserva del ADMIN sobre un viaje de la empresa B: ajena al cliente por partida doble.
+      const ajena = await post(
+        '/bookings',
+        { trip_id: ctx.fixtures.tripB, seat_ids: [at(await freeSeats(ctx.fixtures.tripB), 0).id] },
+        ctx.sessions.admin.token,
+      );
+      reservaAjena = ajena.body.data;
+    });
+
+    it('un ticket sin reserva sigue funcionando', async () => {
+      const res = await post(
+        '/support/tickets',
+        { subject: 'Consulta general', message: 'No consigo actualizar mis datos.' },
+        ctx.sessions.customer.token,
+      );
+      assert.equal(res.status, 201);
+      assert.equal(res.body.data.booking_id, null);
+      assert.equal(res.body.data.company_id, null, 'sin reserva y sin empresa propia, el ticket es de plataforma');
+    });
+
+    it('un ticket con la reserva propia deriva la empresa real del viaje', async () => {
+      const res = await post(
+        '/support/tickets',
+        { subject: 'Duda sobre mi viaje', message: 'Quiero cambiar de asiento.', booking_id: reservaPropia.id },
+        ctx.sessions.customer.token,
+      );
+      assert.equal(res.status, 201);
+      assert.equal(Number(res.body.data.booking_id), reservaPropia.id);
+      assert.equal(Number(res.body.data.company_id), ctx.fixtures.companyA, 'la empresa sale de booking → trip → route');
+      assert.equal(res.body.data.booking_code, reservaPropia.booking_code, 'su propia reserva sí se muestra');
+    });
+
+    it('el company_id que envíe el cliente se descarta', async () => {
+      const res = await post(
+        '/support/tickets',
+        {
+          subject: 'Intento de desvío',
+          message: 'sonda',
+          booking_id: reservaPropia.id,
+          company_id: ctx.fixtures.companyB,
+        },
+        ctx.sessions.customer.token,
+      );
+      assert.equal(res.status, 201);
+      assert.equal(
+        Number(res.body.data.company_id),
+        ctx.fixtures.companyA,
+        'debe quedar la empresa de la reserva, no la que pidió el cliente',
+      );
+    });
+
+    it('una reserva ajena se rechaza y no filtra su booking_code', async () => {
+      const res = await post(
+        '/support/tickets',
+        { subject: 'Fuga', message: 'sonda', booking_id: reservaAjena.id },
+        ctx.sessions.customer.token,
+      );
+      assert.equal(res.status, 404, '404 y no 403: no se confirma que la reserva exista');
+      assert.equal(JSON.stringify(res.body).includes(reservaAjena.booking_code), false, 'el código no puede aparecer');
+    });
+
+    it('ni acompañada de la empresa propia para disimular', async () => {
+      const res = await post(
+        '/support/tickets',
+        { subject: 'Fuga 2', message: 'sonda', booking_id: reservaAjena.id, company_id: ctx.fixtures.companyA },
+        ctx.sessions.customer.token,
+      );
+      assert.equal(res.status, 404);
+      assert.equal(JSON.stringify(res.body).includes(reservaAjena.booking_code), false);
+    });
+
+    it('ningún ticket del cliente quedó apuntando a la empresa B ni a la reserva ajena', async () => {
+      const mios = await get('/support/tickets?limit=100', ctx.sessions.customer.token);
+      const filas = mios.body.data as Array<Record<string, unknown>>;
+
+      assert.ok(filas.length > 0);
+      for (const fila of filas) {
+        assert.notEqual(Number(fila.company_id), ctx.fixtures.companyB, 'no se puede colar en la bandeja de otra empresa');
+        assert.notEqual(Number(fila.booking_id), reservaAjena.id);
+        assert.notEqual(fila.booking_code, reservaAjena.booking_code);
+      }
+    });
+
+    it('la empresa B no ve ningún ticket colado por el cliente', async () => {
+      const deB = await get('/support/tickets?limit=100', ctx.sessions.companyAdminB.token);
+      const ajenos = (deB.body.data as Array<Record<string, unknown>>).filter(
+        (fila) => Number(fila.user_id) === ctx.sessions.customer.user.id,
+      );
+      assert.equal(ajenos.length, 0);
+    });
+
+    it('la empresa A sigue viendo los tickets legítimos de sus reservas', async () => {
+      const deA = await get('/support/tickets?limit=100', ctx.sessions.companyAdmin.token);
+      const suyos = (deA.body.data as Array<Record<string, unknown>>).filter(
+        (fila) => Number(fila.company_id) === ctx.fixtures.companyA,
+      );
+      assert.ok(suyos.length > 0, 'las reglas de visibilidad de la empresa no cambian');
+      assert.ok(suyos.some((fila) => fila.booking_code === reservaPropia.booking_code));
+    });
+
+    it('un usuario de empresa puede abrir un ticket sobre una reserva de su empresa', async () => {
+      const res = await post(
+        '/support/tickets',
+        { subject: 'Incidencia de operación', message: 'El pasajero no se presentó.', booking_id: reservaPropia.id },
+        ctx.sessions.companyAdmin.token,
+      );
+      assert.equal(res.status, 201);
+      assert.equal(Number(res.body.data.company_id), ctx.fixtures.companyA);
+    });
+
+    it('pero no sobre una reserva de otra empresa', async () => {
+      const res = await post(
+        '/support/tickets',
+        { subject: 'Ajena', message: 'sonda', booking_id: reservaAjena.id },
+        ctx.sessions.companyAdmin.token,
+      );
+      assert.equal(res.status, 404);
     });
   });
 });

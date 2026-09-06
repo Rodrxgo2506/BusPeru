@@ -144,6 +144,20 @@ export async function searchTrips(params: TripSearchParams): Promise<{ rows: Rec
   return { rows, total: Number(countRow?.total ?? 0) };
 }
 
+/**
+ * Viaje concreto para el detalle público y su mapa de asientos.
+ *
+ * Repite la visibilidad de `searchTrips` en lo que a empresa y ruta se refiere: filtrar
+ * solo en la búsqueda dejaba el viaje accesible por su id —un enlace guardado, un correo
+ * de promoción, un resultado cacheado—, de modo que suspender una empresa la retiraba del
+ * escaparate pero no impedía llegar a su ficha y comprar.
+ *
+ * No se filtra por estado ni por hora de salida: eso pertenece al ciclo de vida del viaje
+ * y aquí solo se cierra la visibilidad de empresas y rutas dadas de baja.
+ */
 export async function findPublicTrip(tripId: number): Promise<Record<string, unknown> | null> {
-  return queryOne<Record<string, unknown>>(`${SEARCH_SELECT} WHERE t.id = ? LIMIT 1`, [tripId]);
+  return queryOne<Record<string, unknown>>(
+    `${SEARCH_SELECT} WHERE t.id = ? AND co.status = 'ACTIVE' AND r.status = 'ACTIVE' LIMIT 1`,
+    [tripId],
+  );
 }

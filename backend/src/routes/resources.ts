@@ -32,6 +32,14 @@ const definitions: ResourceDefinition[] = [
     // Un rol de empresa puede editar su propia ficha, pero no dar de alta ni borrar empresas.
     adminOnlyActions: ['create', 'delete'],
     /**
+     * Ni cambiar su estado ni su RUC. `status` es la sanción de la plataforma: sin esto un
+     * COMPANY_ADMIN deshacía su propia suspensión con una petición, porque suspender la
+     * empresa no le quita la sesión. `tax_id` es el dato fiscal que verifica §6: cambiarlo
+     * después de aprobar los documentos desligaría la verificación de la identidad
+     * verificada.
+     */
+    adminOnlyColumns: ['status', 'tax_id'],
+    /**
      * Al aprobar una empresa se activan sus usuarios PENDING. Sin esto el registro de
      * empresa quedaba sin salida: la empresa pasaba a ACTIVE pero su administrador seguía
      * en PENDING y no podía iniciar sesión nunca.

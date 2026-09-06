@@ -40,6 +40,53 @@ function visibilityScope(req: Request): { sql: string; params: unknown[] } | nul
   };
 }
 
+/**
+ * Resuelve la reserva y la empresa de un ticket nuevo. Ninguna de las dos se toma del
+ * cuerpo de la petición.
+ *
+ * `booking_id` y `company_id` se insertaban tal como llegaban, sin comprobar nada: un
+ * cliente abría un ticket apuntando a la reserva de otro —y la respuesta le devolvía su
+ * `booking_code`, que es el código que se muestra al abordar— y contra una empresa con la
+ * que no tenía ninguna relación, cuya bandeja de soporte quedaba a merced de cualquiera.
+ *
+ * La regla es la que ya usa `POST /reviews`, que resolvió bien este mismo problema: la
+ * empresa se deriva de la cadena `booking → trip → route → company_id`, nunca del cliente.
+ *
+ * Sin reserva se conserva el comportamiento actual —los tickets sueltos siguen siendo
+ * válidos—, con la empresa del propio autor si la tiene, y sin empresa si no.
+ */
+async function resolveTicketOrigin(
+  req: Request,
+  requestedBookingId: unknown,
+): Promise<{ bookingId: number | null; companyId: number | null }> {
+  const user = requireAuth(req);
+  const [ownCompany] = user.companyIds;
+
+  if (requestedBookingId === undefined || requestedBookingId === null) {
+    return { bookingId: null, companyId: ownCompany ?? null };
+  }
+
+  const bookingId = Number(requestedBookingId);
+  const booking = await queryOne<{ id: number; user_id: number; company_id: number }>(
+    `SELECT bk.id, bk.user_id, r.company_id
+     FROM bookings bk
+     JOIN trips t ON t.id = bk.trip_id
+     JOIN routes r ON r.id = t.route_id
+     WHERE bk.id = ? LIMIT 1`,
+    [bookingId],
+  );
+
+  // Mismo alcance que el resto de reservas: el pasajero la suya, la empresa las de sus
+  // viajes, el ADMIN todas. Fuera de ahí se responde 404 y no 403, para no confirmar que
+  // la reserva existe ni permitir enumerarlas.
+  const allowed =
+    booking !== null &&
+    (user.role === 'ADMIN' || booking.user_id === user.id || user.companyIds.includes(booking.company_id));
+  if (!allowed) throw ApiError.notFound('Reserva no encontrada');
+
+  return { bookingId: booking!.id, companyId: booking!.company_id };
+}
+
 async function findTicketOrFail(req: Request, ticketId: number): Promise<Record<string, unknown>> {
   const conditions = ['st.id = ?'];
   const params: unknown[] = [ticketId];
@@ -137,6 +184,9 @@ router.post(
     const user = requireAuth(req);
     const body = req.body as Record<string, unknown>;
 
+    // La reserva y la empresa las decide el servidor; `company_id` del cuerpo se descarta.
+    const origin = await resolveTicketOrigin(req, body.booking_id);
+
     const ticketId = await withTransaction(async (connection) => {
       const ticketCode = `TKT-${new Date().getFullYear()}-${Math.floor(1000 + Math.random() * 9000)}`;
       const [result] = await connection.query(
@@ -145,8 +195,8 @@ router.post(
         [
           ticketCode,
           user.id,
-          body.booking_id ?? null,
-          body.company_id ?? null,
+          origin.bookingId,
+          origin.companyId,
           body.subject,
           body.category ?? 'OTHER',
           body.priority ?? 'MEDIUM',

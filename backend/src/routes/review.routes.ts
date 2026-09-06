@@ -152,8 +152,32 @@ router.put(
       if (existing.user_id !== user.id) throw ApiError.forbidden('Solo puedes editar tus propias reseñas');
       // La moderación no es del autor: publicar u ocultar corresponde a la plataforma.
       if (body.status !== undefined) throw ApiError.forbidden('No puedes cambiar el estado de moderación de una reseña');
-    } else if (user.role !== 'ADMIN' && !user.companyIds.includes(existing.company_id)) {
-      throw ApiError.forbidden('Solo puedes moderar reseñas de tu empresa');
+    } else if (user.role !== 'ADMIN') {
+      if (!user.companyIds.includes(existing.company_id)) {
+        throw ApiError.forbidden('Solo puedes moderar reseñas de tu empresa');
+      }
+
+      /**
+       * Moderar es decidir si la reseña se publica, no reescribirla. Sin esta comprobación
+       * una empresa convertía una reseña de 1 estrella en una de 5 firmada con el nombre
+       * del cliente, y la calificación pública dejaba de significar nada.
+       *
+       * Se compara con el valor guardado en lugar de rechazar la presencia de la clave,
+       * por el mismo motivo que en la ficha de empresa: un formulario que reenvíe la fila
+       * completa no debe romperse. Para responder a una reseña, la empresa ya tiene
+       * `POST /reviews/:id/responses`.
+       */
+      const opinion = await queryOne<{ rating: number; title: string | null; comment: string | null }>(
+        'SELECT rating, title, comment FROM reviews WHERE id = ? LIMIT 1',
+        [reviewId],
+      );
+      const normalize = (value: unknown): string => (value === null || value === undefined ? '' : String(value));
+
+      for (const column of ['rating', 'title', 'comment'] as const) {
+        if (body[column] === undefined) continue;
+        if (normalize(body[column]) === normalize(opinion?.[column])) continue;
+        throw ApiError.forbidden('Solo puedes cambiar el estado de moderación: el contenido de la reseña es del pasajero');
+      }
     }
 
     const columns = ['rating', 'title', 'comment', 'status'].filter((column) => body[column] !== undefined);
