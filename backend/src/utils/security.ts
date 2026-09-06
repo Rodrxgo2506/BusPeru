@@ -18,6 +18,28 @@ export interface TokenPayload {
   sub: number;
   roleId: number;
   role: string;
+  /**
+   * Huella de la credencial con la que se emitió la sesión. Ver `sessionFingerprint`.
+   * Un token sin esta marca —emitido antes de que existiera— deja de ser válido.
+   */
+  pwd?: string;
+}
+
+/**
+ * Huella de la contraseña vigente, para poder invalidar sesiones sin guardar estado.
+ *
+ * El JWT es sin estado y vive 8 horas, así que cambiar la contraseña no expulsaba a nadie:
+ * justo la acción que ejecuta quien sospecha que le han robado la sesión no servía para
+ * nada. Guardar aquí una huella del `password_hash` y compararla en cada petición cierra
+ * eso sin lista de revocación, sin Redis y sin columnas nuevas: al cambiar la contraseña
+ * cambia el hash, y con él la huella, de modo que todos los tokens anteriores dejan de
+ * validar. El hash de bcrypt ya es distinto en cada cambio aunque la contraseña se repita.
+ *
+ * No se guarda el hash en el token: solo un derivado corto, ligado además al secreto de la
+ * instalación. Del contenido del token no se puede reconstruir la credencial.
+ */
+export function sessionFingerprint(passwordHash: string): string {
+  return crypto.createHash('sha256').update(`${passwordHash}:${env.jwt.secret}`).digest('hex').slice(0, 32);
 }
 
 export function signToken(payload: TokenPayload): string {

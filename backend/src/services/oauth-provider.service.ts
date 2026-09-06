@@ -249,7 +249,21 @@ export async function verifyIdToken(
     provider,
     subject: String(subject),
     email,
-    // Microsoft no emite `email_verified` de forma fiable en cuentas personales.
+    /**
+     * Verificación del correo, tal y como la declara el proveedor. No se deduce de nada
+     * más: solo se lee el claim `email_verified` que el token traiga.
+     *
+     *   · Google lo emite siempre, y es `true` para las cuentas cuyo correo ha confirmado.
+     *   · Microsoft NO lo emite de forma fiable. En cuentas personales no viene, y en
+     *     cuentas de organización tampoco de serie: la vía documentada es habilitar el
+     *     claim opcional correspondiente en el registro de la aplicación.
+     *
+     * La consecuencia está asumida y es deliberada: mientras Microsoft no envíe el claim,
+     * un correo suyo se trata como NO verificado, y `resolveLogin` no dará de alta con él.
+     * Iniciar sesión con una identidad ya vinculada sigue funcionando, porque ese camino no
+     * depende del correo. Preferimos negar un alta legítima antes que aceptar una identidad
+     * que el proveedor no respalda.
+     */
     emailVerified: claims.email_verified === true || claims.email_verified === 'true',
     firstName: firstName.slice(0, 100),
     lastName: (lastName || firstName).slice(0, 100),

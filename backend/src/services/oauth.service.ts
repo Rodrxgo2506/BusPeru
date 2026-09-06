@@ -151,7 +151,9 @@ export type OAuthError =
   | 'already_linked'
   | 'identity_taken'
   | 'account_blocked'
-  | 'not_configured';
+  | 'not_configured'
+  /** El proveedor no confirma que el correo pertenezca a quien está entrando. */
+  | 'email_unverified';
 
 export class OAuthFlowError extends Error {
   readonly code: OAuthError;
@@ -238,6 +240,20 @@ async function resolveLogin(
 
   // CASO A — correo desconocido. Solo el flujo de cliente da de alta.
   if (scope !== 'CUSTOMER') throw new OAuthFlowError('account_not_found');
+
+  /**
+   * Y solo si el proveedor CONFIRMA que ese correo es de quien está entrando.
+   *
+   * El alta es el único punto del flujo que se apoya en el correo: crea una cuenta nueva
+   * con esa dirección como identidad. Sin verificación, quien pudiera hacerse pasar por un
+   * correo ajeno ante el proveedor se quedaría con esa dirección en BusPerú, y su dueño
+   * legítimo chocaría después contra el caso C —«ese correo ya existe»— sin poder entrar.
+   *
+   * El resto de caminos no necesita esta comprobación y no la lleva: el CASO B entra por
+   * una identidad ya vinculada, no por el correo, y el CASO C sigue rechazando la fusión
+   * automática con una cuenta existente, verificado o no.
+   */
+  if (!identity.emailVerified) throw new OAuthFlowError('email_unverified');
 
   const roleId = await roleIdByName('CUSTOMER');
   // Contraseña imposible de adivinar y que nadie conoce: la cuenta entra por OAuth. Si su

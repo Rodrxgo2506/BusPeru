@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { after, before, describe, it } from 'node:test';
 import { del, get, post, put } from './helpers/api';
 import { execute, queryOne } from '../config/database';
-import { at, freeSeats, TEST_PASSWORD } from './helpers/fixtures';
+import { at, freeSeats, login, TEST_PASSWORD } from './helpers/fixtures';
 import { prepareSuite, teardownSuite, type SuiteContext } from './helpers/suite';
 
 /**
@@ -18,6 +18,17 @@ describe('Límites de privilegio de los roles de empresa', () => {
     ctx = await prepareSuite();
   });
   after(teardownSuite);
+
+  /**
+   * Vuelve a iniciar sesión y sustituye el token guardado.
+   *
+   * Desde BP-18 un cambio de contraseña invalida los tokens emitidos antes, así que el
+   * test que cambia una contraseña tiene que renovar la sesión que siga usando después.
+   * Es exactamente lo que hará un usuario real.
+   */
+  async function refrescarSesion(clave: 'customer' | 'operator', email: string): Promise<void> {
+    ctx.sessions[clave] = await login(email);
+  }
 
   async function roleId(name: string): Promise<number> {
     const row = await queryOne<{ id: number }>('SELECT id FROM roles WHERE name = ?', [name]);
@@ -407,15 +418,26 @@ describe('Límites de privilegio de los roles de empresa', () => {
         ctx.sessions.customer.token,
       );
       assert.equal(cambio.status, 200);
-      assert.equal((await post('/auth/login', { email: 'cliente@test.pe', password: nueva })).status, 200);
+
+      // El token con el que se hizo el cambio queda invalidado (BP-18); hay que volver a
+      // entrar con la contraseña nueva para seguir operando.
+      assert.equal(
+        (await put('/auth/me/password', { current_password: nueva, new_password: 'OtraMas1' }, ctx.sessions.customer.token)).status,
+        401,
+        'la sesión anterior al cambio ya no vale',
+      );
+
+      const conNueva = await post('/auth/login', { email: 'cliente@test.pe', password: nueva });
+      assert.equal(conNueva.status, 200);
 
       const vuelta = await put(
         '/auth/me/password',
         { current_password: nueva, new_password: TEST_PASSWORD },
-        ctx.sessions.customer.token,
+        conNueva.body.data.token,
       );
       assert.equal(vuelta.status, 200);
       assert.equal((await post('/auth/login', { email: 'cliente@test.pe', password: TEST_PASSWORD })).status, 200);
+      await refrescarSesion('customer', 'cliente@test.pe');
     });
 
     it('y sigue rechazando una contraseña actual incorrecta', async () => {
@@ -439,6 +461,9 @@ describe('Límites de privilegio de los roles de empresa', () => {
       const vuelta = await put(`/users/${objetivo}`, { password: TEST_PASSWORD }, ctx.sessions.admin.token);
       assert.equal(vuelta.status, 200);
       assert.equal((await post('/auth/login', { email: 'operador-a@test.pe', password: TEST_PASSWORD })).status, 200);
+
+      // El restablecimiento administrativo también invalida las sesiones del afectado.
+      await refrescarSesion('operator', 'operador-a@test.pe');
     });
 
     it('un CUSTOMER no puede restablecer la contraseña de otro usuario', async () => {

@@ -7,7 +7,7 @@ import {
 } from '../repositories/user.repository';
 import type { AuthenticatedUser, RoleName } from '../types/entities';
 import { ApiError } from '../utils/ApiError';
-import { hashPassword, signToken, verifyPassword } from '../utils/security';
+import { hashPassword, sessionFingerprint, signToken, verifyPassword } from '../utils/security';
 import type { LoginInput, RegisterCompanyInput, RegisterInput } from '../validators/auth.validators';
 
 export interface AuthResult {
@@ -42,7 +42,16 @@ export async function issueSession(userId: number): Promise<AuthResult> {
   const user = await loadAuthenticatedUser(userId);
   if (!user) throw ApiError.internal();
 
-  return { token: signToken({ sub: user.id, roleId: user.role_id, role: user.role }), user };
+  // La huella ata la sesión a la credencial vigente: si la contraseña cambia, este token
+  // deja de valer. En una cuenta creada por OAuth el hash es aleatorio pero estable, así
+  // que la regla se aplica igual sin tratar a esas cuentas de forma distinta.
+  const passwordHash = await findPasswordHash(userId);
+  if (!passwordHash) throw ApiError.internal();
+
+  return {
+    token: signToken({ sub: user.id, roleId: user.role_id, role: user.role, pwd: sessionFingerprint(passwordHash) }),
+    user,
+  };
 }
 
 export async function login(input: LoginInput): Promise<AuthResult> {
@@ -59,7 +68,10 @@ export async function login(input: LoginInput): Promise<AuthResult> {
   const user = await loadAuthenticatedUser(account.id);
   if (!user) throw ApiError.internal();
 
-  return { token: signToken({ sub: user.id, roleId: user.role_id, role: user.role }), user };
+  return {
+    token: signToken({ sub: user.id, roleId: user.role_id, role: user.role, pwd: sessionFingerprint(account.password_hash) }),
+    user,
+  };
 }
 
 export async function registerCustomer(input: RegisterInput): Promise<AuthResult> {
@@ -78,7 +90,10 @@ export async function registerCustomer(input: RegisterInput): Promise<AuthResult
   const user = await loadAuthenticatedUser(result.insertId);
   if (!user) throw ApiError.internal();
 
-  return { token: signToken({ sub: user.id, roleId: user.role_id, role: user.role }), user };
+  return {
+    token: signToken({ sub: user.id, roleId: user.role_id, role: user.role, pwd: sessionFingerprint(passwordHash) }),
+    user,
+  };
 }
 
 /**

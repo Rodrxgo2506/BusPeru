@@ -616,10 +616,16 @@ describe('Inicio de sesión con Google / Microsoft', () => {
   // --- Microsoft --------------------------------------------------------------
 
   describe('Microsoft', () => {
+    /**
+     * Identidad de un tenant que SÍ publica `email_verified`. Microsoft no lo emite de
+     * serie —hay que habilitar el claim opcional en el registro de la aplicación—, y desde
+     * BP-20 el alta lo exige, así que los casos que esperan crear cuenta lo declaran.
+     */
     const IDENTIDAD: TokenClaims = {
       oid: 'oid-microsoft-0001',
       tid: TENANT,
       email: 'usuario@oauth.test',
+      email_verified: true,
       given_name: 'Usuario',
       family_name: 'Microsoft',
     };
@@ -673,6 +679,139 @@ describe('Inicio de sesión con Google / Microsoft', () => {
         ['identificador-compartido'],
       );
       assert.deepEqual(filas.map((f) => f.oauth_provider), ['GOOGLE', 'MICROSOFT'], 'la clave única es (proveedor, id)');
+    });
+  });
+
+  // --- BP-20: correo verificado ------------------------------------------------
+
+  /**
+   * BP-20 · regresión de la auditoría del 06/09/2026.
+   *
+   * El flujo calculaba `emailVerified` a partir del claim del proveedor pero solo lo usaba
+   * para rellenar `email_verified_at`: daba de alta igual con un correo que el proveedor no
+   * respaldaba. Quien pudiera presentarse ante el proveedor con una dirección ajena se
+   * quedaba con ella en BusPerú, y su dueño legítimo chocaba después contra `email_taken`.
+   */
+  describe('BP-20 · el alta exige que el proveedor verifique el correo', () => {
+    async function existeCuenta(email: string): Promise<boolean> {
+      return (await queryOne('SELECT id FROM users WHERE email = ?', [email])) !== null;
+    }
+
+    it('Google con email_verified=true da de alta y marca la fecha de verificación', async () => {
+      const email = 'verificada@oauth.test';
+      const resultado = await loginWith({ ...CLIENTE, sub: 'google-verificado', email, email_verified: true });
+
+      assert.ok(resultado.ticket, `esperaba ticket y llegó error=${resultado.error}`);
+      const fila = await queryOne<{ email_verified_at: string | null }>(
+        'SELECT email_verified_at FROM users WHERE email = ?',
+        [email],
+      );
+      assert.ok(fila?.email_verified_at, 'el proveedor confirmó el correo');
+    });
+
+    it('Google con email_verified=false se rechaza y no crea nada', async () => {
+      const email = 'sin-verificar@oauth.test';
+      const resultado = await loginWith({ ...CLIENTE, sub: 'google-no-verificado', email, email_verified: false });
+
+      assert.equal(resultado.error, 'email_unverified');
+      assert.ok(!resultado.ticket, 'no debe emitirse ninguna sesión');
+      assert.equal(await existeCuenta(email), false, 'no debe quedar ninguna cuenta creada');
+    });
+
+    it('Google sin el claim email_verified también se rechaza', async () => {
+      const email = 'sin-claim@oauth.test';
+      const sinClaim: TokenClaims = { ...CLIENTE };
+      delete sinClaim.email_verified;
+      const resultado = await loginWith({ ...sinClaim, sub: 'google-sin-claim', email });
+
+      assert.equal(resultado.error, 'email_unverified', 'la ausencia del claim no equivale a verificado');
+      assert.equal(await existeCuenta(email), false);
+    });
+
+    it('Microsoft sin el claim se rechaza: el proveedor no lo emite de serie', async () => {
+      const email = 'microsoft-sin-claim@oauth.test';
+      const resultado = await loginWith(
+        {
+          oid: 'oid-sin-claim',
+          tid: TENANT,
+          email,
+          iss: `${microsoft.url}/${TENANT}/v2.0`,
+          given_name: 'Sin',
+          family_name: 'Claim',
+        },
+        { provider: 'microsoft' },
+      );
+
+      assert.equal(resultado.error, 'email_unverified');
+      assert.equal(await existeCuenta(email), false);
+    });
+
+    it('Microsoft con el claim habilitado sí da de alta', async () => {
+      const email = 'microsoft-verificado@oauth.test';
+      const resultado = await loginWith(
+        {
+          oid: 'oid-verificado',
+          tid: TENANT,
+          email,
+          email_verified: true,
+          iss: `${microsoft.url}/${TENANT}/v2.0`,
+          given_name: 'Con',
+          family_name: 'Claim',
+        },
+        { provider: 'microsoft' },
+      );
+
+      assert.ok(resultado.ticket, `esperaba ticket y llegó error=${resultado.error}`);
+      assert.equal(await existeCuenta(email), true);
+    });
+
+    it('una identidad ya vinculada sigue entrando aunque el claim deje de venir', async () => {
+      const email = 'recurrente@oauth.test';
+      const alta = await loginWith({ ...CLIENTE, sub: 'google-recurrente', email, email_verified: true });
+      assert.ok(alta.ticket, 'primero se da de alta con el correo verificado');
+
+      const sinClaim: TokenClaims = { ...CLIENTE };
+      delete sinClaim.email_verified;
+      const vuelta = await loginWith({ ...sinClaim, sub: 'google-recurrente', email });
+
+      assert.ok(vuelta.ticket, 'el CASO B entra por la identidad vinculada, no por el correo');
+      assert.equal((await exchange(vuelta.ticket!)).status, 200);
+    });
+
+    it('un correo con contraseña no se vincula solo, ni verificado ni sin verificar', async () => {
+      const conVerificado = await loginWith({ ...CLIENTE, sub: 'intruso-1', email: 'cliente@test.pe', email_verified: true });
+      assert.equal(conVerificado.error, 'email_taken');
+
+      const sinVerificar = await loginWith({ ...CLIENTE, sub: 'intruso-2', email: 'cliente@test.pe', email_verified: false });
+      assert.ok(['email_taken', 'email_unverified'].includes(String(sinVerificar.error)), 'tampoco se fusiona');
+
+      const fila = await queryOne<{ oauth_provider: string | null }>(
+        'SELECT oauth_provider FROM users WHERE email = ?',
+        ['cliente@test.pe'],
+      );
+      assert.equal(fila?.oauth_provider, null, 'la cuenta con contraseña sigue sin proveedor vinculado');
+    });
+
+    it('el alta por OAuth sigue creando solo CUSTOMER, nunca ADMIN ni COMPANY_ADMIN', async () => {
+      const email = 'rol-cliente@oauth.test';
+      const resultado = await loginWith({ ...CLIENTE, sub: 'google-rol', email, email_verified: true });
+      assert.ok(resultado.ticket);
+
+      const fila = await queryOne<{ rol: string; status: string }>(
+        'SELECT r.name AS rol, u.status FROM users u JOIN roles r ON r.id = u.role_id WHERE u.email = ?',
+        [email],
+      );
+      assert.equal(fila?.rol, 'CUSTOMER');
+      assert.equal(fila?.status, 'ACTIVE');
+
+      // Y pedir el alta desde los portales de empresa o admin sigue sin crear cuenta.
+      for (const scope of ['COMPANY', 'ADMIN']) {
+        const correo = `${scope.toLowerCase()}@oauth.test`;
+        const ajeno = await loginWith({ ...CLIENTE, sub: `google-${scope}`, email: correo, email_verified: true }, { scope });
+
+        assert.equal(ajeno.error, 'account_not_found');
+        assert.equal(await existeCuenta(correo), false);
+      }
     });
   });
 
