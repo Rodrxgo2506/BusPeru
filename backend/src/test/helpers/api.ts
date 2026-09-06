@@ -34,12 +34,17 @@ interface RequestOptions {
   method?: 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE';
   body?: unknown;
   token?: string;
+  /** Credencial de la API de integración. Viaja por `X-API-Key`, nunca como `Bearer`. */
+  apiKey?: string;
+  /** Cabeceras extra, para comprobar que las que envía el cliente no cambian el alcance. */
+  headers?: Record<string, string>;
 }
 
 export async function api<T = any>(path: string, options: RequestOptions = {}): Promise<ApiResponse<T>> {
-  const headers: Record<string, string> = { Accept: 'application/json' };
+  const headers: Record<string, string> = { Accept: 'application/json', ...(options.headers ?? {}) };
   if (options.body !== undefined) headers['Content-Type'] = 'application/json';
   if (options.token) headers.Authorization = `Bearer ${options.token}`;
+  if (options.apiKey !== undefined) headers['X-API-Key'] = options.apiKey;
 
   const response = await fetch(baseUrl + path, {
     method: options.method ?? 'GET',
@@ -57,6 +62,9 @@ export async function api<T = any>(path: string, options: RequestOptions = {}): 
 }
 
 export const get = <T = any>(path: string, token?: string) => api<T>(path, { token });
+/** GET contra la API de integración, autenticado con `X-API-Key`. */
+export const getWithKey = <T = any>(path: string, apiKey?: string, headers?: Record<string, string>) =>
+  api<T>(path, { apiKey, headers });
 export const post = <T = any>(path: string, body?: unknown, token?: string) => api<T>(path, { method: 'POST', body, token });
 export const put = <T = any>(path: string, body?: unknown, token?: string) => api<T>(path, { method: 'PUT', body, token });
 export const del = <T = any>(path: string, token?: string) => api<T>(path, { method: 'DELETE', token });

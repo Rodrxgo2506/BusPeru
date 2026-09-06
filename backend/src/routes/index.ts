@@ -10,6 +10,7 @@ import { companyIntegrationRouter, platformIntegrationRouter } from './company-i
 import bookingRoutes from './booking.routes';
 import dashboardRoutes from './dashboard.routes';
 import { settlementRouter, transactionRouter } from './finance.routes';
+import integrationRoutes from './integration.routes';
 import notificationRoutes from './notification.routes';
 import { paymentRouter, refundRouter } from './payment.routes';
 import publicRoutes from './public.routes';
@@ -30,6 +31,8 @@ router.use('/company/documents', companyDocumentRoutes);
 router.use('/company/drivers', driverRoutes);
 router.use('/company/integrations', companyIntegrationRouter);
 router.use('/admin/integrations', platformIntegrationRouter);
+// API de integracion para sistemas externos: se autentica con X-API-Key, no con JWT.
+router.use('/integration/v1', integrationRoutes);
 router.use('/public', publicRoutes);
 router.use('/users', userRoutes);
 router.use('/roles', roleRouter);
