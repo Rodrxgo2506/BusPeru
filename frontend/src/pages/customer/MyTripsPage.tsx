@@ -12,6 +12,22 @@ import { formatCurrency, formatDate, formatLongDate, formatTime } from '@/utils/
 
 type TripTab = 'upcoming' | 'past' | 'cancelled';
 
+/**
+ * Horas de antelación con las que se admite una cancelación.
+ *
+ * La regla la aplica el servidor, que lee `booking.cancellation_hours` y rechaza cualquier
+ * cancelación fuera de plazo; esto solo evita ofrecer un botón que ya se sabe que va a
+ * fallar. Si algún día ese ajuste cambia en el panel, el servidor sigue mandando.
+ */
+const CANCELLATION_HOURS = 24;
+
+/** `true` mientras falte más del plazo para la salida. */
+function isCancellable(booking: Booking): boolean {
+  if (!booking.departure_datetime) return false;
+  const departure = new Date(booking.departure_datetime.replace(' ', 'T'));
+  return departure.getTime() - Date.now() > CANCELLATION_HOURS * 60 * 60 * 1000;
+}
+
 const FOOTER_ITEMS = [
   { icon: ArrowLeftRight, title: 'Cambios flexibles', description: 'Realiza cambios en tu pasaje hasta 24h antes del viaje.' },
   { icon: X, title: 'Cancelación fácil', description: 'Cancela tu pasaje de forma rápida y segura.' },
@@ -180,7 +196,7 @@ export function MyTripsPage() {
                     <p className="text-base font-bold text-brand-600">{booking.booking_code}</p>
                     <p className="mt-1 text-sm font-semibold text-ink">{formatCurrency(booking.total_amount)}</p>
                   </div>
-                  {tab === 'upcoming' && booking.status !== 'CANCELLED' && (
+                  {tab === 'upcoming' && booking.status !== 'CANCELLED' && isCancellable(booking) && (
                     <Button size="sm" variant="ghost" onClick={() => setCancelTarget(booking)}>
                       Cancelar viaje
                     </Button>

@@ -459,10 +459,39 @@ export async function confirmBookingPayment(
   );
 }
 
-/** Cancels a booking, frees its seats and, when already paid, opens a refund request. */
+/**
+ * Cancela una reserva, libera sus asientos y, si estaba pagada, abre la solicitud de
+ * reembolso.
+ *
+ * POLÍTICA DE CANCELACIÓN (auditoría BP-08). El plazo sale de
+ * `system_settings.booking.cancellation_hours`, que ya existía con valor 24 y hasta ahora no
+ * lo leía nadie, de modo que la plataforma anunciaba una política en su centro de ayuda que
+ * el código no aplicaba:
+ *
+ *   · Faltan MÁS de 24 h para la salida  → se puede cancelar, y con reembolso íntegro si se
+ *                                          solicita.
+ *   · Faltan 24 h o menos                → no se puede cancelar. Tampoco si la salida ya
+ *                                          pasó, que es el mismo caso con el plazo negativo.
+ *   · Viaje IN_PROGRESS o COMPLETED      → no se puede cancelar.
+ *   · Viaje CANCELLED                    → se conserva lo que ya había: el pasajero de un
+ *                                          viaje que canceló la empresa puede cancelar su
+ *                                          reserva y recuperar su dinero a cualquier hora.
+ *
+ * El plazo se calcula en SQL con `NOW()`, el mismo reloj que usan la expiración de reservas
+ * y la búsqueda pública, para no introducir una referencia horaria distinta.
+ */
 export async function cancelBooking(bookingId: number, reason: string | null, requestRefund: boolean): Promise<void> {
+  const cancellationHours = await readSetting('booking.cancellation_hours', 24);
+
   await withTransaction(async (connection) => {
-    const [rows] = await connection.query('SELECT * FROM bookings WHERE id = ? LIMIT 1 FOR UPDATE', [bookingId]);
+    const [rows] = await connection.query(
+      `SELECT bk.*, t.status AS trip_status,
+              TIMESTAMPDIFF(SECOND, NOW(), t.departure_datetime) AS seconds_to_departure
+       FROM bookings bk
+       JOIN trips t ON t.id = bk.trip_id
+       WHERE bk.id = ? LIMIT 1 FOR UPDATE`,
+      [bookingId],
+    );
     const booking = (rows as Record<string, unknown>[])[0];
     if (!booking) throw ApiError.notFound('Reserva no encontrada');
     if (booking.status === 'CANCELLED') throw ApiError.badRequest('La reserva ya está cancelada');
@@ -471,6 +500,21 @@ export async function cancelBooking(bookingId: number, reason: string | null, re
     // pagos. Dejarla pasar por aquí sumaba los mismos asientos por segunda vez y separaba
     // `trips.available_seats` de la disponibilidad real.
     if (booking.status === 'EXPIRED') throw ApiError.badRequest('La reserva ya venció y sus asientos se liberaron');
+
+    // Un viaje que la empresa canceló es la excepción: su pasajero puede cancelar y
+    // recuperar el importe sin importar cuánto falte para la salida.
+    if (booking.trip_status !== 'CANCELLED') {
+      if (booking.trip_status === 'IN_PROGRESS') throw ApiError.badRequest('El viaje ya está en curso: no se puede cancelar');
+      if (booking.trip_status === 'COMPLETED') throw ApiError.badRequest('El viaje ya se realizó: no se puede cancelar');
+
+      // Un plazo negativo significa que la salida ya pasó, así que la misma comparación
+      // cubre el viaje inminente y el que ya partió.
+      if (Number(booking.seconds_to_departure) <= cancellationHours * 3600) {
+        throw ApiError.badRequest(
+          `Solo puedes cancelar hasta ${cancellationHours} horas antes de la salida`,
+        );
+      }
+    }
 
     await connection.query(
       "UPDATE bookings SET status = 'CANCELLED', cancelled_at = NOW(), notes = COALESCE(?, notes) WHERE id = ?",

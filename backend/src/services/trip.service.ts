@@ -1,4 +1,4 @@
-import { query, queryOne } from '../config/database';
+import { execute, query, queryOne } from '../config/database';
 import type { AuthenticatedUser } from '../types/entities';
 import { ApiError } from '../utils/ApiError';
 
@@ -54,6 +54,78 @@ export async function seatMap(tripId: number): Promise<SeatAvailability[]> {
      ORDER BY s.row_number ASC, s.column_number ASC, s.seat_number ASC`,
     [tripId, tripId],
   );
+}
+
+// --- Ciclo de vida del viaje (PENDIENTES.md / auditoría BP-08) -----------------
+
+export interface TripLifecycleResult {
+  /** Viajes que pasaron de SCHEDULED a IN_PROGRESS. */
+  started: number;
+  /** Viajes que pasaron de IN_PROGRESS a COMPLETED. */
+  completed: number;
+  /** Reservas CONFIRMED que quedaron COMPLETED al cerrarse su viaje. */
+  bookingsCompleted: number;
+}
+
+/**
+ * Avanza el ciclo de vida de los viajes: SCHEDULED → IN_PROGRESS → COMPLETED.
+ *
+ * Los tres estados existían en el ENUM y decenas de consultas filtraban por ellos, pero
+ * nada los escribía nunca: un viaje que ya había salido seguía SCHEDULED para siempre y sus
+ * reservas seguían CONFIRMED. De ahí salían los indicadores de «viajes realizados» contando
+ * viajes futuros y, sobre todo, la posibilidad de cancelar y pedir reembolso de un viaje ya
+ * realizado.
+ *
+ * TRES SENTENCIAS, TRES GARANTÍAS:
+ *
+ *   · Cada `UPDATE` lleva el estado de partida en su `WHERE`, así que volver a ejecutarlo no
+ *     encuentra nada que cambiar. La idempotencia no depende de leer antes: es la propia
+ *     condición la que excluye lo ya transitado.
+ *   · Son sentencias únicas y por tanto atómicas. Dos ejecuciones simultáneas —dos
+ *     instancias del backend, o un reinicio a mitad— se serializan por los bloqueos de fila
+ *     de InnoDB y ninguna puede aplicar la transición dos veces.
+ *   · Las reservas se cierran mirando el ESTADO del viaje, no el momento de la transición.
+ *     Si el proceso se cayera justo entre el segundo y el tercer paso, la siguiente
+ *     ejecución las encontraría igualmente y las cerraría: se repara solo.
+ *
+ * Se compara siempre con `NOW()` de MySQL, que es el reloj que ya usan la expiración de
+ * reservas y la búsqueda pública. No se introduce ninguna referencia horaria nueva.
+ *
+ * No se envía ninguna notificación: no existen plantillas de «viaje iniciado» ni «viaje
+ * completado» en `notification_templates`, y esta fase no inventa contenido.
+ */
+export async function advanceTripLifecycle(): Promise<TripLifecycleResult> {
+  // 1. Ha llegado la hora de salir. Solo desde SCHEDULED: un viaje CANCELLED, COMPLETED o
+  //    ya IN_PROGRESS no entra, y BOARDING y DELAYED se dejan como están porque son estados
+  //    que gestiona la empresa a mano.
+  const started = await execute(
+    `UPDATE trips SET status = 'IN_PROGRESS'
+     WHERE status = 'SCHEDULED' AND departure_datetime <= NOW()`,
+  );
+
+  // 2. Ha llegado la hora de llegar. Se exige `arrival_datetime`: la columna es opcional en
+  //    el esquema y un viaje sin hora de llegada no puede darse por terminado. Se queda en
+  //    IN_PROGRESS hasta que alguien la complete, en lugar de inventarle una duración.
+  const completed = await execute(
+    `UPDATE trips SET status = 'COMPLETED'
+     WHERE status = 'IN_PROGRESS' AND arrival_datetime IS NOT NULL AND arrival_datetime <= NOW()`,
+  );
+
+  // 3. Las reservas de los viajes ya cerrados. Solo CONFIRMED: PENDING sigue su propio
+  //    camino de expiración, y CANCELLED y EXPIRED no se reviven jamás. No se tocan pagos,
+  //    reembolsos, asientos ni movimientos financieros: completar un viaje no mueve dinero.
+  const bookingsCompleted = await execute(
+    `UPDATE bookings bk
+     JOIN trips t ON t.id = bk.trip_id
+     SET bk.status = 'COMPLETED'
+     WHERE t.status = 'COMPLETED' AND bk.status = 'CONFIRMED'`,
+  );
+
+  return {
+    started: started.affectedRows,
+    completed: completed.affectedRows,
+    bookingsCompleted: bookingsCompleted.affectedRows,
+  };
 }
 
 export interface TripSearchParams {

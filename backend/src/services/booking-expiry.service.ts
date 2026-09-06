@@ -1,6 +1,7 @@
 import { query, withTransaction } from '../config/database';
 import { NOTIFICATION_EVENTS, notify } from './notification.service';
 import { purgeExpiredResetTokens } from './password-reset.service';
+import { advanceTripLifecycle } from './trip.service';
 import { purgeExpired as purgeExpiredOAuthFlows } from '../repositories/oauth-flow.repository';
 
 /**
@@ -134,6 +135,19 @@ export function startBookingExpiryScheduler(intervalMs: number): void {
       }
     } catch (error) {
       console.error('Error al expirar reservas vencidas:', error);
+    }
+
+    // El mismo ciclo avanza el ciclo de vida de los viajes: no hace falta un segundo
+    // planificador, y el minuto de resolución es de sobra para una salida y una llegada.
+    try {
+      const trips = await advanceTripLifecycle();
+      if (trips.started > 0 || trips.completed > 0) {
+        console.log(
+          `↺ Viajes iniciados: ${trips.started}, completados: ${trips.completed}, reservas cerradas: ${trips.bookingsCompleted}`,
+        );
+      }
+    } catch (error) {
+      console.error('Error al avanzar el estado de los viajes:', error);
     }
 
     // Aprovecha el mismo ciclo para purgar los códigos de recuperación caducados, en vez
