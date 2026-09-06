@@ -1,4 +1,5 @@
 import { execute, query, queryOne } from '../config/database';
+import { businessNow } from '../utils/businessTime';
 import type { AuthenticatedUser, RoleName, User } from '../types/entities';
 
 const USER_COLUMNS = `u.id, u.role_id, u.first_name, u.last_name, u.email, u.phone, u.avatar_url,
@@ -139,7 +140,10 @@ export async function createOAuthUser(input: {
       input.passwordHash,
       input.provider,
       input.oauthId,
-      input.emailVerified ? new Date() : null,
+      // Se escribe con el mismo reloj que el resto de la fila. Pasar un `Date` funcionaba
+      // solo porque el conector ahora lo serializa en hora de Perú (BP-12); esto lo hace
+      // explícito y no depende de esa configuración.
+      input.emailVerified ? businessNow() : null,
     ],
   );
   return result.insertId;

@@ -33,7 +33,8 @@ const PRICE_BANDS = [
 const PAGE_SIZE = 6;
 
 function departureHour(trip: PublicTrip): number {
-  return new Date(trip.departure_datetime.replace(' ', 'T')).getHours();
+  // La franja horaria es la del viaje en Perú, no la del navegador (BP-12).
+  return Number(String(trip.departure_datetime).slice(11, 13));
 }
 
 export function SearchResultsPage() {

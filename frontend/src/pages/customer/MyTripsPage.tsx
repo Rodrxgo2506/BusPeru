@@ -8,7 +8,7 @@ import { useAsync } from '@/hooks/useAsync';
 import { ApiError } from '@/services/api';
 import { bookingService } from '@/services';
 import type { Booking } from '@/types';
-import { formatCurrency, formatDate, formatLongDate, formatTime } from '@/utils/format';
+import { formatCurrency, formatDate, formatLongDate, formatTime, toBusinessDate } from '@/utils/format';
 
 type TripTab = 'upcoming' | 'past' | 'cancelled';
 
@@ -23,8 +23,8 @@ const CANCELLATION_HOURS = 24;
 
 /** `true` mientras falte más del plazo para la salida. */
 function isCancellable(booking: Booking): boolean {
-  if (!booking.departure_datetime) return false;
-  const departure = new Date(booking.departure_datetime.replace(' ', 'T'));
+  const departure = toBusinessDate(booking.departure_datetime);
+  if (!departure) return false;
   return departure.getTime() - Date.now() > CANCELLATION_HOURS * 60 * 60 * 1000;
 }
 
@@ -57,7 +57,7 @@ export function MyTripsPage() {
   const now = new Date();
   const rows = bookings.data?.data ?? [];
   const filtered = rows.filter((booking) => {
-    const departure = booking.departure_datetime ? new Date(booking.departure_datetime.replace(' ', 'T')) : null;
+    const departure = toBusinessDate(booking.departure_datetime);
     if (tab === 'cancelled') return booking.status === 'CANCELLED' || booking.status === 'EXPIRED';
     if (tab === 'past') return booking.status !== 'CANCELLED' && departure !== null && departure < now;
     return booking.status !== 'CANCELLED' && booking.status !== 'EXPIRED' && (departure === null || departure >= now);

@@ -2,6 +2,7 @@ import crypto from 'crypto';
 import { env } from '../config/env';
 import * as repository from '../repositories/api-key.repository';
 import { ApiError } from '../utils/ApiError';
+import { businessTimeMs } from '../utils/businessTime';
 
 /**
  * Autenticación por API Key (auditoría BP-11).
@@ -129,7 +130,7 @@ export async function authenticateApiKey(plainKey: string): Promise<ApiKeyIdenti
   if (!row) throw rejected();
 
   if (row.status !== 'ACTIVE') throw rejected();
-  if (row.expires_at !== null && new Date(row.expires_at).getTime() <= Date.now()) throw rejected();
+  if (row.expires_at !== null && businessTimeMs(row.expires_at) <= Date.now()) throw rejected();
 
   assertEnvironmentMatches(row.environment);
 

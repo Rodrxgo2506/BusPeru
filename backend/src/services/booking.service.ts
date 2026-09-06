@@ -2,6 +2,7 @@ import type { PoolConnection } from 'mysql2/promise';
 import { queryOne, withTransaction } from '../config/database';
 import type { AuthenticatedUser, PaymentMethod } from '../types/entities';
 import { ApiError } from '../utils/ApiError';
+import { businessTimeMs } from '../utils/businessTime';
 import { NOTIFICATION_EVENTS, notify } from './notification.service';
 
 /** Datos de presentación del viaje para las notificaciones (sin bloquear filas). */
@@ -82,8 +83,10 @@ async function resolveCoupon(
     throw ApiError.badRequest('El cupón no está activo');
   }
 
-  const now = new Date();
-  if (new Date(String(coupon.start_at)) > now || new Date(String(coupon.end_at)) < now) {
+  // Las fechas de la base son hora de Perú: se convierten con la semántica del negocio y
+  // no con la zona del proceso (BP-12).
+  const now = Date.now();
+  if (businessTimeMs(String(coupon.start_at)) > now || businessTimeMs(String(coupon.end_at)) < now) {
     throw ApiError.badRequest('El cupón está fuera de su periodo de vigencia');
   }
   if (coupon.usage_limit !== null && Number(coupon.usage_count) >= Number(coupon.usage_limit)) {
@@ -157,7 +160,7 @@ export async function createBookingOnConnection(
     if (!['SCHEDULED', 'BOARDING', 'DELAYED'].includes(String(trip.status))) {
       throw ApiError.badRequest('El viaje ya no admite reservas');
     }
-    if (new Date(String(trip.departure_datetime)) <= new Date()) {
+    if (businessTimeMs(String(trip.departure_datetime)) <= Date.now()) {
       throw ApiError.badRequest('El viaje ya partió');
     }
 

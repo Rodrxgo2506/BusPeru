@@ -2,6 +2,7 @@ import crypto from 'crypto';
 import { execute, query, queryOne, withTransaction } from '../config/database';
 import { env } from '../config/env';
 import { ApiError } from '../utils/ApiError';
+import { businessTimeMs } from '../utils/businessTime';
 import { hashPassword } from '../utils/security';
 import { sendEmail } from './email.service';
 import { PASSWORD_RESET_EMAIL, renderTemplate } from './notification.service';
@@ -116,7 +117,7 @@ export async function requestReset(email: string, options: { resend?: boolean } 
   // el limitador global no sea la única defensa contra el spam de correos.
   const active = await findActiveRequest(user.id);
   if (active) {
-    const elapsedSeconds = (Date.now() - new Date(active.created_at).getTime()) / 1000;
+    const elapsedSeconds = (Date.now() - businessTimeMs(active.created_at)) / 1000;
     if (elapsedSeconds < env.passwordReset.resendCooldownSeconds) {
       if (options.resend) {
         throw ApiError.tooManyRequests(
@@ -168,7 +169,7 @@ export async function verifyCode(email: string, code: string): Promise<VerifyRes
     const request = (rows as ResetRow[])[0];
     if (!request) return { ok: false, reason: 'invalid' };
 
-    if (new Date(request.expires_at).getTime() <= Date.now()) {
+    if (businessTimeMs(request.expires_at) <= Date.now()) {
       await connection.query('UPDATE password_reset_tokens SET used_at = NOW() WHERE id = ?', [request.id]);
       return { ok: false, reason: 'expired' };
     }
@@ -236,7 +237,7 @@ export async function resetPassword(email: string, ticket: string, newPassword: 
     const request = (rows as ResetRow[])[0];
     if (!request) return 'invalid';
 
-    if (!request.ticket_expires_at || new Date(request.ticket_expires_at).getTime() <= Date.now()) {
+    if (!request.ticket_expires_at || businessTimeMs(request.ticket_expires_at) <= Date.now()) {
       await connection.query('UPDATE password_reset_tokens SET used_at = NOW() WHERE id = ?', [request.id]);
       return 'expired';
     }
