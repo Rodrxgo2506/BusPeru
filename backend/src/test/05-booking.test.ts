@@ -264,4 +264,160 @@ describe('Reservas y bloqueo de asientos', () => {
       assert.equal((await intentaReservar()).status, 201);
     });
   });
+
+  /**
+   * BP-09 · regresión de la auditoría del 06/09/2026.
+   *
+   * `cancelBooking` rechazaba CANCELLED y COMPLETED pero no EXPIRED. La expiración ya había
+   * devuelto los cupos, así que cancelar después la misma reserva los sumaba por segunda vez
+   * y `trips.available_seats` se separaba de la disponibilidad real (10 → 11 → 12, cuando lo
+   * correcto era 11). El tope por capacidad ocultaba el problema solo en viajes llenos.
+   */
+  describe('BP-09 · una reserva vencida ya no vuelve a liberar asientos', () => {
+    /** Reserva pendiente del cliente, vencida y pasada por la expiración real. */
+    async function reservaVencida() {
+      const seats = await freeSeats(ctx.fixtures.tripA);
+      const reserva = await post(
+        '/bookings',
+        { trip_id: ctx.fixtures.tripA, seat_ids: [at(seats, 0).id], payment_method: 'CARD' },
+        ctx.sessions.customer.token,
+      );
+      assert.equal(reserva.status, 201);
+
+      await execute('UPDATE bookings SET expires_at = DATE_SUB(NOW(), INTERVAL 1 MINUTE) WHERE id = ?', [reserva.body.data.id]);
+      const expiracion = await post('/bookings/expire', {}, ctx.sessions.admin.token);
+      assert.equal(expiracion.status, 200);
+
+      return reserva.body.data;
+    }
+
+    /** Disponibilidad real derivada de los asientos que siguen reteniendo cupo. */
+    async function disponibilidadReal(tripId: number): Promise<number> {
+      const fila = await queryOne<{ libres: number }>(
+        `SELECT b.capacity - (
+           SELECT COUNT(*) FROM booking_seats bs JOIN bookings bk ON bk.id = bs.booking_id
+           WHERE bs.trip_id = t.id
+             AND (bk.status IN ('CONFIRMED','COMPLETED')
+                  OR (bk.status = 'PENDING' AND (bk.expires_at IS NULL OR bk.expires_at > NOW())))
+         ) AS libres
+         FROM trips t JOIN buses b ON b.id = t.bus_id WHERE t.id = ?`,
+        [tripId],
+      );
+      return Number(fila?.libres);
+    }
+
+    it('la expiración libera los asientos una sola vez', async () => {
+      const reserva = await reservaVencida();
+
+      const fila = await queryOne<{ status: string; available_seats: number }>(
+        'SELECT bk.status, t.available_seats FROM bookings bk JOIN trips t ON t.id = bk.trip_id WHERE bk.id = ?',
+        [reserva.id],
+      );
+      assert.equal(fila?.status, 'EXPIRED');
+      assert.equal(Number(fila?.available_seats), await disponibilidadReal(ctx.fixtures.tripA), 'la expiración deja la cuenta cuadrada');
+    });
+
+    it('cancelar una reserva EXPIRED se rechaza y no toca nada', async () => {
+      const reserva = await reservaVencida();
+
+      const antes = await queryOne<{ available_seats: number; asientos: number; refunds: number; movimientos: number }>(
+        `SELECT (SELECT available_seats FROM trips WHERE id = ?) AS available_seats,
+                (SELECT COUNT(*) FROM booking_seats WHERE booking_id = ?) AS asientos,
+                (SELECT COUNT(*) FROM refunds WHERE booking_id = ?) AS refunds,
+                (SELECT COUNT(*) FROM financial_transactions WHERE booking_id = ?) AS movimientos`,
+        [ctx.fixtures.tripA, reserva.id, reserva.id, reserva.id],
+      );
+
+      const cancelacion = await post(
+        `/bookings/${reserva.id}/cancel`,
+        { reason: 'intento tardío', request_refund: true },
+        ctx.sessions.customer.token,
+      );
+      assert.equal(cancelacion.status, 400);
+
+      const despues = await queryOne<{ available_seats: number; asientos: number; refunds: number; movimientos: number }>(
+        `SELECT (SELECT available_seats FROM trips WHERE id = ?) AS available_seats,
+                (SELECT COUNT(*) FROM booking_seats WHERE booking_id = ?) AS asientos,
+                (SELECT COUNT(*) FROM refunds WHERE booking_id = ?) AS refunds,
+                (SELECT COUNT(*) FROM financial_transactions WHERE booking_id = ?) AS movimientos`,
+        [ctx.fixtures.tripA, reserva.id, reserva.id, reserva.id],
+      );
+
+      assert.deepEqual(despues, antes, 'ni asientos, ni reembolso, ni movimiento financiero');
+      assert.equal(
+        Number(despues?.available_seats),
+        await disponibilidadReal(ctx.fixtures.tripA),
+        'la disponibilidad sigue coincidiendo con la real: no hay doble abono',
+      );
+    });
+
+    it('la reserva sigue EXPIRED, no pasa a CANCELLED', async () => {
+      const reserva = await reservaVencida();
+      await post(`/bookings/${reserva.id}/cancel`, {}, ctx.sessions.customer.token);
+
+      const fila = await queryOne<{ status: string; cancelled_at: string | null }>(
+        'SELECT status, cancelled_at FROM bookings WHERE id = ?',
+        [reserva.id],
+      );
+      assert.equal(fila?.status, 'EXPIRED');
+      assert.equal(fila?.cancelled_at, null);
+    });
+
+    it('insistir varias veces tampoco desplaza la disponibilidad', async () => {
+      const reserva = await reservaVencida();
+      const antes = await queryOne<{ available_seats: number }>('SELECT available_seats FROM trips WHERE id = ?', [ctx.fixtures.tripA]);
+
+      for (let intento = 0; intento < 3; intento += 1) {
+        assert.equal((await post(`/bookings/${reserva.id}/cancel`, {}, ctx.sessions.customer.token)).status, 400);
+      }
+
+      const despues = await queryOne<{ available_seats: number }>('SELECT available_seats FROM trips WHERE id = ?', [ctx.fixtures.tripA]);
+      assert.equal(Number(despues?.available_seats), Number(antes?.available_seats));
+    });
+
+    it('cancelar dos veces una reserva vigente se sigue rechazando igual', async () => {
+      const seats = await freeSeats(ctx.fixtures.tripA);
+      const reserva = await post(
+        '/bookings',
+        { trip_id: ctx.fixtures.tripA, seat_ids: [at(seats, 0).id] },
+        ctx.sessions.customer.token,
+      );
+
+      assert.equal((await post(`/bookings/${reserva.body.data.id}/cancel`, {}, ctx.sessions.customer.token)).status, 200);
+      assert.equal((await post(`/bookings/${reserva.body.data.id}/cancel`, {}, ctx.sessions.customer.token)).status, 400);
+    });
+
+    it('y cancelar una reserva vigente sigue liberando sus asientos con normalidad', async () => {
+      const seats = await freeSeats(ctx.fixtures.tripA);
+      const reserva = await post(
+        '/bookings',
+        { trip_id: ctx.fixtures.tripA, seat_ids: [at(seats, 0).id] },
+        ctx.sessions.customer.token,
+      );
+      const retenida = await queryOne<{ available_seats: number }>('SELECT available_seats FROM trips WHERE id = ?', [ctx.fixtures.tripA]);
+
+      assert.equal((await post(`/bookings/${reserva.body.data.id}/cancel`, {}, ctx.sessions.customer.token)).status, 200);
+
+      const liberada = await queryOne<{ available_seats: number }>('SELECT available_seats FROM trips WHERE id = ?', [ctx.fixtures.tripA]);
+      assert.equal(Number(liberada?.available_seats), Number(retenida?.available_seats) + 1);
+      assert.equal(Number(liberada?.available_seats), await disponibilidadReal(ctx.fixtures.tripA));
+    });
+
+    it('expirar después de cancelar tampoco suma: la expiración solo mira reservas PENDING', async () => {
+      const seats = await freeSeats(ctx.fixtures.tripA);
+      const reserva = await post(
+        '/bookings',
+        { trip_id: ctx.fixtures.tripA, seat_ids: [at(seats, 0).id] },
+        ctx.sessions.customer.token,
+      );
+      await post(`/bookings/${reserva.body.data.id}/cancel`, {}, ctx.sessions.customer.token);
+
+      const antes = await queryOne<{ available_seats: number }>('SELECT available_seats FROM trips WHERE id = ?', [ctx.fixtures.tripA]);
+      await execute('UPDATE bookings SET expires_at = DATE_SUB(NOW(), INTERVAL 1 MINUTE) WHERE id = ?', [reserva.body.data.id]);
+      await post('/bookings/expire', {}, ctx.sessions.admin.token);
+
+      const despues = await queryOne<{ available_seats: number }>('SELECT available_seats FROM trips WHERE id = ?', [ctx.fixtures.tripA]);
+      assert.equal(Number(despues?.available_seats), Number(antes?.available_seats), 'el otro orden de los hechos tampoco duplica');
+    });
+  });
 });

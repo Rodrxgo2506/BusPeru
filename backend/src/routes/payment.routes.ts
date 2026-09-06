@@ -1,5 +1,5 @@
 import { Router, type Request } from 'express';
-import { execute, query, queryOne, withTransaction } from '../config/database';
+import { query, queryOne, withTransaction } from '../config/database';
 import { authenticate, requireAuth } from '../middleware/auth.middleware';
 import { requirePermission } from '../middleware/permission.middleware';
 import { validate } from '../middleware/validate.middleware';
@@ -44,6 +44,25 @@ function visibilityScope(req: Request): { sql: string; params: unknown[] } | nul
   if (user.role === 'CUSTOMER') return { sql: 'bk.user_id = ?', params: [user.id] };
   if (user.companyIds.length === 0) return { sql: '1 = 0', params: [] };
   return { sql: `r.company_id IN (${user.companyIds.map(() => '?').join(', ')})`, params: [...user.companyIds] };
+}
+
+/**
+ * Comprobación de alcance para las ESCRITURAS financieras, donde la empresa no sale de un
+ * `WHERE` sino de la cadena `payment → booking → trip → route → company_id` (BP-23).
+ *
+ * Hoy solo el ADMIN tiene `payments.refund`, así que ninguna de las dos escrituras era
+ * explotable entre empresas. Pero el permiso está a una decisión de producto de abrirse a
+ * los roles de empresa, y entonces el aislamiento tiene que estar ya puesto: por eso se
+ * comprueba aquí y no se deja para más adelante. `POST /settlements` ya usaba este mismo
+ * criterio; los dos endpoints de reembolso eran los que no lo hacían.
+ *
+ * Responde 404 y no 403: el resto de la API tampoco confirma la existencia de un recurso
+ * de otra empresa.
+ */
+function assertCompanyInScope(req: Request, companyId: number): void {
+  const user = requireAuth(req);
+  if (user.role === 'ADMIN') return;
+  if (!user.companyIds.includes(Number(companyId))) throw ApiError.notFound('Recurso no encontrado');
 }
 
 function buildListHandler(select: string, alias: string, filterMap: Record<string, string>, searchColumns: string[], sortColumns: string[], defaultSort: string) {
@@ -196,12 +215,85 @@ refundRouter.post(
   validate(createRefundSchema),
   asyncHandler(async (req, res) => {
     const body = req.body as Record<string, unknown>;
-    const result = await execute(
-      `INSERT INTO refunds (payment_id, booking_id, amount, reason, status) VALUES (?, ?, ?, ?, ?)`,
-      [body.payment_id, body.booking_id, body.amount, body.reason ?? null, body.status ?? 'PENDING'],
-    );
-    await recordAudit(req, { action: 'CREATE', entityType: 'refunds', entityId: result.insertId, description: 'Registró un reembolso', newValues: body });
-    sendSuccess(res, await queryOne(`${REFUND_SELECT} WHERE rf.id = ?`, [result.insertId]), 201);
+    const paymentId = Number(body.payment_id);
+    const bookingId = Number(body.booking_id);
+    const amount = Number(body.amount);
+
+    /**
+     * Los identificadores llegaban del cliente y se insertaban sin comprobar nada: se podía
+     * ligar el pago de una reserva con la reserva de otra, reembolsar un pago no cobrado o
+     * pedir más de lo pagado. Aquí se deriva y se valida la cadena completa.
+     *
+     * Todo ocurre dentro de una transacción que empieza bloqueando el pago. Ese bloqueo es
+     * lo que hace segura la suma de reembolsos anteriores: dos solicitudes simultáneas
+     * sobre el mismo pago se serializan, así que entre las dos no pueden pasarse del
+     * importe cobrado.
+     */
+    const refundId = await withTransaction(async (connection) => {
+      const [paymentRows] = await connection.query(
+        `SELECT p.id, p.booking_id, p.amount, p.status, r.company_id
+         FROM payments p
+         JOIN bookings bk ON bk.id = p.booking_id
+         JOIN trips t ON t.id = bk.trip_id
+         JOIN routes r ON r.id = t.route_id
+         WHERE p.id = ? LIMIT 1 FOR UPDATE`,
+        [paymentId],
+      );
+      const payment = (paymentRows as Array<{
+        id: number;
+        booking_id: number;
+        amount: number;
+        status: string;
+        company_id: number;
+      }>)[0];
+      if (!payment) throw ApiError.notFound('Pago no encontrado');
+
+      assertCompanyInScope(req, payment.company_id);
+
+      if (Number(payment.booking_id) !== bookingId) {
+        throw ApiError.badRequest('El pago indicado no pertenece a esa reserva');
+      }
+      if (payment.status !== 'PAID') {
+        throw ApiError.badRequest('Solo se puede reembolsar un pago cobrado');
+      }
+      // El importe llega validado como número no negativo; aquí se descarta también el cero.
+      if (!(amount > 0)) throw ApiError.badRequest('El importe del reembolso debe ser mayor que cero');
+
+      // Un reembolso PENDING o PROCESSING ya tiene ese dinero comprometido y cuenta contra
+      // el pago. Los FAILED y CANCELLED no llegaron a ninguna parte y se ignoran.
+      const [sumRows] = await connection.query(
+        `SELECT COALESCE(SUM(amount), 0) AS total FROM refunds
+         WHERE payment_id = ? AND status NOT IN ('FAILED', 'CANCELLED')`,
+        [paymentId],
+      );
+      const yaReembolsado = Number((sumRows as Array<{ total: number }>)[0]?.total ?? 0);
+      const disponible = Number((Number(payment.amount) - yaReembolsado).toFixed(2));
+
+      if (disponible <= 0) throw ApiError.badRequest('El pago ya está reembolsado por completo');
+      if (amount > disponible) {
+        throw ApiError.badRequest(`El importe supera lo reembolsable de este pago (S/ ${disponible.toFixed(2)})`);
+      }
+
+      /**
+       * El reembolso nace pendiente de procesar. Crearlo ya COMPLETED consumiría el importe
+       * del pago sin haber escrito nunca el movimiento REFUND ni haber marcado el pago como
+       * reembolsado, porque eso lo hace `POST /refunds/:id/process`, que además rechazaría
+       * después el reembolso por considerarlo ya procesado.
+       */
+      const status = body.status === undefined ? 'PENDING' : String(body.status);
+      if (!['PENDING', 'PROCESSING'].includes(status)) {
+        throw ApiError.badRequest('Un reembolso se crea pendiente y se cierra al procesarlo');
+      }
+
+      const [result] = await connection.query(
+        `INSERT INTO refunds (payment_id, booking_id, amount, reason, status) VALUES (?, ?, ?, ?, ?)`,
+        [paymentId, bookingId, amount, body.reason ?? null, status],
+      );
+      return (result as { insertId: number }).insertId;
+    });
+
+    await recordAudit(req, { action: 'CREATE', entityType: 'refunds', entityId: refundId, description: 'Registró un reembolso', newValues: body });
+    sendSuccess(res, await queryOne(`${REFUND_SELECT} WHERE rf.id = ?`, [refundId]), 201);
   }),
 );
 
@@ -232,6 +324,8 @@ refundRouter.post(
       );
       const refund = (rows as Record<string, unknown>[])[0];
       if (!refund) throw ApiError.notFound('Reembolso no encontrado');
+      // Alcance por empresa (BP-23): la empresa ya viene resuelta por el JOIN de arriba.
+      assertCompanyInScope(req, Number(refund.company_id));
       if (refund.status === 'COMPLETED') throw ApiError.badRequest('El reembolso ya fue procesado');
 
       await connection.query('UPDATE refunds SET status = ?, processed_at = NOW() WHERE id = ?', [status, refundId]);

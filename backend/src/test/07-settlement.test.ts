@@ -119,4 +119,140 @@ describe('Liquidaciones y reportes', () => {
     const empresa = await get('/dashboard/company', ctx.sessions.companyAdmin.token);
     assert.ok(Number(empresa.body.data.totals.tickets_sold) > 0);
   });
+
+  /**
+   * BP-10 · regresión de la auditoría del 06/09/2026.
+   *
+   * `PUT /settlements/:id` insertaba un PAYOUT cada vez que llegaba `status: PAID`, sin
+   * mirar si la liquidación ya estaba pagada. Un doble clic, un reintento de red o una
+   * recarga duplicaban el pago a la empresa en `financial_transactions`, que es la fuente
+   * de los informes financieros.
+   *
+   * BP-23 · el mismo endpoint tampoco comprobaba la empresa, a diferencia de `POST`.
+   */
+  describe('BP-10 y BP-23 · pagar una liquidación es idempotente y acotado', () => {
+    /** Liquidación nueva sobre la empresa indicada, con los movimientos que queden sin liquidar. */
+    async function nuevaLiquidacion(companyId: number) {
+      const res = await post(
+        '/settlements',
+        { company_id: companyId, period_start: '2020-01-01', period_end: '2035-12-31' },
+        ctx.sessions.admin.token,
+      );
+      assert.equal(res.status, 201);
+      return res.body.data as { id: number; net_amount: number; settlement_code: string; status: string };
+    }
+
+    async function payouts(code: string) {
+      return query<{ id: number; amount: number }>(
+        "SELECT id, amount FROM financial_transactions WHERE type = 'PAYOUT' AND reference_code = ?",
+        [code],
+      );
+    }
+
+    it('marcarla PAID crea exactamente un PAYOUT por el neto', async () => {
+      const liquidacion = await nuevaLiquidacion(ctx.fixtures.companyA);
+
+      const res = await put(`/settlements/${liquidacion.id}`, { status: 'PAID' }, ctx.sessions.admin.token);
+      assert.equal(res.status, 200);
+      assert.equal(res.body.data.status, 'PAID');
+
+      const movimientos = await payouts(liquidacion.settlement_code);
+      assert.equal(movimientos.length, 1);
+      assert.equal(Number(movimientos[0]!.amount), Number(liquidacion.net_amount), 'el importe es el neto de la liquidación');
+    });
+
+    it('repetir la misma petición no crea un segundo PAYOUT', async () => {
+      const liquidacion = await nuevaLiquidacion(ctx.fixtures.companyA);
+      await put(`/settlements/${liquidacion.id}`, { status: 'PAID' }, ctx.sessions.admin.token);
+
+      const repetida = await put(`/settlements/${liquidacion.id}`, { status: 'PAID' }, ctx.sessions.admin.token);
+      assert.equal(repetida.status, 200, 'reintentar sigue siendo una respuesta correcta');
+      assert.equal(repetida.body.data.status, 'PAID');
+
+      const movimientos = await payouts(liquidacion.settlement_code);
+      assert.equal(movimientos.length, 1, 'el ataque de la auditoría dejaba dos');
+    });
+
+    it('ni cinco reintentos seguidos alteran el importe acumulado', async () => {
+      const liquidacion = await nuevaLiquidacion(ctx.fixtures.companyA);
+      for (let intento = 0; intento < 5; intento += 1) {
+        assert.equal((await put(`/settlements/${liquidacion.id}`, { status: 'PAID' }, ctx.sessions.admin.token)).status, 200);
+      }
+
+      const movimientos = await payouts(liquidacion.settlement_code);
+      assert.equal(movimientos.length, 1);
+      assert.equal(Number(movimientos[0]!.amount), Number(liquidacion.net_amount));
+    });
+
+    it('dos peticiones simultáneas dejan un único PAYOUT', async () => {
+      const liquidacion = await nuevaLiquidacion(ctx.fixtures.companyA);
+
+      const [uno, dos] = await Promise.all([
+        put(`/settlements/${liquidacion.id}`, { status: 'PAID' }, ctx.sessions.admin.token),
+        put(`/settlements/${liquidacion.id}`, { status: 'PAID' }, ctx.sessions.admin.token),
+      ]);
+      assert.equal(uno.status, 200);
+      assert.equal(dos.status, 200);
+
+      const movimientos = await payouts(liquidacion.settlement_code);
+      assert.equal(movimientos.length, 1, 'el bloqueo de fila serializa las dos transiciones');
+    });
+
+    it('la fecha de pago no se reescribe al reintentar', async () => {
+      const liquidacion = await nuevaLiquidacion(ctx.fixtures.companyA);
+      await put(`/settlements/${liquidacion.id}`, { status: 'PAID' }, ctx.sessions.admin.token);
+      const primera = await query<{ paid_at: string }>('SELECT paid_at FROM settlements WHERE id = ?', [liquidacion.id]);
+
+      await put(`/settlements/${liquidacion.id}`, { status: 'PAID' }, ctx.sessions.admin.token);
+      const segunda = await query<{ paid_at: string }>('SELECT paid_at FROM settlements WHERE id = ?', [liquidacion.id]);
+
+      assert.equal(segunda[0]!.paid_at, primera[0]!.paid_at);
+    });
+
+    it('las demás transiciones legítimas siguen funcionando', async () => {
+      const liquidacion = await nuevaLiquidacion(ctx.fixtures.companyA);
+
+      const enProceso = await put(`/settlements/${liquidacion.id}`, { status: 'PROCESSING' }, ctx.sessions.admin.token);
+      assert.equal(enProceso.body.data.status, 'PROCESSING');
+      assert.equal((await payouts(liquidacion.settlement_code)).length, 0, 'solo PAID emite el pago');
+
+      const referencia = await put(
+        `/settlements/${liquidacion.id}`,
+        { payment_reference: 'TRANSFERENCIA-001' },
+        ctx.sessions.admin.token,
+      );
+      assert.equal(referencia.body.data.payment_reference, 'TRANSFERENCIA-001');
+
+      const pagada = await put(`/settlements/${liquidacion.id}`, { status: 'PAID' }, ctx.sessions.admin.token);
+      assert.equal(pagada.body.data.status, 'PAID');
+      assert.equal((await payouts(liquidacion.settlement_code)).length, 1, 'PROCESSING → PAID sí emite, una vez');
+
+      const cancelada = await put(`/settlements/${liquidacion.id}`, { status: 'CANCELLED' }, ctx.sessions.admin.token);
+      assert.equal(cancelada.body.data.status, 'CANCELLED');
+      assert.equal((await payouts(liquidacion.settlement_code)).length, 1, 'salir de PAID no borra ni añade movimientos');
+    });
+
+    it('un rol de empresa no puede tocar la liquidación de otra empresa', async () => {
+      const deB = await nuevaLiquidacion(ctx.fixtures.companyB);
+
+      // Hoy `settings.update` es exclusivo del ADMIN, así que la primera barrera es el permiso.
+      for (const sesion of [ctx.sessions.companyAdmin, ctx.sessions.operator, ctx.sessions.customer]) {
+        assert.equal((await put(`/settlements/${deB.id}`, { status: 'PAID' }, sesion.token)).status, 403);
+      }
+      assert.equal((await payouts(deB.settlement_code)).length, 0);
+    });
+
+    it('el ADMIN conserva el acceso global a las liquidaciones de cualquier empresa', async () => {
+      const deB = await nuevaLiquidacion(ctx.fixtures.companyB);
+      const res = await put(`/settlements/${deB.id}`, { status: 'PAID' }, ctx.sessions.admin.token);
+      assert.equal(res.status, 200);
+      assert.equal(res.body.data.status, 'PAID');
+      assert.equal((await payouts(deB.settlement_code)).length, 1);
+    });
+
+    it('una liquidación inexistente responde 404 y no revela nada', async () => {
+      const res = await put('/settlements/999999', { status: 'PAID' }, ctx.sessions.admin.token);
+      assert.equal(res.status, 404);
+    });
+  });
 });

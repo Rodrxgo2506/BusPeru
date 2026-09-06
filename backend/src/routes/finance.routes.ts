@@ -253,29 +253,56 @@ settlementRouter.put(
   validate(updateSettlementSchema),
   asyncHandler(async (req, res) => {
     const settlementId = parseId(req.params.id);
+    const user = requireAuth(req);
     const body = req.body as Record<string, unknown>;
     const columns = ['status', 'payment_reference'].filter((column) => body[column] !== undefined);
     if (columns.length === 0) throw ApiError.badRequest('No se enviaron cambios');
 
-    const assignments = columns.map((column) => `${column} = ?`);
-    if (body.status === 'PAID') assignments.push('paid_at = NOW()');
-
     await withTransaction(async (connection) => {
+      /**
+       * La liquidación se bloquea ANTES de decidir nada. De ahí salen las dos garantías:
+       *
+       *  · Alcance (BP-23): `POST /settlements` sí comprobaba la empresa y este endpoint no.
+       *    Hoy solo el ADMIN tiene `settings.update`, así que no era explotable, pero el día
+       *    que un rol de empresa lo obtenga no debe poder tocar la liquidación de otra.
+       *  · Idempotencia (BP-10): el PAYOUT se insertaba en cada petición con `status: PAID`,
+       *    de modo que un doble clic o un reintento duplicaba el pago a la empresa en
+       *    `financial_transactions`. Ahora solo se emite en la TRANSICIÓN a PAID.
+       */
+      const [rows] = await connection.query(
+        'SELECT id, company_id, status, net_amount, settlement_code FROM settlements WHERE id = ? LIMIT 1 FOR UPDATE',
+        [settlementId],
+      );
+      const settlement = (rows as Array<{
+        id: number;
+        company_id: number;
+        status: string;
+        net_amount: number;
+        settlement_code: string;
+      }>)[0];
+      // 404 y no 403: no se confirma que exista la liquidación de otra empresa.
+      if (!settlement) throw ApiError.notFound('Liquidación no encontrada');
+      if (user.role !== 'ADMIN' && !user.companyIds.includes(settlement.company_id)) {
+        throw ApiError.notFound('Liquidación no encontrada');
+      }
+
+      const marcaComoPagada = body.status === 'PAID' && settlement.status !== 'PAID';
+
+      const assignments = columns.map((column) => `${column} = ?`);
+      // `paid_at` solo se sella en la transición: reintentar no reescribe la fecha del pago.
+      if (marcaComoPagada) assignments.push('paid_at = NOW()');
+
       await connection.query(`UPDATE settlements SET ${assignments.join(', ')} WHERE id = ?`, [
         ...columns.map((column) => body[column]),
         settlementId,
       ]);
 
-      if (body.status === 'PAID') {
-        const [rows] = await connection.query('SELECT company_id, net_amount, settlement_code FROM settlements WHERE id = ?', [settlementId]);
-        const settlement = (rows as Array<{ company_id: number; net_amount: number; settlement_code: string }>)[0];
-        if (settlement) {
-          await connection.query(
-            `INSERT INTO financial_transactions (company_id, type, direction, amount, currency, description, reference_code, status, transaction_date)
-             VALUES (?, 'PAYOUT', 'DEBIT', ?, 'PEN', ?, ?, 'COMPLETED', NOW())`,
-            [settlement.company_id, settlement.net_amount, `Pago de liquidación ${settlement.settlement_code}`, settlement.settlement_code],
-          );
-        }
+      if (marcaComoPagada) {
+        await connection.query(
+          `INSERT INTO financial_transactions (company_id, type, direction, amount, currency, description, reference_code, status, transaction_date)
+           VALUES (?, 'PAYOUT', 'DEBIT', ?, 'PEN', ?, ?, 'COMPLETED', NOW())`,
+          [settlement.company_id, settlement.net_amount, `Pago de liquidación ${settlement.settlement_code}`, settlement.settlement_code],
+        );
       }
     });
 

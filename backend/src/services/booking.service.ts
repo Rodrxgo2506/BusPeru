@@ -467,6 +467,10 @@ export async function cancelBooking(bookingId: number, reason: string | null, re
     if (!booking) throw ApiError.notFound('Reserva no encontrada');
     if (booking.status === 'CANCELLED') throw ApiError.badRequest('La reserva ya está cancelada');
     if (booking.status === 'COMPLETED') throw ApiError.badRequest('No se puede cancelar un viaje ya realizado');
+    // Una reserva vencida ya está cerrada: la expiración devolvió sus cupos y canceló sus
+    // pagos. Dejarla pasar por aquí sumaba los mismos asientos por segunda vez y separaba
+    // `trips.available_seats` de la disponibilidad real.
+    if (booking.status === 'EXPIRED') throw ApiError.badRequest('La reserva ya venció y sus asientos se liberaron');
 
     await connection.query(
       "UPDATE bookings SET status = 'CANCELLED', cancelled_at = NOW(), notes = COALESCE(?, notes) WHERE id = ?",
