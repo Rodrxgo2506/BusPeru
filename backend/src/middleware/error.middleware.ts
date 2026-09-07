@@ -8,8 +8,16 @@ interface MysqlError extends Error {
   sqlMessage?: string;
 }
 
+/**
+ * Ruta inexistente.
+ *
+ * El mensaje ya NO incluye `req.originalUrl` (auditoría BP-25b). La respuesta es JSON y no
+ * había XSS, pero devolver al cliente lo que el cliente acaba de escribir no aporta nada
+ * —él sabe qué pidió— y es la clase de reflejo que deja de ser inocuo en cuanto alguien
+ * copia el mensaje a un correo, a un panel o a una página HTML.
+ */
 export function notFoundHandler(req: Request, _res: Response, next: NextFunction): void {
-  next(ApiError.notFound(`Ruta no encontrada: ${req.method} ${req.originalUrl}`));
+  next(ApiError.notFound('Ruta no encontrada'));
 }
 
 /**

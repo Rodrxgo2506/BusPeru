@@ -22,13 +22,35 @@ export function ProtectedRoute({ children, loginPath = '/login' }: { children: R
   return <>{children}</>;
 }
 
-export function RoleRoute({ children, roles, loginPath = '/login' }: { children: ReactNode; roles: RoleName[]; loginPath?: string }) {
+/**
+ * Restringe un área por rol.
+ *
+ * `requiresCompany` cubre el Portal Empresa (auditoría BP-25d). Ese portal admite también al
+ * rol ADMIN —legítimo cuando el administrador está asociado a una empresa—, pero un ADMIN
+ * sin ninguna empresa entraba igual y se encontraba un panel roto: cada pantalla llamaba a
+ * su endpoint y el backend respondía 403 «Tu usuario no está asociado a ninguna empresa» o
+ * 400 «Indica la empresa con el parámetro company_id». El backend hacía lo correcto; lo que
+ * fallaba era dejar pasar a una pantalla que no podía funcionar. Se comprueba lo mismo que
+ * comprueba el servidor —tener empresa— y se muestra el aviso que ya existe.
+ */
+export function RoleRoute({
+  children,
+  roles,
+  loginPath = '/login',
+  requiresCompany = false,
+}: {
+  children: ReactNode;
+  roles: RoleName[];
+  loginPath?: string;
+  requiresCompany?: boolean;
+}) {
   const { user, loading, isAuthenticated } = useAuth();
   const location = useLocation();
 
   if (loading) return <FullPageLoader />;
   if (!isAuthenticated) return <Navigate to={loginPath} state={{ from: location.pathname }} replace />;
   if (!user || !roles.includes(user.role)) return <PermissionDenied />;
+  if (requiresCompany && user.companyIds.length === 0) return <PermissionDenied />;
   return <>{children}</>;
 }
 

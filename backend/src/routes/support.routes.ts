@@ -87,6 +87,58 @@ async function resolveTicketOrigin(
   return { bookingId: booking!.id, companyId: booking!.company_id };
 }
 
+/**
+ * Comprueba que quien se pone en `assigned_to` pueda hacerse cargo del ticket (BP-24).
+ *
+ * QUÉ PASABA. El campo se escribía tal como llegaba: bastaba con `optionalId`, un entero
+ * positivo. No se miraba si esa persona existe, si su cuenta está activa, qué rol tiene ni
+ * de qué empresa es. Y eso no era solo un dato feo: `visibilityScope` incluye
+ * `st.assigned_to = ?`, así que **asignar es conceder lectura**. Un administrador de la
+ * empresa A asignaba su ticket al administrador de la empresa B y este pasaba a ver el
+ * ticket entero —nombre de la empresa A, correo del pasajero y su `booking_code`—.
+ * Comprobado: `{"company_name":"Empresa A","user_email":"cliente@test.pe",
+ * "booking_code":"BP-746654"}` servido a la empresa B.
+ *
+ * LA REGLA, sin inventar nada. No hay módulo de permisos `support.*` —se comprobó: la tabla
+ * no tiene ninguno—, así que el acceso a soporte se rige por identidad. La regla es
+ * exactamente esa misma, aplicada al candidato: **solo puede ser responsable de un ticket
+ * quien ya podría verlo por sí mismo**.
+ *
+ *   · ADMIN de plataforma: siempre. Ve todos los tickets, y escalarle uno es legítimo.
+ *   · Rol de empresa: solo si pertenece a la empresa DEL TICKET, que se deriva del recurso
+ *     y nunca del cuerpo de la petición.
+ *   · CUSTOMER: nunca. Su alcance son «los tickets que abrí», no los que atiendo.
+ *   · Cuenta no activa: nunca. `authenticate` ya rechaza a quien no está ACTIVE, así que
+ *     asignarle un ticket sería dárselo a alguien que no puede ni entrar.
+ *   · Ticket sin empresa (de plataforma): solo ADMIN, porque no hay empresa a la que
+ *     pertenecer. `cu.company_id = NULL` no casa con nadie y la regla sale sola.
+ *
+ * UN SOLO MENSAJE para todos los rechazos, a propósito: distinguir «no existe» de «es de
+ * otra empresa» convertiría este endpoint en un oráculo para enumerar usuarios ajenos.
+ */
+async function assertAssignable(ticket: Record<string, unknown>, assignedTo: unknown): Promise<void> {
+  // Desasignar sigue valiendo: es como se devuelve un ticket a la bandeja común.
+  if (assignedTo === null || assignedTo === undefined) return;
+
+  const companyId = ticket.company_id === null || ticket.company_id === undefined ? null : Number(ticket.company_id);
+
+  const candidate = await queryOne<{ status: string; role: string; in_company: number }>(
+    `SELECT u.status, ro.name AS role,
+            EXISTS (SELECT 1 FROM company_users cu WHERE cu.user_id = u.id AND cu.company_id = ?) AS in_company
+     FROM users u
+     JOIN roles ro ON ro.id = u.role_id
+     WHERE u.id = ? LIMIT 1`,
+    [companyId, Number(assignedTo)],
+  );
+
+  const puedeAtender =
+    candidate !== null &&
+    candidate.status === 'ACTIVE' &&
+    (candidate.role === 'ADMIN' || (candidate.role !== 'CUSTOMER' && Number(candidate.in_company) === 1));
+
+  if (!puedeAtender) throw ApiError.badRequest('El usuario indicado no puede atender este ticket');
+}
+
 async function findTicketOrFail(req: Request, ticketId: number): Promise<Record<string, unknown>> {
   const conditions = ['st.id = ?'];
   const params: unknown[] = [ticketId];
@@ -247,11 +299,16 @@ router.put(
     const ticketId = parseId(req.params.id);
     const user = requireAuth(req);
     if (user.role === 'CUSTOMER') throw ApiError.forbidden('No puedes cambiar el estado del ticket');
-    await findTicketOrFail(req, ticketId);
+    // La empresa del ticket sale de aquí, del recurso real: `company_id` no está en la lista
+    // de columnas escribibles y enviarlo en el cuerpo no cambia nada.
+    const ticket = await findTicketOrFail(req, ticketId);
 
     const body = req.body as Record<string, unknown>;
     const columns = ['status', 'priority', 'assigned_to'].filter((column) => body[column] !== undefined);
     if (columns.length === 0) throw ApiError.badRequest('No se enviaron cambios');
+
+    // Se valida ANTES de tocar la fila: un rechazo no deja el ticket a medio modificar.
+    if (body.assigned_to !== undefined) await assertAssignable(ticket, body.assigned_to);
 
     const assignments = columns.map((column) => `${column} = ?`);
     if (body.status === 'RESOLVED') assignments.push('resolved_at = NOW()');

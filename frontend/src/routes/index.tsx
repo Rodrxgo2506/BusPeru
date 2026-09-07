@@ -176,7 +176,7 @@ export function AppRoutes() {
           <Route
             path="/company"
             element={
-              <RoleRoute roles={['COMPANY_ADMIN', 'OPERATOR', 'ADMIN']} loginPath="/empresa/login">
+              <RoleRoute roles={['COMPANY_ADMIN', 'OPERATOR', 'ADMIN']} loginPath="/empresa/login" requiresCompany>
                 <CompanyLayout />
               </RoleRoute>
             }

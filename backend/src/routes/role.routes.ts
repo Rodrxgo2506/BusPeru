@@ -100,6 +100,31 @@ roleRouter.put(
         const params = permissionIds.flatMap((permissionId) => [roleId, permissionId]);
         await connection.query(`INSERT INTO role_permissions (role_id, permission_id) VALUES ${values}`, params);
       }
+
+      // La plataforma no puede quedarse sin nadie que pueda administrar permisos
+      // (auditoría BP-25e). Un ADMIN podía enviar `{"permission_ids": []}` sobre su propio
+      // rol y dejar el sistema tapiado: comprobado, los 43 permisos del rol ADMIN pasaban a
+      // 0, y a partir de ahí `PUT /roles/:id/permissions` respondía «Se requiere el permiso:
+      // roles.update» y no había forma de deshacerlo desde la API. Solo se salía entrando a
+      // la base de datos a mano.
+      //
+      // Se comprueba DESPUÉS de aplicar el cambio, sobre el estado real, y no simulando lo
+      // que pasaría: si nadie conserva el permiso, este `throw` revierte la transacción
+      // entera. La condición mira usuarios activos, no roles: un rol sin gente que lo use no
+      // administra nada, y exigir que sea el rol ADMIN quien lo tenga impediría reorganizar
+      // los permisos de forma legítima.
+      const [supervivientes] = await connection.query(
+        `SELECT 1 FROM users u
+         JOIN role_permissions rp ON rp.role_id = u.role_id
+         JOIN permissions p ON p.id = rp.permission_id
+         WHERE p.name = 'roles.update' AND u.status = 'ACTIVE'
+         LIMIT 1`,
+      );
+      if ((supervivientes as unknown[]).length === 0) {
+        throw ApiError.conflict(
+          'El cambio dejaría a la plataforma sin ningún usuario activo capaz de administrar permisos.',
+        );
+      }
     });
 
     await recordAudit(req, {

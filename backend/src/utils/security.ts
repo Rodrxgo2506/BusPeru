@@ -46,9 +46,24 @@ export function signToken(payload: TokenPayload): string {
   return jwt.sign(payload, env.jwt.secret, { expiresIn: env.jwt.expiresIn } as jwt.SignOptions);
 }
 
+/**
+ * Verifica el token de sesión.
+ *
+ * `algorithms` se fija explícitamente (auditoría BP-25a). No era explotable —con un secreto
+ * de texto, `jsonwebtoken` 9 ya restringe la verificación a HMAC y un `alg: none` o un token
+ * firmado con otra clave se rechazan; se comprobó—, pero dejarlo escrito no depende de ese
+ * comportamiento por defecto: si algún día el secreto pasara a ser una clave asimétrica o la
+ * biblioteca cambiara, la confusión de algoritmos volvería a ser posible. Es exactamente lo
+ * que ya se hace, y bien, al verificar el `id_token` de OAuth.
+ *
+ * `issuer` y `audience` se dejan fuera A PROPÓSITO. Aquí hay un solo emisor y una sola clave
+ * simétrica, así que no distinguen nada que la firma no distinga ya; y exigirlos obligaría a
+ * emitirlos también al firmar, lo que invalidaría todas las sesiones vivas en el momento del
+ * despliegue. Es un cambio con coste operativo y sin ganancia de seguridad en este diseño.
+ */
 export function verifyToken(token: string): TokenPayload {
   try {
-    return jwt.verify(token, env.jwt.secret) as unknown as TokenPayload;
+    return jwt.verify(token, env.jwt.secret, { algorithms: ['HS256'] }) as unknown as TokenPayload;
   } catch (error) {
     if (error instanceof jwt.TokenExpiredError) throw ApiError.unauthorized('La sesión ha expirado');
     throw ApiError.unauthorized('Token inválido');
