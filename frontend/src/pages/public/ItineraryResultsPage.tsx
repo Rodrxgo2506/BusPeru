@@ -142,7 +142,8 @@ export function ItineraryResultsPage() {
                       const trip = raw as Record<string, unknown>;
                       const id = Number(trip.id);
                       const elegido = segmento?.tripId === id;
-                      const disponibles = Number(trip.available_seats ?? 0);
+                      // Mismo campo que usa el buscador de ida: el calculado (BP-15).
+                      const disponibles = Number(trip.seats_available ?? 0);
 
                       return (
                         <Card

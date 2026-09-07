@@ -140,8 +140,21 @@ export interface TripSearchParams {
   offset: number;
 }
 
+/**
+ * Proyección pública de un viaje.
+ *
+ * DISPONIBILIDAD: se publica **solo `seats_available`**, calculado aquí abajo a partir de
+ * `booking_seats`. La columna `trips.available_seats` NO sale en esta proyección, y es
+ * deliberado (auditoría BP-15): antes salían las dos en la misma respuesta, así que el
+ * mismo viaje traía dos números que podían no coincidir y cada pantalla usaba uno.
+ *
+ * La fuente de verdad es el cálculo, no la columna: quien decide si un asiento está libre
+ * es `createBookingOnConnection`, y lo hace consultando `booking_seats`, nunca la columna.
+ * `trips.available_seats` es una caché de operación que el ciclo de reservas mantiene, y
+ * puede quedarse a `NULL` o desfasada sin que eso afecte a ninguna venta.
+ */
 const SEARCH_SELECT = `SELECT t.id, t.departure_datetime, t.arrival_datetime, t.base_price, t.status,
-    t.available_seats, t.boarding_notes,
+    t.boarding_notes,
     r.id AS route_id, r.distance_km, r.estimated_duration_minutes,
     ol.city AS origin_city, ol.name AS origin_terminal,
     dl.city AS destination_city, dl.name AS destination_terminal,

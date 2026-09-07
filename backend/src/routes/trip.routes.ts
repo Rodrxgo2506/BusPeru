@@ -253,8 +253,14 @@ router.put(
       await assertCrewAssignable(await companyOfRoute(routeId), nextDriver, nextCoDriver);
     }
 
+    /**
+     * `available_seats` no está: la mantiene el ciclo de reservas (creación, cancelación y
+     * expiración) y escribirla a mano la pondría en contradicción inmediata con los
+     * asientos realmente ocupados (auditoría BP-15). Se sigue fijando al crear el viaje,
+     * donde por defecto vale la capacidad del bus.
+     */
     const allowed = [
-      'route_id', 'bus_id', 'driver_id', 'co_driver_id', 'departure_datetime', 'arrival_datetime', 'base_price', 'available_seats', 'status', 'boarding_notes',
+      'route_id', 'bus_id', 'driver_id', 'co_driver_id', 'departure_datetime', 'arrival_datetime', 'base_price', 'status', 'boarding_notes',
     ];
     const columns = allowed.filter((column) => body[column] !== undefined);
     if (columns.length === 0) throw ApiError.badRequest('No se enviaron cambios');

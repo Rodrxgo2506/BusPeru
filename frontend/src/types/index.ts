@@ -265,7 +265,15 @@ export interface Trip {
   revenue?: number;
 }
 
-export interface PublicTrip extends Trip {
+/**
+ * Viaje tal y como lo publica la búsqueda pública.
+ *
+ * La disponibilidad es `seats_available`, que el backend calcula a partir de los asientos
+ * realmente ocupados. `available_seats` se excluye a propósito (BP-15): es la columna
+ * denormalizada de `trips`, no viaja en esta respuesta y usarla aquí daba un número que
+ * podía no coincidir con el del buscador.
+ */
+export interface PublicTrip extends Omit<Trip, 'available_seats'> {
   seats_available: number;
   company_logo: string | null;
   company_rating: number | null;
