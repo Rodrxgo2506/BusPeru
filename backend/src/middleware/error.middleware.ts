@@ -1,6 +1,6 @@
 import type { NextFunction, Request, Response } from 'express';
-import { env } from '../config/env';
 import { ApiError } from '../utils/ApiError';
+import { logError } from '../utils/logger';
 
 interface MysqlError extends Error {
   code?: string;
@@ -12,17 +12,46 @@ export function notFoundHandler(req: Request, _res: Response, next: NextFunction
   next(ApiError.notFound(`Ruta no encontrada: ${req.method} ${req.originalUrl}`));
 }
 
-export function errorHandler(error: unknown, _req: Request, res: Response, _next: NextFunction): void {
+/**
+ * Manejador central de errores. Es el ÚNICO sitio que registra un fallo del servidor.
+ *
+ * Las rutas se limitan a `next(error)` y los servicios a lanzar, de modo que un mismo error
+ * no aparece repetido por varias capas. Los pocos `console.error` que quedan fuera de aquí
+ * son sucesos que NO terminan en una respuesta —el marcado de uso de una API Key, la zona
+ * horaria de una conexión, una configuración mal escrita— y por tanto no se duplican.
+ *
+ * Reparto de responsabilidades:
+ *
+ *   · **Al cliente**, lo mínimo: el mensaje ya traducido y, en un 5xx, el identificador de
+ *     la petición para que pueda citarlo. Nunca traza, ni SQL, ni rutas del sistema.
+ *   · **Al registro**, lo necesario para diagnosticar: método, ruta, estado, identificador,
+ *     quién actuaba y el error técnico con su traza. Jamás el cuerpo, las cabeceras ni
+ *     ninguna credencial.
+ */
+export function errorHandler(error: unknown, req: Request, res: Response, _next: NextFunction): void {
   const mapped = mapError(error);
 
-  if (!env.isProduction && mapped.statusCode >= 500) {
-    console.error(error);
+  // Se registra SIEMPRE que sea un fallo del servidor, también —y sobre todo— en
+  // producción. Un 4xx es una respuesta legítima a una petición mal formada y no se
+  // registra: llenaría el diario de ruido que no requiere ninguna acción.
+  if (mapped.statusCode >= 500) {
+    logError('Error no controlado al atender una petición', error, {
+      requestId: req.id,
+      method: req.method,
+      path: req.originalUrl,
+      status: mapped.statusCode,
+      ...(req.user ? { userId: req.user.id, role: req.user.role } : {}),
+      ...(req.apiKey ? { apiKeyId: req.apiKey.id, companyId: req.apiKey.companyId } : {}),
+    });
   }
 
   res.status(mapped.statusCode).json({
     success: false,
     message: mapped.message,
     ...(mapped.details ? { errors: mapped.details } : {}),
+    // La referencia solo acompaña a los fallos del servidor, que son los que alguien puede
+    // necesitar reportar. En la cabecera `X-Request-Id` va en todas las respuestas.
+    ...(mapped.statusCode >= 500 && req.id ? { request_id: req.id } : {}),
   });
 }
 

@@ -3,6 +3,7 @@ import { pool, verifyConnection } from './config/database';
 import { env } from './config/env';
 import { startBookingExpiryScheduler, stopBookingExpiryScheduler } from './services/booking-expiry.service';
 import { ensureSystemTemplates } from './services/notification.service';
+import { installFatalHandlers } from './utils/process-guards';
 
 async function bootstrap(): Promise<void> {
   try {
@@ -29,17 +30,23 @@ async function bootstrap(): Promise<void> {
     console.log(`✔ API BusPerú escuchando en http://localhost:${env.port}/api`);
   });
 
-  const shutdown = async (signal: string) => {
+  const shutdown = async (signal: string, code = 0) => {
     console.log(`\n${signal} recibido, cerrando servidor...`);
     stopBookingExpiryScheduler();
     server.close(async () => {
       await pool.end();
-      process.exit(0);
+      process.exit(code);
     });
+    // Si algo se queda colgado, no se espera indefinidamente.
+    setTimeout(() => process.exit(code), 10_000).unref();
   };
 
   process.on('SIGINT', () => void shutdown('SIGINT'));
   process.on('SIGTERM', () => void shutdown('SIGTERM'));
+
+  // Excepciones que escapan a todo manejador: se registran y el proceso se cierra con
+  // codigo 1 para que el gestor de procesos lo reinicie limpio. Ver process-guards.ts.
+  installFatalHandlers((signal, code) => void shutdown(signal, code));
 }
 
 void bootstrap();

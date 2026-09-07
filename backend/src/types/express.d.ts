@@ -4,6 +4,8 @@ import type { AuthenticatedUser } from './entities';
 declare global {
   namespace Express {
     interface Request {
+      /** Identificador único de la petición. Lo pone `attachRequestId`. */
+      id?: string;
       /** Persona autenticada con JWT. La pone `authenticate`. */
       user?: AuthenticatedUser;
       /**

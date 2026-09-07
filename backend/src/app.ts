@@ -5,12 +5,15 @@ import helmet from 'helmet';
 import morgan from 'morgan';
 import { env } from './config/env';
 import { errorHandler, notFoundHandler } from './middleware/error.middleware';
+import { attachRequestId } from './middleware/request-id.middleware';
 import routes from './routes';
 
 export function createApp() {
   const app = express();
 
   app.set('trust proxy', 1);
+  // Lo primero de todo: cualquier cosa que falle después ya tiene identificador.
+  app.use(attachRequestId);
   app.use(helmet());
   app.use(
     cors({
