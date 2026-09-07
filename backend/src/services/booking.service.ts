@@ -5,6 +5,7 @@ import { ApiError } from '../utils/ApiError';
 import { businessTimeMs } from '../utils/businessTime';
 import { readNumberSetting } from './settings.service';
 import { NOTIFICATION_EVENTS, notify } from './notification.service';
+import { SEAT_HELD_SQL } from './trip.service';
 
 /** Datos de presentación del viaje para las notificaciones (sin bloquear filas). */
 async function tripContext(connection: PoolConnection, tripId: number): Promise<Record<string, string>> {
@@ -185,8 +186,7 @@ export async function createBookingOnConnection(
        JOIN bookings bk ON bk.id = bs.booking_id
        JOIN seats s ON s.id = bs.seat_id
        WHERE bs.trip_id = ? AND bs.seat_id IN (${placeholders})
-         AND (bk.status IN ('CONFIRMED', 'COMPLETED')
-              OR (bk.status = 'PENDING' AND (bk.expires_at IS NULL OR bk.expires_at > NOW())))
+         AND ${SEAT_HELD_SQL}
        FOR UPDATE`,
       [input.trip_id, ...input.seat_ids],
     );
@@ -359,6 +359,21 @@ export async function confirmBookingPaymentOnConnection(
   providerTransactionId?: string | null,
 ): Promise<void> {
   {
+    // El viaje se bloquea ANTES que la reserva, y es exactamente el mismo cerrojo que toma
+    // `createBookingOnConnection`. Dos razones, ambas necesarias:
+    //
+    //   · **Exclusión mutua con la venta.** Sin él, confirmar y vender miran el mismo
+    //     asiento a la vez sin verse: uno comprueba que está libre mientras el otro lo
+    //     confirma. Con él, ambos caminos se serializan sobre la fila del viaje.
+    //   · **Orden de bloqueo.** La venta toma viaje → reservas. Si la confirmación tomara
+    //     reserva → viaje, dos operaciones simultáneas podrían quedarse cada una esperando
+    //     el cerrojo de la otra. Leer el `trip_id` sin bloquear —nunca cambia— permite
+    //     tomarlos en el mismo orden que la venta.
+    const [tripRows] = await connection.query('SELECT trip_id FROM bookings WHERE id = ? LIMIT 1', [bookingId]);
+    const tripId = (tripRows as Array<{ trip_id: number }>)[0]?.trip_id;
+    if (tripId === undefined) throw ApiError.notFound('Reserva no encontrada');
+    await connection.query('SELECT id FROM trips WHERE id = ? LIMIT 1 FOR UPDATE', [tripId]);
+
     const [bookingRows] = await connection.query(
       `SELECT bk.*, r.company_id FROM bookings bk
        JOIN trips t ON t.id = bk.trip_id
@@ -372,6 +387,45 @@ export async function confirmBookingPaymentOnConnection(
       throw ApiError.badRequest('La reserva ya no está vigente');
     }
     if (booking.status === 'CONFIRMED' || booking.status === 'COMPLETED') return;
+
+    // Los asientos se vuelven a comprobar aquí, no solo al reservar (auditoría BP-19).
+    //
+    // Entre la reserva y el pago la retención pudo vencer. El planificador la marcaría
+    // EXPIRED, pero pasa cada 60 segundos: durante esa ventana la reserva sigue en PENDING
+    // con el plazo ya cumplido, así que la disponibilidad la da por libre —correctamente— y
+    // otra persona puede comprar el asiento. Si entonces se pagaba la primera, quedaban DOS
+    // reservas CONFIRMED sobre el mismo asiento del mismo viaje. Confirmar era el único
+    // camino que cambiaba a un estado que ocupa asiento sin comprobar si seguía libre.
+    //
+    // No se toca la política de retención: una PENDING vencida se sigue pudiendo pagar
+    // mientras nadie haya ocupado su sitio. Lo que deja de ser posible es pisar a quien ya
+    // lo ocupó.
+    //
+    // La consulta es BLOQUEANTE (`FOR UPDATE`), igual que la de la venta, y no por el
+    // cerrojo sino por la lectura: InnoDB trabaja en REPEATABLE READ, así que una consulta
+    // normal devuelve la instantánea tomada al principio de la transacción y no vería una
+    // venta que acabara de confirmarse. Una lectura bloqueante sí lee la última versión
+    // confirmada. Sin `FOR UPDATE` esta comprobación pasaba de largo justo en el caso
+    // simultáneo que pretende cubrir.
+    const [conflictRows] = await connection.query(
+      `SELECT s.seat_number
+       FROM booking_seats propios
+       JOIN booking_seats ajenos
+         ON ajenos.trip_id = propios.trip_id
+        AND ajenos.seat_id = propios.seat_id
+        AND ajenos.booking_id <> propios.booking_id
+       JOIN bookings bk ON bk.id = ajenos.booking_id
+       JOIN seats s ON s.id = propios.seat_id
+       WHERE propios.booking_id = ? AND ${SEAT_HELD_SQL}
+       FOR UPDATE`,
+      [bookingId],
+    );
+    const ocupados = [...new Set((conflictRows as Array<{ seat_number: string }>).map((row) => row.seat_number))].sort();
+    if (ocupados.length > 0) {
+      throw ApiError.conflict(
+        `La retención de esta reserva venció y los asientos ${ocupados.join(', ')} ya fueron tomados por otra reserva.`,
+      );
+    }
 
     const total = Number(booking.total_amount);
     const companyId = Number(booking.company_id);

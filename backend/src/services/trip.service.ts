@@ -32,6 +32,21 @@ export async function assertTripBelongsToUser(tripId: number, user: Authenticate
 }
 
 /**
+ * Cuándo un asiento está retenido, en SQL. Espera que la reserva esté aliasada como `bk`.
+ *
+ * Es UNA sola definición a propósito (auditoría BP-19). Esta condición decide a la vez qué
+ * se puede vender, qué muestra el mapa de asientos, qué cuenta `seats_available` y qué ve un
+ * sistema externo; estaba copiada literalmente en cuatro consultas y la copia es justo el
+ * modo en que dos pantallas acaban discrepando sobre el mismo asiento. Cambiar la política
+ * de retención se hace aquí y se aplica a todo.
+ *
+ * Lo que NO ocupa: CANCELLED, EXPIRED y una PENDING cuyo plazo ya venció. Por eso un asiento
+ * se puede volver a vender sin borrar nada del histórico.
+ */
+export const SEAT_HELD_SQL = `(bk.status IN ('CONFIRMED', 'COMPLETED')
+     OR (bk.status = 'PENDING' AND (bk.expires_at IS NULL OR bk.expires_at > NOW())))`;
+
+/**
  * Seat map for a trip. A seat counts as taken when it belongs to a booking that is
  * still holding it (PENDING within its expiry window, CONFIRMED or COMPLETED).
  */
@@ -42,9 +57,7 @@ export async function seatMap(tripId: number): Promise<SeatAvailability[]> {
             EXISTS (
               SELECT 1 FROM booking_seats bs
               JOIN bookings bk ON bk.id = bs.booking_id
-              WHERE bs.trip_id = ? AND bs.seat_id = s.id
-                AND (bk.status IN ('CONFIRMED', 'COMPLETED')
-                     OR (bk.status = 'PENDING' AND (bk.expires_at IS NULL OR bk.expires_at > NOW())))
+              WHERE bs.trip_id = ? AND bs.seat_id = s.id AND ${SEAT_HELD_SQL}
             ) AS is_taken
      FROM trips t
      JOIN buses b ON b.id = t.bus_id
@@ -165,8 +178,7 @@ const SEARCH_SELECT = `SELECT t.id, t.departure_datetime, t.arrival_datetime, t.
     (b.capacity - (
       SELECT COUNT(*) FROM booking_seats bs
       JOIN bookings bk ON bk.id = bs.booking_id
-      WHERE bs.trip_id = t.id AND (bk.status IN ('CONFIRMED', 'COMPLETED')
-        OR (bk.status = 'PENDING' AND (bk.expires_at IS NULL OR bk.expires_at > NOW())))
+      WHERE bs.trip_id = t.id AND ${SEAT_HELD_SQL}
     )) AS seats_available
   FROM trips t
   JOIN routes r ON r.id = t.route_id

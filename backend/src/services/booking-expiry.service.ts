@@ -50,6 +50,13 @@ export async function expireDueBookings(limit = 200): Promise<ExpiryResult> {
   for (const candidate of due) {
     // Una transacción por reserva: un fallo aislado no bloquea al resto.
     const processed = await withTransaction(async (connection) => {
+      // El viaje primero, igual que en la venta y en la confirmación (auditoría BP-19).
+      // Las tres rutas que cambian la ocupación de un asiento toman ahora los cerrojos en
+      // el mismo orden —viaje, luego reserva—, de modo que no pueden quedarse esperándose
+      // mutuamente. Esta transacción además actualiza `trips`, así que el cerrojo lo iba a
+      // necesitar de todos modos; solo se adelanta.
+      await connection.query('SELECT id FROM trips WHERE id = ? LIMIT 1 FOR UPDATE', [candidate.trip_id]);
+
       const [rows] = await connection.query(
         `SELECT id, user_id, trip_id, booking_code, passenger_count, total_amount, status
          FROM bookings
