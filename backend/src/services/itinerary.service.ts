@@ -1,8 +1,14 @@
+import type { PoolConnection } from 'mysql2/promise';
 import { query, queryOne, withTransaction } from '../config/database';
 import type { AuthenticatedUser, PaymentMethod } from '../types/entities';
 import { ApiError } from '../utils/ApiError';
 import { randomCode } from '../utils/security';
-import { assertBookingInput, confirmBookingPaymentOnConnection, createBookingOnConnection } from './booking.service';
+import {
+  assertBookingInput,
+  confirmBookingPaymentOnConnection,
+  createBookingOnConnection,
+  type BookingSettings,
+} from './booking.service';
 import { searchTrips } from './trip.service';
 import type { CreateItineraryInput, SearchItineraryInput } from '../validators/itinerary.validators';
 
@@ -59,6 +65,42 @@ export async function searchItinerary(input: SearchItineraryInput, limit: number
   return results;
 }
 
+/**
+ * Toma por adelantado el cerrojo de cada viaje del itinerario, SIEMPRE de menor a mayor
+ * `trip_id` (auditoría BP-21).
+ *
+ * EL PROBLEMA. Cada tramo se reservaba en el orden en que lo pidió el usuario, y reservar
+ * empieza bloqueando la fila del viaje. Dos compras simultáneas de los mismos dos viajes en
+ * sentidos opuestos —una Lima→Huánuco y vuelta, otra Huánuco→Lima y vuelta— tomaban los
+ * cerrojos en orden inverso:
+ *
+ *     A: bloquea viaje 1 … y espera el 3
+ *     B: bloquea viaje 3 … y espera el 1
+ *
+ * Ninguna puede avanzar. InnoDB mata una con ER_LOCK_DEADLOCK (1213) y las demás que se
+ * amontonan detrás agotan `innodb_lock_wait_timeout` —50 segundos en este servidor— y salen
+ * con ER_LOCK_WAIT_TIMEOUT (1205). Medido: de diez compras cruzadas simultáneas, **nueve
+ * fallaban con 500** tras casi un minuto colgadas.
+ *
+ * LA SOLUCIÓN. Un orden total: si todo el mundo pide los cerrojos de menor a mayor id, no
+ * puede formarse un ciclo. No es un reintento —un reintento esconde el problema y bajo carga
+ * lo repite—, es la eliminación estructural de la posibilidad.
+ *
+ * Esto NO cambia el itinerario: el orden de bloqueo es interno y no tiene nada que ver con
+ * `segment_order`, que sigue siendo el que el usuario envió. Un ida y vuelta cuya vuelta
+ * tenga un id menor que la ida se bloquea empezando por la vuelta y se guarda, se cobra y
+ * se muestra empezando por la ida.
+ *
+ * Los duplicados se descartan: dos tramos del mismo viaje comparten fila y el cerrojo ya lo
+ * tomó el primero.
+ */
+async function lockTripsInOrder(connection: PoolConnection, tripIds: number[]): Promise<void> {
+  const enOrden = [...new Set(tripIds)].sort((a, b) => a - b);
+  for (const tripId of enOrden) {
+    await connection.query('SELECT id FROM trips WHERE id = ? LIMIT 1 FOR UPDATE', [tripId]);
+  }
+}
+
 export interface ItineraryBooking {
   segment_order: number;
   booking_id: number;
@@ -89,12 +131,14 @@ export interface ItineraryResult {
 export async function createItinerary(user: AuthenticatedUser, input: CreateItineraryInput): Promise<ItineraryResult> {
   // Validaciones y lectura de configuración fuera de la transacción, para no sostenerla
   // más tiempo del necesario mientras se bloquean asientos.
-  const serviceFees: number[] = [];
+  const ajustes: BookingSettings[] = [];
   for (const segment of input.segments) {
-    serviceFees.push(await assertBookingInput({ ...segment, trip_id: segment.trip_id, seat_ids: segment.seat_ids } as never));
+    ajustes.push(await assertBookingInput({ ...segment, trip_id: segment.trip_id, seat_ids: segment.seat_ids } as never));
   }
 
   return withTransaction(async (connection) => {
+    await lockTripsInOrder(connection, input.segments.map((segment) => segment.trip_id));
+
     let groupCode = randomCode('IT', 6);
     for (let attempt = 0; attempt < 5; attempt += 1) {
       const [existing] = await connection.query('SELECT id FROM booking_groups WHERE group_code = ? LIMIT 1', [groupCode]);
@@ -131,7 +175,7 @@ export async function createItinerary(user: AuthenticatedUser, input: CreateItin
           coupon_code: index === 0 ? input.coupon_code : undefined,
         } as never,
         input.payment_method,
-        serviceFees[index]!,
+        ajustes[index]!,
         { groupId, segmentOrder: index + 1 },
       );
 
@@ -234,6 +278,18 @@ export async function payItinerary(
   if (bookingIds.length === 0) throw ApiError.notFound('Itinerario no encontrado');
 
   await withTransaction(async (connection) => {
+    // Mismo orden global que al crear (BP-21): confirmar también empieza bloqueando el
+    // viaje de cada tramo, así que pagar dos itinerarios cruzados a la vez tenía
+    // exactamente el mismo interbloqueo. Se leen los viajes del grupo sin bloquear —el
+    // `trip_id` de una reserva no cambia nunca— y se toman los cerrojos de menor a mayor.
+    const [tripRows] = await connection.query(
+      'SELECT DISTINCT trip_id FROM bookings WHERE group_id = ?',
+      [groupId],
+    );
+    await lockTripsInOrder(connection, (tripRows as Array<{ trip_id: number }>).map((row) => row.trip_id));
+
+    // El pago sigue recorriendo los tramos por `segment_order`: el orden de cobro y de
+    // notificación es el del itinerario, no el de los cerrojos.
     for (const bookingId of bookingIds) {
       await confirmBookingPaymentOnConnection(connection, bookingId, method, providerTransactionId ?? null);
     }

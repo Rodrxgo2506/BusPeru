@@ -53,10 +53,6 @@ export interface CreateBookingInput {
  */
 const HOLD_MINUTES_FALLBACK = 15;
 
-async function holdMinutes(): Promise<number> {
-  return readNumberSetting('booking.hold_minutes', { fallback: HOLD_MINUTES_FALLBACK, integer: true, min: 1, max: 24 * 60 });
-}
-
 function generateBookingCode(): string {
   const random = Math.floor(100000 + Math.random() * 900000);
   return `BP-${random}`;
@@ -140,7 +136,7 @@ export async function createBookingOnConnection(
   user: AuthenticatedUser,
   input: CreateBookingInput,
   paymentMethod: PaymentMethod | undefined,
-  serviceFeePerSeat: number,
+  settings: BookingSettings,
   segment?: SegmentContext,
 ): Promise<{ bookingId: number; bookingCode: string; total: number }> {
   {
@@ -169,10 +165,16 @@ export async function createBookingOnConnection(
       throw ApiError.badRequest('El viaje ya partió');
     }
 
-    const placeholders = input.seat_ids.map(() => '?').join(', ');
+    // Los asientos se bloquean de menor a mayor id, no en el orden en que llegaron
+    // (auditoría BP-21). Dos viajes distintos pueden compartir bus y por tanto asientos, así
+    // que dos compras que pidieran [5, 2] y [2, 5] podían quedarse esperándose. Ordenar la
+    // lista es todo lo que hace falta para que eso no pueda ocurrir; el orden de la petición
+    // se conserva para insertar y para asociar cada pasajero a su asiento.
+    const lockOrder = [...new Set(input.seat_ids)].sort((a, b) => a - b);
+    const placeholders = lockOrder.map(() => '?').join(', ');
     const [seatRows] = await connection.query(
-      `SELECT id, seat_number, status FROM seats WHERE id IN (${placeholders}) AND bus_id = ? FOR UPDATE`,
-      [...input.seat_ids, trip.bus_id],
+      `SELECT id, seat_number, status FROM seats WHERE id IN (${placeholders}) AND bus_id = ? ORDER BY id ASC FOR UPDATE`,
+      [...lockOrder, trip.bus_id],
     );
     const seats = seatRows as Array<{ id: number; seat_number: string; status: string }>;
     if (seats.length !== input.seat_ids.length) {
@@ -187,8 +189,9 @@ export async function createBookingOnConnection(
        JOIN seats s ON s.id = bs.seat_id
        WHERE bs.trip_id = ? AND bs.seat_id IN (${placeholders})
          AND ${SEAT_HELD_SQL}
+       ORDER BY bs.seat_id ASC
        FOR UPDATE`,
-      [input.trip_id, ...input.seat_ids],
+      [input.trip_id, ...lockOrder],
     );
     const taken = takenRows as Array<{ seat_number: string }>;
     if (taken.length > 0) {
@@ -198,7 +201,7 @@ export async function createBookingOnConnection(
     const basePrice = Number(trip.base_price);
     const passengerCount = input.seat_ids.length;
     const subtotal = Number((basePrice * passengerCount).toFixed(2));
-    const serviceFee = Number((serviceFeePerSeat * passengerCount).toFixed(2));
+    const serviceFee = Number((settings.serviceFeePerSeat * passengerCount).toFixed(2));
 
     let discount = 0;
     let couponId: number | null = null;
@@ -209,7 +212,7 @@ export async function createBookingOnConnection(
     }
 
     const total = Number((subtotal - discount + serviceFee).toFixed(2));
-    const holdWindow = await holdMinutes();
+    const holdWindow = settings.holdMinutes;
 
     let bookingCode = generateBookingCode();
     for (let attempt = 0; attempt < 5; attempt += 1) {
@@ -321,21 +324,45 @@ export async function createBooking(
   input: CreateBookingInput,
   paymentMethod?: PaymentMethod,
 ): Promise<{ bookingId: number; bookingCode: string }> {
-  const serviceFeePerSeat = await assertBookingInput(input);
+  const settings = await assertBookingInput(input);
   return withTransaction(async (connection) =>
-    createBookingOnConnection(connection, user, input, paymentMethod, serviceFeePerSeat),
+    createBookingOnConnection(connection, user, input, paymentMethod, settings),
   );
 }
 
+export interface BookingSettings {
+  /** Comisión de servicio por asiento. */
+  serviceFeePerSeat: number;
+  /** Minutos que se retiene el asiento antes de vencer. */
+  holdMinutes: number;
+}
+
 /**
- * Validaciones previas comunes a un tramo, fuera de la transacción: número de asientos y
- * lectura de la configuración. Devuelve la comisión de servicio por asiento.
+ * Validaciones previas comunes a un tramo y TODA la configuración que necesita la reserva.
+ *
+ * Se lee aquí, **antes** de abrir la transacción, y no dentro (auditoría BP-21). El lector de
+ * configuración pide su propia conexión al pool, así que llamarlo con una transacción abierta
+ * significaba sostener una conexión mientras se pedía otra. Con diez reservas simultáneas
+ * —el límite del pool— las diez sostenían una conexión y las diez esperaban una undécima que
+ * nunca iba a llegar, cada una con el cerrojo del viaje ya tomado: el pool se bloqueaba
+ * entero y las peticiones morían a los 50 segundos con ER_LOCK_WAIT_TIMEOUT.
+ *
+ * `cancelBooking` ya leía su configuración fuera de la transacción; esto solo aplica el
+ * mismo patrón al camino de creación.
  */
-export async function assertBookingInput(input: CreateBookingInput): Promise<number> {
+export async function assertBookingInput(input: CreateBookingInput): Promise<BookingSettings> {
   if (input.seat_ids.length === 0) throw ApiError.badRequest('Debes seleccionar al menos un asiento');
   const maxSeats = await readNumberSetting('booking.max_seats_per_booking', { fallback: 6, integer: true, min: 1, max: 10 });
   if (input.seat_ids.length > maxSeats) throw ApiError.badRequest(`Puedes seleccionar como máximo ${maxSeats} asientos`);
-  return readNumberSetting('booking.service_fee', { fallback: 2.5, min: 0 });
+  return {
+    serviceFeePerSeat: await readNumberSetting('booking.service_fee', { fallback: 2.5, min: 0 }),
+    holdMinutes: await readNumberSetting('booking.hold_minutes', {
+      fallback: HOLD_MINUTES_FALLBACK,
+      integer: true,
+      min: 1,
+      max: 24 * 60,
+    }),
+  };
 }
 
 /**
