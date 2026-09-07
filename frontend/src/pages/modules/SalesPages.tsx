@@ -20,6 +20,7 @@ import {
   TableSkeleton,
   type Column,
 } from '@/components/ui';
+import { useAuth } from '@/context/AuthContext';
 import { useToast } from '@/context/ToastContext';
 import { useAsync } from '@/hooks/useAsync';
 import { useList } from '@/hooks/useList';
@@ -301,6 +302,18 @@ export function PaymentsPage({ scope }: { scope: 'company' | 'admin' }) {
 
 export function RefundsPage({ scope }: { scope: 'company' | 'admin' }) {
   const toast = useToast();
+  const { hasPermission } = useAuth();
+
+  /**
+   * Procesar un reembolso mueve dinero y es una decisión de la plataforma: el permiso
+   * `payments.refund` lo tiene solo el ADMIN. La pantalla se abre con `payments.view`, que
+   * sí tienen los roles de empresa, y hasta ahora pintaba «Aprobar» y «Rechazar` para todo
+   * el mundo: un COMPANY_ADMIN los veía y al pulsarlos recibía un 403 (BP-14).
+   *
+   * La autoridad sigue siendo el backend; esto solo evita ofrecer lo que no se puede hacer.
+   * La INFORMACIÓN no se oculta: la empresa conserva el listado, los estados y los totales.
+   */
+  const canProcess = hasPermission('payments.refund');
   const summary = useAsync(() => refundService.summary(), []);
   const list = useList<Refund>((params) => refundService.list(params));
   const [target, setTarget] = useState<{ refund: Refund; action: 'COMPLETED' | 'CANCELLED' } | null>(null);
@@ -342,32 +355,50 @@ export function RefundsPage({ scope }: { scope: 'company' | 'admin' }) {
     { key: 'amount', header: 'Monto', sortColumn: 'rf.amount', render: (refund) => <span className="font-semibold">{formatCurrency(refund.amount)}</span> },
     ...(scope === 'admin' ? [{ key: 'company', header: 'Empresa', render: (refund: Refund) => refund.company_name ?? '—', hideOnMobile: true }] : []),
     { key: 'status', header: 'Estado', render: (refund) => <StatusBadge status={refund.status} /> },
-    {
-      key: 'actions',
-      header: 'Acciones',
-      headerClassName: 'text-right',
-      className: 'text-right',
-      render: (refund) =>
-        refund.status === 'PENDING' || refund.status === 'PROCESSING' ? (
-          <div className="flex justify-end gap-2">
-            <Button size="sm" variant="success" onClick={() => setTarget({ refund, action: 'COMPLETED' })}>
-              Aprobar
-            </Button>
-            <Button size="sm" variant="secondary" onClick={() => setTarget({ refund, action: 'CANCELLED' })}>
-              Rechazar
-            </Button>
-          </div>
-        ) : (
-          <span className="text-xs text-muted">{formatDateTime(refund.processed_at)}</span>
-        ),
-    },
+    canProcess
+      ? {
+          key: 'actions',
+          header: 'Acciones',
+          headerClassName: 'text-right',
+          className: 'text-right',
+          render: (refund: Refund) =>
+            refund.status === 'PENDING' || refund.status === 'PROCESSING' ? (
+              <div className="flex justify-end gap-2">
+                <Button size="sm" variant="success" onClick={() => setTarget({ refund, action: 'COMPLETED' })}>
+                  Aprobar
+                </Button>
+                <Button size="sm" variant="secondary" onClick={() => setTarget({ refund, action: 'CANCELLED' })}>
+                  Rechazar
+                </Button>
+              </div>
+            ) : (
+              <span className="text-xs text-muted">{formatDateTime(refund.processed_at)}</span>
+            ),
+        }
+      : {
+          // Sin permiso para procesar, la misma columna informa en lugar de ofrecer.
+          key: 'resolution',
+          header: 'Resolución',
+          headerClassName: 'text-right',
+          className: 'text-right',
+          render: (refund: Refund) =>
+            refund.status === 'PENDING' || refund.status === 'PROCESSING' ? (
+              <span className="text-xs text-muted">En revisión de BusPerú</span>
+            ) : (
+              <span className="text-xs text-muted">{formatDateTime(refund.processed_at)}</span>
+            ),
+        },
   ];
 
   return (
     <>
       <PageHeader
         title="Cancelaciones y reembolsos"
-        description="Gestiona las solicitudes de reembolso de los pasajeros."
+        description={
+          canProcess
+            ? 'Gestiona las solicitudes de reembolso de los pasajeros.'
+            : 'Consulta las solicitudes de reembolso de tus pasajeros. Su aprobación corresponde a BusPerú.'
+        }
         breadcrumbs={[{ label: scope === 'company' ? 'Portal Empresa' : 'Administración' }, { label: 'Reembolsos' }]}
       />
 

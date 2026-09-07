@@ -1,7 +1,7 @@
 import '../test/helpers/testEnv';
 import assert from 'node:assert/strict';
 import { after, before, beforeEach, describe, it } from 'node:test';
-import { get, post } from './helpers/api';
+import { api, del, get, getWithKey, post, put } from './helpers/api';
 import { execute, query, queryOne } from '../config/database';
 import { freeSeats, at } from './helpers/fixtures';
 import { prepareSuite, teardownSuite, type SuiteContext } from './helpers/suite';
@@ -397,6 +397,73 @@ describe('Pagos, reembolsos y cupones', () => {
       );
       assert.equal(res.status, 403);
       assert.equal((await query('SELECT id FROM refunds WHERE payment_id = ?', [pagoB.id])).length, 0);
+    });
+
+    it('BP-14 · la empresa conserva la LECTURA de sus reembolsos', async () => {
+      const { booking, payment } = await pagoCobrado();
+      const creado = await crearReembolso({ payment_id: payment.id, booking_id: booking.id, amount: 7, reason: 'lectura' });
+      assert.equal(creado.status, 201);
+
+      // Retirar la ACCIÓN de la interfaz no puede llevarse por delante la información: la
+      // empresa sigue viendo el listado, el estado y los totales de sus propios reembolsos.
+      for (const sesion of [ctx.sessions.companyAdmin, ctx.sessions.operator]) {
+        const listado = await get('/refunds?limit=100', sesion.token);
+        assert.equal(listado.status, 200);
+        assert.ok(
+          (listado.body.data as Array<{ id: number }>).some((fila) => fila.id === creado.body.data.id),
+          'el reembolso de su empresa debe seguir siendo visible',
+        );
+
+        const resumen = await get('/refunds/summary', sesion.token);
+        assert.equal(resumen.status, 200);
+        assert.ok('total_requests' in resumen.body.data);
+      }
+    });
+
+    it('BP-14 · ningún método alternativo abre el procesamiento a un rol de empresa', async () => {
+      const { booking, payment } = await pagoCobrado();
+      const creado = await crearReembolso({ payment_id: payment.id, booking_id: booking.id, amount: 5 });
+
+      // Ni por otro verbo, ni por el motor genérico de recursos: `/refunds` no es un
+      // recurso CRUD y el procesamiento solo existe en su ruta, con `payments.refund`.
+      for (const sesion of [ctx.sessions.companyAdmin, ctx.sessions.operator]) {
+        assert.equal((await put(`/refunds/${creado.body.data.id}`, { status: 'COMPLETED' }, sesion.token)).status, 404);
+        assert.equal((await del(`/refunds/${creado.body.data.id}`, sesion.token)).status, 404);
+        assert.equal((await post(`/refunds/${creado.body.data.id}/process`, { status: 'COMPLETED' }, sesion.token)).status, 403);
+      }
+
+      const sinTocar = await queryOne<{ status: string }>('SELECT status FROM refunds WHERE id = ?', [creado.body.data.id]);
+      assert.equal(sinTocar?.status, 'PENDING', 'el reembolso no se movió por ninguna vía');
+    });
+
+    it('BP-14 · una API Key de integración no alcanza ninguna operación financiera', async () => {
+      const llave = await post(
+        '/api-keys',
+        { name: 'Integración BP-14', company_id: ctx.fixtures.companyA },
+        ctx.sessions.admin.token,
+      );
+      assert.equal(llave.status, 201);
+      const plain = llave.body.data.plain_key as string;
+
+      const { booking, payment } = await pagoCobrado();
+      const creado = await crearReembolso({ payment_id: payment.id, booking_id: booking.id, amount: 5 });
+
+      // La superficie de integración es de solo lectura y no publica reembolsos ni pagos.
+      for (const ruta of ['/integration/v1/refunds', '/integration/v1/payments', '/integration/v1/settlements']) {
+        assert.equal((await getWithKey(ruta, plain)).status, 404, `${ruta} no debe existir`);
+      }
+
+      // Y la clave no sirve como sesión en las rutas financieras del portal.
+      assert.equal((await get('/refunds', plain)).status, 401);
+      assert.equal((await post(`/refunds/${creado.body.data.id}/process`, { status: 'COMPLETED' }, plain)).status, 401);
+      assert.equal(
+        (await api(`/refunds/${creado.body.data.id}/process`, { method: 'POST', body: { status: 'COMPLETED' }, apiKey: plain })).status,
+        401,
+        'presentarla por su cabecera propia tampoco autentica fuera de /integration/v1',
+      );
+
+      const sinTocar = await queryOne<{ status: string }>('SELECT status FROM refunds WHERE id = ?', [creado.body.data.id]);
+      assert.equal(sinTocar?.status, 'PENDING');
     });
 
     it('procesar un reembolso ajeno tampoco está al alcance de un rol de empresa', async () => {
