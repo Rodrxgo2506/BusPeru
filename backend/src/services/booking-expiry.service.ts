@@ -35,14 +35,71 @@ interface DueBooking {
   total_amount: number;
 }
 
-export async function expireDueBookings(limit = 200): Promise<ExpiryResult> {
+/**
+ * A quién alcanza un barrido (auditoría BP-22).
+ *
+ * `all` es el barrido del sistema: el planificador no actúa en nombre de nadie y no tiene
+ * —ni debe tener— sesión, rol ni empresa. Los otros dos casos existen solo para la llamada
+ * manual por HTTP, donde SÍ hay alguien detrás y su alcance debe ser el de siempre.
+ */
+export type ExpiryScope =
+  | { kind: 'all' }
+  | { kind: 'user'; userId: number }
+  | { kind: 'companies'; companyIds: number[] };
+
+export interface ExpiryOptions {
+  scope?: ExpiryScope;
+  limit?: number;
+}
+
+/** Traduce el alcance a una condición SQL sobre los alias `bk` (reserva) y `r` (ruta). */
+function scopeCondition(scope: ExpiryScope): { sql: string; params: unknown[] } {
+  if (scope.kind === 'all') return { sql: '1 = 1', params: [] };
+  if (scope.kind === 'user') return { sql: 'bk.user_id = ?', params: [scope.userId] };
+  // Sin empresas asignadas no se ve nada: la misma regla que el resto de listados.
+  if (scope.companyIds.length === 0) return { sql: '1 = 0', params: [] };
+  return {
+    sql: `r.company_id IN (${scope.companyIds.map(() => '?').join(', ')})`,
+    params: [...scope.companyIds],
+  };
+}
+
+/**
+ * Barre las reservas vencidas.
+ *
+ * ALCANCE (auditoría BP-22). Por omisión el barrido es GLOBAL, que es lo que necesita el
+ * planificador: una retención que venció debe caducar sea de la empresa que sea, y el
+ * proceso que lo hace no representa a ningún usuario. Eso ya funcionaba así.
+ *
+ * Lo que no funcionaba era la llamada manual. `POST /bookings/expire` ejecutaba **este mismo
+ * barrido global** con el permiso `bookings.cancel`, que tienen los cuatro roles: un
+ * administrador de la empresa A caducaba reservas de la empresa B y recibía de vuelta sus
+ * identificadores, y un CUSTOMER cualquiera podía disparar el barrido de toda la plataforma
+ * y leer la lista. Comprobado: `{"expired":2,"bookingIds":[1,2]}` devuelto a la empresa A,
+ * con la reserva 2 perteneciendo a la empresa B.
+ *
+ * Las REGLAS NO CAMBIAN: sigue caducando exactamente `PENDING` con `expires_at` vencido, ni
+ * antes ni después. Lo único que se acota es a qué reservas llega **quien llama por HTTP**,
+ * con el mismo criterio de visibilidad que el resto de la API. Una reserva ajena que haya
+ * vencido caduca igual: la caduca el planificador, dentro del minuto siguiente.
+ *
+ * El JOIN con `trips` y `routes` no altera qué filas entran —ambas claves foráneas son NOT
+ * NULL— y evita tener dos consultas distintas que puedan divergir.
+ */
+export async function expireDueBookings(options: ExpiryOptions = {}): Promise<ExpiryResult> {
+  const limit = options.limit ?? 200;
+  const scope = scopeCondition(options.scope ?? { kind: 'all' });
+
   const due = await query<DueBooking>(
-    `SELECT id, user_id, trip_id, booking_code, passenger_count, total_amount
-     FROM bookings
-     WHERE status = 'PENDING' AND expires_at IS NOT NULL AND expires_at <= NOW()
-     ORDER BY expires_at ASC
+    `SELECT bk.id, bk.user_id, bk.trip_id, bk.booking_code, bk.passenger_count, bk.total_amount
+     FROM bookings bk
+     JOIN trips t ON t.id = bk.trip_id
+     JOIN routes r ON r.id = t.route_id
+     WHERE bk.status = 'PENDING' AND bk.expires_at IS NOT NULL AND bk.expires_at <= NOW()
+       AND ${scope.sql}
+     ORDER BY bk.expires_at ASC
      LIMIT ?`,
-    [limit],
+    [...scope.params, limit],
   );
 
   const result: ExpiryResult = { expired: 0, bookingIds: [], seatsReleased: 0 };

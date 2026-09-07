@@ -6,7 +6,7 @@ import { requirePermission } from '../middleware/permission.middleware';
 import { validate } from '../middleware/validate.middleware';
 import { recordAudit } from '../services/audit.service';
 import { cancelBooking, confirmBookingPayment, createBooking } from '../services/booking.service';
-import { expireDueBookings } from '../services/booking-expiry.service';
+import { expireDueBookings, type ExpiryScope } from '../services/booking-expiry.service';
 import { createItinerary, findGroupBookingIds, findItinerary, payItinerary } from '../services/itinerary.service';
 import { createItinerarySchema } from '../validators/itinerary.validators';
 import { ApiError } from '../utils/ApiError';
@@ -77,6 +77,20 @@ function visibilityScope(req: Request): { sql: string; params: unknown[] } | nul
   if (user.role === 'CUSTOMER') return { sql: 'bk.user_id = ?', params: [user.id] };
   if (user.companyIds.length === 0) return { sql: '1 = 0', params: [] };
   return { sql: `r.company_id IN (${user.companyIds.map(() => '?').join(', ')})`, params: [...user.companyIds] };
+}
+
+/**
+ * El mismo alcance de `visibilityScope`, expresado como dato en vez de como SQL.
+ *
+ * La expiración vive en un servicio y ese servicio también lo usa el planificador, que no
+ * tiene petición ni sesión; pasarle un fragmento de SQL desde una ruta lo ataría a la capa
+ * HTTP. Se le pasa quién pregunta y el servicio decide.
+ */
+function expiryScope(req: Request): ExpiryScope {
+  const user = requireAuth(req);
+  if (user.role === 'ADMIN') return { kind: 'all' };
+  if (user.role === 'CUSTOMER') return { kind: 'user', userId: user.id };
+  return { kind: 'companies', companyIds: user.companyIds };
 }
 
 async function findBookingOrFail(req: Request, bookingId: number): Promise<Record<string, unknown>> {
@@ -296,12 +310,19 @@ router.post(
 /**
  * Ejecuta la expiración bajo demanda. El planificador ya corre cada minuto; este endpoint
  * permite forzarla (operación y pruebas). Es idempotente: solo afecta a reservas vencidas.
+ *
+ * ALCANCE (auditoría BP-22). Antes lanzaba el barrido GLOBAL del sistema, y `bookings.cancel`
+ * lo tienen los cuatro roles: una empresa caducaba reservas de otra y recibía sus
+ * identificadores en la respuesta, y un CUSTOMER podía barrer toda la plataforma. Ahora
+ * alcanza exactamente lo que esa persona ya puede ver, como cualquier otro endpoint. Lo
+ * ajeno que haya vencido lo sigue caducando el planificador, que sí es global porque no
+ * actúa en nombre de nadie.
  */
 router.post(
   '/expire',
   requirePermission('bookings.cancel'),
   asyncHandler(async (req, res) => {
-    const result = await expireDueBookings();
+    const result = await expireDueBookings({ scope: expiryScope(req) });
     if (result.expired > 0) {
       await recordAudit(req, {
         action: 'EXPIRE',
