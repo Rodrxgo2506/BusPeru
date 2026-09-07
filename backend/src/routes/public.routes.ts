@@ -4,6 +4,7 @@ import { searchItinerarySchema } from '../validators/itinerary.validators';
 import { query, queryOne } from '../config/database';
 import { optionalAuthenticate } from '../middleware/auth.middleware';
 import { searchItinerary } from '../services/itinerary.service';
+import { readPublicSettings } from '../services/settings.service';
 import { findPublicTrip, searchTrips, seatMap } from '../services/trip.service';
 import { ApiError } from '../utils/ApiError';
 import { asyncHandler, sendList, sendSuccess } from '../utils/http';
@@ -165,15 +166,8 @@ router.get(
 router.get(
   '/settings',
   asyncHandler(async (_req, res) => {
-    const rows = await query<{ setting_key: string; setting_value: string | null; setting_type: string }>(
-      'SELECT setting_key, setting_value, setting_type FROM system_settings WHERE is_public = 1',
-    );
-
-    const settings: Record<string, unknown> = {};
-    for (const row of rows) {
-      settings[row.setting_key] = parseSetting(row.setting_value, row.setting_type);
-    }
-    sendSuccess(res, settings);
+    // Misma interpretación que usan los servicios: una sola lectura de la configuración.
+    sendSuccess(res, await readPublicSettings());
   }),
 );
 
@@ -190,25 +184,5 @@ router.get(
     sendSuccess(res, stats);
   }),
 );
-
-function parseSetting(value: string | null, type: string): unknown {
-  if (value === null) return null;
-  switch (type) {
-    case 'INTEGER':
-      return Number.parseInt(value, 10);
-    case 'DECIMAL':
-      return Number.parseFloat(value);
-    case 'BOOLEAN':
-      return value === 'true' || value === '1';
-    case 'JSON':
-      try {
-        return JSON.parse(value);
-      } catch {
-        return null;
-      }
-    default:
-      return value;
-  }
-}
 
 export default router;

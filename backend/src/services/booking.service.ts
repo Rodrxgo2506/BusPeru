@@ -1,8 +1,9 @@
 import type { PoolConnection } from 'mysql2/promise';
-import { queryOne, withTransaction } from '../config/database';
+import { withTransaction } from '../config/database';
 import type { AuthenticatedUser, PaymentMethod } from '../types/entities';
 import { ApiError } from '../utils/ApiError';
 import { businessTimeMs } from '../utils/businessTime';
+import { readNumberSetting } from './settings.service';
 import { NOTIFICATION_EVENTS, notify } from './notification.service';
 
 /** Datos de presentación del viaje para las notificaciones (sin bloquear filas). */
@@ -41,15 +42,18 @@ export interface CreateBookingInput {
   passengers?: Array<{ seat_id: number; name: string; document: string }>;
 }
 
-const HOLD_MINUTES = 15;
+/**
+ * Minutos que se retienen los asientos antes de pagar.
+ *
+ * Era una constante, de modo que `booking.hold_minutes` se podía editar en el Panel Admin y
+ * no cambiaba absolutamente nada: configuración que aparentaba funcionar (BP-13). Ahora se
+ * lee, con 15 como valor por defecto —el mismo de la constante—, así que sin configurar
+ * nada el comportamiento es idéntico al de antes.
+ */
+const HOLD_MINUTES_FALLBACK = 15;
 
-async function readSetting(key: string, fallback: number): Promise<number> {
-  const row = await queryOne<{ setting_value: string | null }>(
-    'SELECT setting_value FROM system_settings WHERE setting_key = ? LIMIT 1',
-    [key],
-  );
-  const parsed = Number(row?.setting_value);
-  return Number.isFinite(parsed) ? parsed : fallback;
+async function holdMinutes(): Promise<number> {
+  return readNumberSetting('booking.hold_minutes', { fallback: HOLD_MINUTES_FALLBACK, integer: true, min: 1, max: 24 * 60 });
 }
 
 function generateBookingCode(): string {
@@ -205,6 +209,7 @@ export async function createBookingOnConnection(
     }
 
     const total = Number((subtotal - discount + serviceFee).toFixed(2));
+    const holdWindow = await holdMinutes();
 
     let bookingCode = generateBookingCode();
     for (let attempt = 0; attempt < 5; attempt += 1) {
@@ -236,7 +241,7 @@ export async function createBookingOnConnection(
         input.passenger_phone ?? user.phone,
         input.passenger_email ?? user.email,
         input.notes ?? null,
-        HOLD_MINUTES,
+        holdWindow,
       ],
     );
     const bookingId = (bookingResult as { insertId: number }).insertId;
@@ -299,7 +304,7 @@ export async function createBookingOnConnection(
         booking_id: bookingId,
         total_amount: money(total),
         seat_numbers: seats.map((seat) => seat.seat_number).join(', '),
-        hold_minutes: HOLD_MINUTES,
+        hold_minutes: holdWindow,
       },
     });
 
@@ -328,9 +333,9 @@ export async function createBooking(
  */
 export async function assertBookingInput(input: CreateBookingInput): Promise<number> {
   if (input.seat_ids.length === 0) throw ApiError.badRequest('Debes seleccionar al menos un asiento');
-  const maxSeats = await readSetting('booking.max_seats_per_booking', 6);
+  const maxSeats = await readNumberSetting('booking.max_seats_per_booking', { fallback: 6, integer: true, min: 1, max: 10 });
   if (input.seat_ids.length > maxSeats) throw ApiError.badRequest(`Puedes seleccionar como máximo ${maxSeats} asientos`);
-  return readSetting('booking.service_fee', 2.5);
+  return readNumberSetting('booking.service_fee', { fallback: 2.5, min: 0 });
 }
 
 /**
@@ -484,7 +489,7 @@ export async function confirmBookingPayment(
  * y la búsqueda pública, para no introducir una referencia horaria distinta.
  */
 export async function cancelBooking(bookingId: number, reason: string | null, requestRefund: boolean): Promise<void> {
-  const cancellationHours = await readSetting('booking.cancellation_hours', 24);
+  const cancellationHours = await readNumberSetting('booking.cancellation_hours', { fallback: 24, min: 0 });
 
   await withTransaction(async (connection) => {
     const [rows] = await connection.query(
