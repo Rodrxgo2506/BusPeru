@@ -17,6 +17,10 @@ export const NOTIFICATION_EVENTS = {
   BOOKING_CANCELLED: 'booking.cancelled',
   BOOKING_EXPIRED: 'booking.expired',
   REFUND_COMPLETED: 'refund.completed',
+  /** La empresa canceló el viaje y la reserva del pasajero quedó cancelada (FASE 8H). */
+  TRIP_CANCELLED: 'trip.cancelled',
+  /** H-29: se detectó un cobro que no se aplicó a ningún pasaje y se inició su devolución. */
+  PAYMENT_COMPENSATED: 'booking.payment_compensated',
   DOCUMENT_VERIFIED: 'company.document_verified',
   DOCUMENT_REJECTED: 'company.document_rejected',
 } as const;
@@ -30,7 +34,28 @@ export type NotificationEvent = (typeof NOTIFICATION_EVENTS)[keyof typeof NOTIFI
  */
 export const PASSWORD_RESET_EMAIL = 'auth.password_reset_code';
 
+/**
+ * Correo al pasajero cuando la empresa cancela su viaje (FASE 8H). Acompaña a la notificación
+ * interna `trip.cancelled`; `{{refund_message}}` dice si hubo reembolso o no hubo cobro.
+ */
+export const TRIP_CANCELLED_EMAIL = 'trip.cancelled_email';
+
 const EMAIL_TEMPLATES: Record<string, { subject: string; body: string }> = {
+  [TRIP_CANCELLED_EMAIL]: {
+    subject: 'Tu viaje de {{origin_city}} a {{destination_city}} fue cancelado',
+    body: [
+      'Hola:',
+      '',
+      '{{company_name}} canceló el viaje de {{origin_city}} a {{destination_city}} del {{departure_date}}.',
+      'Por eso tu reserva {{booking_code}} quedó cancelada.',
+      '',
+      '{{refund_message}}',
+      '',
+      'Puedes ver el detalle en Mis viajes, dentro de tu cuenta de BusPerú.',
+      '',
+      'BusPerú',
+    ].join('\n'),
+  },
   [PASSWORD_RESET_EMAIL]: {
     subject: 'Tu código de recuperación de BusPerú',
     body: [
@@ -78,6 +103,14 @@ const FALLBACK_TEMPLATES: Record<NotificationEvent, { title: string; body: strin
   [NOTIFICATION_EVENTS.DOCUMENT_VERIFIED]: {
     title: 'Documento verificado: {{document_type}}',
     body: 'Revisamos tu {{document_type}} y quedó verificado. No necesitas hacer nada más.',
+  },
+  [NOTIFICATION_EVENTS.TRIP_CANCELLED]: {
+    title: 'Viaje cancelado: reserva {{booking_code}}',
+    body: 'La empresa canceló el viaje de {{origin_city}} a {{destination_city}} del {{departure_date}}, así que tu reserva {{booking_code}} quedó cancelada. {{refund_message}}',
+  },
+  [NOTIFICATION_EVENTS.PAYMENT_COMPENSATED]: {
+    title: 'Detectamos un cobro en tu reserva {{booking_code}}',
+    body: 'Detectamos un cobro de {{amount}} asociado a tu reserva {{booking_code}} que no se aplicó a ningún pasaje. Ya iniciamos su devolución y te avisaremos cuando se procese.',
   },
   [NOTIFICATION_EVENTS.DOCUMENT_REJECTED]: {
     title: 'Documento rechazado: {{document_type}}',
@@ -160,6 +193,13 @@ export async function notifyStandalone(input: NotifyInput): Promise<number | nul
 /**
  * Crea las plantillas del sistema si no existen. Solo inserta filas: no altera el esquema
  * ni sobrescribe plantillas que el administrador haya editado.
+ *
+ * F15-10: con varias instancias arrancando a la vez, dos pueden ver «no existe» en el SELECT e
+ * intentar el INSERT. `ON DUPLICATE KEY UPDATE id = id` convierte SOLO el choque con la clave
+ * única (`name`) en un no-op: la fila existente no cambia y, sin `insertId`, no cuenta como creada
+ * (mysql2 activa FOUND_ROWS, así que `affectedRows` no distingue ambos casos). No se usa
+ * `INSERT IGNORE`, que además degradaría a aviso cualquier otro error real (datos truncados,
+ * valores inválidos…).
  */
 export async function ensureSystemTemplates(): Promise<number> {
   const connection = await pool.getConnection();
@@ -170,12 +210,13 @@ export async function ensureSystemTemplates(): Promise<number> {
       if ((rows as unknown[]).length > 0) continue;
 
       const variables = [...new Set([...content.title.matchAll(/\{\{\s*(\w+)\s*\}\}/g), ...content.body.matchAll(/\{\{\s*(\w+)\s*\}\}/g)].map((m) => m[1]))];
-      await connection.query(
+      const [result] = await connection.query(
         `INSERT INTO notification_templates (name, type, subject, title, body, variables, status)
-         VALUES (?, 'IN_APP', ?, ?, ?, ?, 'ACTIVE')`,
+         VALUES (?, 'IN_APP', ?, ?, ?, ?, 'ACTIVE')
+         ON DUPLICATE KEY UPDATE id = id`,
         [event, content.title, content.title, content.body, JSON.stringify(variables)],
       );
-      created += 1;
+      created += (result as { insertId: number }).insertId > 0 ? 1 : 0;
     }
 
     for (const [name, content] of Object.entries(EMAIL_TEMPLATES)) {
@@ -183,12 +224,13 @@ export async function ensureSystemTemplates(): Promise<number> {
       if ((rows as unknown[]).length > 0) continue;
 
       const variables = [...new Set([...content.subject.matchAll(/\{\{\s*(\w+)\s*\}\}/g), ...content.body.matchAll(/\{\{\s*(\w+)\s*\}\}/g)].map((m) => m[1]))];
-      await connection.query(
+      const [result] = await connection.query(
         `INSERT INTO notification_templates (name, type, subject, title, body, variables, status)
-         VALUES (?, 'EMAIL', ?, ?, ?, ?, 'ACTIVE')`,
+         VALUES (?, 'EMAIL', ?, ?, ?, ?, 'ACTIVE')
+         ON DUPLICATE KEY UPDATE id = id`,
         [name, content.subject, content.subject, content.body, JSON.stringify(variables)],
       );
-      created += 1;
+      created += (result as { insertId: number }).insertId > 0 ? 1 : 0;
     }
   } finally {
     connection.release();

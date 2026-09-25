@@ -9,7 +9,8 @@ import path from 'path';
 
 dotenv.config({ path: path.resolve(process.cwd(), '.env') });
 
-const configured = process.env.DB_NAME ?? 'busperu';
+// Sin DB_NAME se usa directamente la base de pruebas; nunca se parte de `busperu` (FASE 11F-0).
+const configured = process.env.DB_NAME ?? 'busperu_test';
 
 /**
  * Los procesos hijo del corredor heredan DB_NAME ya apuntando a la base de pruebas, así que

@@ -31,11 +31,12 @@ export function useAsync<T>(loader: () => Promise<T>, deps: unknown[] = []): Asy
         setState({ data: null, loading: false, error: error instanceof ApiError ? error : new ApiError(500, 'Error inesperado') });
       }
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   useEffect(() => {
     void run();
+    // Justificado (H-20): `deps` lo define quien llama, igual que en `useEffect`, así que la regla
+    // no puede verificarlo aquí. `run` es estable y lee el loader más reciente por `loaderRef`.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, deps);
 

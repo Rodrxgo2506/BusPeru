@@ -276,7 +276,7 @@ describe('BP-21 · itinerarios concurrentes sin interbloqueo', () => {
       assert.equal(b.status, 201);
 
       const res = await Promise.all([
-        post(`/bookings/itineraries/${a.body.data.group_id}/pay`, { method: 'CASH' }, ctx.sessions.customer.token),
+        post(`/bookings/itineraries/${a.body.data.group_id}/pay`, { method: 'CASH' }, ctx.sessions.admin.token),
         post(`/bookings/itineraries/${b.body.data.group_id}/pay`, { method: 'CASH' }, ctx.sessions.companyAdmin.token),
       ]);
 

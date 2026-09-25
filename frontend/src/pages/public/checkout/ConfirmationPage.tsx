@@ -1,6 +1,6 @@
 import { Armchair, BedDouble, CalendarDays, CheckCircle2, Download, Gift, Mail, Search, Smartphone, Ticket, User } from 'lucide-react';
 import QRCode from 'qrcode';
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useParams } from 'react-router-dom';
 import { Button, Card, ErrorState, LoadingState } from '@/components/ui';
 import { useAsync } from '@/hooks/useAsync';
@@ -22,11 +22,16 @@ export function ConfirmationPage() {
   const booking = useAsync(() => bookingService.get(Number(bookingId)), [bookingId]);
   const [qr, setQr] = useState<string | null>(null);
 
+  // `checkout` cambia con cada cambio del contexto, incluido el propio `reset`: se lee por ref
+  // para limpiar una sola vez por reserva cargada.
+  const checkoutRef = useRef(checkout);
+  checkoutRef.current = checkout;
+  const loadedBookingId = booking.data?.id ?? null;
+
   useEffect(() => {
     // The purchase is done; clear the in-progress selection so a new search starts clean.
-    if (booking.data) checkout.reset();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [booking.data?.id]);
+    if (loadedBookingId !== null) checkoutRef.current.reset();
+  }, [loadedBookingId]);
 
   useEffect(() => {
     if (!booking.data?.booking_code) return;

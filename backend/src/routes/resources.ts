@@ -1,11 +1,38 @@
 import type { Router } from 'express';
-import { execute } from '../config/database';
+import { execute, queryOne } from '../config/database';
+import { ApiError } from '../utils/ApiError';
 import { createResourceRouter, type ResourceDefinition } from '../core/resource';
+import { assertCommissionCanBeInitialized, ensureCompanyCommission } from '../services/company-commission.service';
 import * as v from '../validators/resource.validators';
 
 /**
+ * F12-01 · un hijo no cambia de empresa a través de su padre.
+ *
+ * `coupons` y `route_stops` no tienen `company_id`: la empresa la heredan de su promoción o de
+ * su ruta, así que `enforceCompanyOwnership` no puede proteger su actualización. Antes, un
+ * `PUT /coupons/:id { promotion_id: <promoción de otra empresa> }` ejecutaba el UPDATE y solo
+ * DESPUÉS la relectura con alcance respondía 404: el cupón ya estaba en la otra empresa.
+ *
+ * Se comprueba ANTES de escribir, para cualquier rol: el nuevo padre tiene que existir y ser de
+ * la MISMA empresa que el registro actual (NULL = plataforma, en promociones). Si no, 404 —la
+ * política de aislamiento: no se confirma que exista el recurso de otra empresa— y no se toca nada.
+ * La empresa sale siempre de la base, nunca del cuerpo.
+ */
+function sameCompanyParent(parentColumn: string, parentSql: string, notFound: string) {
+  return async (_id: number, previous: Record<string, unknown>, data: Record<string, unknown>): Promise<void> => {
+    if (data[parentColumn] === undefined || Number(data[parentColumn]) === Number(previous[parentColumn])) return;
+    const parent = await queryOne<{ company_id: number | null }>(parentSql, [Number(data[parentColumn])]);
+    const actual = previous.company_id === null || previous.company_id === undefined ? null : Number(previous.company_id);
+    const nuevo = parent?.company_id === null || parent?.company_id === undefined ? null : Number(parent.company_id);
+    if (!parent || nuevo !== actual) throw ApiError.notFound(notFound);
+  };
+}
+
+/**
  * Standard CRUD modules. Permission mapping notes (documented decisions, see README):
- * - bus_types / seat_types / seats reuse the `buses.*` permissions (the schema has no dedicated module).
+ * - bus_types / seat_types reuse the `buses.*` permissions (the schema has no dedicated module).
+ * - `seats` ya no es un recurso genérico (auditoría FASE 7, hallazgo H-16): los asientos se leen y
+ *   administran por los endpoints de la versión de distribución (`bus-layout.routes.ts`).
  * - locations / route_stops reuse the `routes.*` permissions (cities and terminals are route master data).
  * - refunds reuse `payments.view` / `payments.refund`.
  * - los catálogos sin company_id (bus_types, seat_types, locations) se leen con el permiso
@@ -16,6 +43,8 @@ const definitions: ResourceDefinition[] = [
   {
     table: 'companies',
     alias: 'c',
+    // H-24 · ficha pública solo de empresas ACTIVE: nombre, logo, descripción y valoración; sin RUC, correo ni estado.
+    customerAccess: { mode: 'none', publicChannel: '/public/companies' },
     entityName: 'Empresa',
     permissionModule: 'companies',
     selectSql: `SELECT c.*, (SELECT COUNT(*) FROM buses b WHERE b.company_id = c.id) AS buses_count,
@@ -44,8 +73,23 @@ const definitions: ResourceDefinition[] = [
      * empresa quedaba sin salida: la empresa pasaba a ACTIVE pero su administrador seguía
      * en PENDING y no podía iniciar sesión nunca.
      */
+    /**
+     * H-46 · al aprobar una empresa se le COPIA `platform.default_commission` como su propia tasa,
+     * salvo que ya tuviera una (una reactivación la conserva). Se comprueba antes de escribir que
+     * el valor por defecto sea utilizable, para no dejar una empresa ACTIVE que no puede vender.
+     */
+    beforeUpdate: async (companyId, previous, data) => {
+      if (data.status === 'ACTIVE' && previous.status !== 'ACTIVE') await assertCommissionCanBeInitialized(companyId);
+    },
+    beforeCreate: async (data) => {
+      if (data.status === 'ACTIVE') await assertCommissionCanBeInitialized(null);
+    },
+    afterCreate: async (companyId, data) => {
+      if (data.status === 'ACTIVE') await ensureCompanyCommission(companyId);
+    },
     afterUpdate: async (companyId, previous, data) => {
       if (data.status !== 'ACTIVE' || previous.status === 'ACTIVE') return;
+      await ensureCompanyCommission(companyId);
       await execute(
         `UPDATE users u
          JOIN company_users cu ON cu.user_id = u.id
@@ -58,6 +102,8 @@ const definitions: ResourceDefinition[] = [
   {
     table: 'bus_types',
     alias: 'bt',
+    // H-24 · el tipo de bus llega como `bus_type_name` en la búsqueda y el detalle del viaje.
+    customerAccess: { mode: 'none', publicChannel: '/public/trips' },
     entityName: 'Tipo de bus',
     permissionModule: 'buses',
     selectSql: 'SELECT bt.* FROM bus_types bt',
@@ -75,10 +121,29 @@ const definitions: ResourceDefinition[] = [
   {
     table: 'buses',
     alias: 'b',
+    // H-24 · el viaje público trae servicio, comodidades y su distribución (`/public/trips/:id/layout`); nunca placa ni código interno.
+    customerAccess: { mode: 'none', publicChannel: '/public/trips' },
     entityName: 'Bus',
     permissionModule: 'buses',
+    // `seats_count` ES EL DE LA VERSIÓN VIGENTE, NO EL ACUMULADO. Desde la migración 010 un bus
+    // no tiene un juego de asientos sino una versión publicada y todo su histórico archivado,
+    // y cada versión conserva los suyos porque `booking_seats` apunta a ellos. Contar por
+    // `s.bus_id` sumaba las tres versiones de un bus reformado dos veces y hacía crecer la
+    // cifra con cada publicación.
+    //
+    // EL FALLBACK NO INVENTA CAPACIDAD. Un bus que todavía no tiene ninguna versión —uno recién
+    // dado de alta, o los que siembra `seed.ts`, cuyos asientos quedan con `layout_id` nulo—
+    // cae a la cuenta de siempre, restringida a los asientos sin versión. Así el dato anterior
+    // a la migración se sigue viendo igual, y en cuanto el bus tiene versiones manda la
+    // publicada. `buses.capacity` no interviene: es la caché de capacidad y sigue intacta.
     selectSql: `SELECT b.*, bt.name AS bus_type_name, co.name AS company_name,
-      (SELECT COUNT(*) FROM seats s WHERE s.bus_id = b.id) AS seats_count
+      (CASE
+         WHEN EXISTS (SELECT 1 FROM bus_layouts bl WHERE bl.bus_id = b.id)
+           THEN (SELECT COUNT(*) FROM seats s
+                   JOIN bus_layouts pl ON pl.id = s.layout_id
+                  WHERE pl.bus_id = b.id AND pl.status = 'PUBLISHED')
+         ELSE (SELECT COUNT(*) FROM seats s WHERE s.bus_id = b.id AND s.layout_id IS NULL)
+       END) AS seats_count
       FROM buses b
       LEFT JOIN bus_types bt ON bt.id = b.bus_type_id
       JOIN companies co ON co.id = b.company_id`,
@@ -98,6 +163,8 @@ const definitions: ResourceDefinition[] = [
   {
     table: 'seat_types',
     alias: 'st',
+    // H-24 · el tipo y precio de cada asiento llegan en `/public/trips/:id/seats`.
+    customerAccess: { mode: 'none', publicChannel: '/public/trips' },
     entityName: 'Tipo de asiento',
     permissionModule: 'buses',
     selectSql: 'SELECT st.* FROM seat_types st',
@@ -113,29 +180,10 @@ const definitions: ResourceDefinition[] = [
     adminOnlyActions: ['create', 'update', 'delete'],
   },
   {
-    table: 'seats',
-    alias: 's',
-    entityName: 'Asiento',
-    permissionModule: 'buses',
-    selectSql: `SELECT s.*, st.name AS seat_type_name, bu.code AS bus_code, bu.company_id
-      FROM seats s
-      JOIN buses bu ON bu.id = s.bus_id
-      LEFT JOIN seat_types st ON st.id = s.seat_type_id`,
-    searchColumns: ['s.seat_number'],
-    filters: { bus_id: 's.bus_id', status: 's.status', seat_type_id: 's.seat_type_id' },
-    sortColumns: ['s.seat_number', 's.row_number'],
-    defaultSort: 's.row_number',
-    defaultOrder: 'ASC',
-    writableColumns: [
-      'bus_id', 'seat_type_id', 'seat_number', 'row_number', 'column_number', 'is_window', 'is_aisle', 'status',
-    ],
-    createSchema: v.createSeatSchema,
-    updateSchema: v.updateSeatSchema,
-    companyScopeExpression: 'bu.company_id',
-  },
-  {
     table: 'locations',
     alias: 'l',
+    // H-24 · terminales y ciudades activas: `/public/terminals` y `/public/cities`.
+    customerAccess: { mode: 'none', publicChannel: '/public/terminals' },
     entityName: 'Ubicación',
     permissionModule: 'routes',
     selectSql: 'SELECT l.* FROM locations l',
@@ -155,6 +203,8 @@ const definitions: ResourceDefinition[] = [
   {
     table: 'routes',
     alias: 'r',
+    // H-24 · origen, destino, distancia y duración llegan en la búsqueda de viajes.
+    customerAccess: { mode: 'none', publicChannel: '/public/trips' },
     entityName: 'Ruta',
     permissionModule: 'routes',
     selectSql: `SELECT r.*, ol.name AS origin_name, ol.city AS origin_city,
@@ -180,6 +230,8 @@ const definitions: ResourceDefinition[] = [
   {
     table: 'route_stops',
     alias: 'rs',
+    // H-24 · no hay paradas en la vista pública; lo que ve el pasajero es el viaje.
+    customerAccess: { mode: 'none', publicChannel: '/public/trips' },
     entityName: 'Parada',
     permissionModule: 'routes',
     selectSql: `SELECT rs.*, l.name AS location_name, l.city AS location_city, r.company_id
@@ -195,10 +247,13 @@ const definitions: ResourceDefinition[] = [
     createSchema: v.createRouteStopSchema,
     updateSchema: v.updateRouteStopSchema,
     companyScopeExpression: 'r.company_id',
+    beforeUpdate: sameCompanyParent('route_id', 'SELECT company_id FROM routes WHERE id = ? LIMIT 1', 'Ruta no encontrada'),
   },
   {
     table: 'promotions',
     alias: 'p',
+    // H-24 · solo promociones ACTIVE y vigentes, sin límites de uso ni configuración.
+    customerAccess: { mode: 'none', publicChannel: '/public/promotions' },
     entityName: 'Promoción',
     permissionModule: 'promotions',
     selectSql: `SELECT p.*, co.name AS company_name,
@@ -221,6 +276,8 @@ const definitions: ResourceDefinition[] = [
   {
     table: 'coupons',
     alias: 'c',
+    // H-24 · los códigos no se publican: el pasajero escribe el suyo al reservar (`coupon_code`) y el backend lo valida.
+    customerAccess: { mode: 'none', publicChannel: null },
     entityName: 'Cupón',
     permissionModule: 'promotions',
     selectSql: `SELECT c.*, p.name AS promotion_name, p.discount_type, p.discount_value, p.company_id
@@ -234,10 +291,13 @@ const definitions: ResourceDefinition[] = [
     createSchema: v.createCouponSchema,
     updateSchema: v.updateCouponSchema,
     companyScopeExpression: 'p.company_id',
+    beforeUpdate: sameCompanyParent('promotion_id', 'SELECT company_id FROM promotions WHERE id = ? LIMIT 1', 'Promoción no encontrada'),
   },
   {
     table: 'notification_templates',
     alias: 'nt',
+    // H-24 · configuración interna.
+    customerAccess: { mode: 'none', publicChannel: null },
     entityName: 'Plantilla de notificación',
     permissionModule: 'settings',
     permissionOverrides: { create: 'settings.update', delete: 'settings.update' },
@@ -254,6 +314,8 @@ const definitions: ResourceDefinition[] = [
   {
     table: 'system_settings',
     alias: 'ss',
+    // H-24 · solo los ajustes marcados como públicos.
+    customerAccess: { mode: 'none', publicChannel: '/public/settings' },
     entityName: 'Configuración',
     permissionModule: 'settings',
     permissionOverrides: { create: 'settings.update', delete: 'settings.update' },
@@ -270,6 +332,8 @@ const definitions: ResourceDefinition[] = [
   {
     table: 'company_commission_settings',
     alias: 'cs',
+    // H-24 · dato financiero interno.
+    customerAccess: { mode: 'none', publicChannel: null },
     entityName: 'Comisión',
     permissionModule: 'settings',
     permissionOverrides: { view: 'reports.view', create: 'settings.update', update: 'settings.update', delete: 'settings.update' },
@@ -293,13 +357,12 @@ export const resourceRouters: Array<{ path: string; router: Router }> = [
   { path: '/bus-types', router: createResourceRouter(definitions[1]!) },
   { path: '/buses', router: createResourceRouter(definitions[2]!) },
   { path: '/seat-types', router: createResourceRouter(definitions[3]!) },
-  { path: '/seats', router: createResourceRouter(definitions[4]!) },
-  { path: '/locations', router: createResourceRouter(definitions[5]!) },
-  { path: '/routes', router: createResourceRouter(definitions[6]!) },
-  { path: '/route-stops', router: createResourceRouter(definitions[7]!) },
-  { path: '/promotions', router: createResourceRouter(definitions[8]!) },
-  { path: '/coupons', router: createResourceRouter(definitions[9]!) },
-  { path: '/notification-templates', router: createResourceRouter(definitions[10]!) },
-  { path: '/system-settings', router: createResourceRouter(definitions[11]!) },
-  { path: '/commissions', router: createResourceRouter(definitions[12]!) },
+  { path: '/locations', router: createResourceRouter(definitions[4]!) },
+  { path: '/routes', router: createResourceRouter(definitions[5]!) },
+  { path: '/route-stops', router: createResourceRouter(definitions[6]!) },
+  { path: '/promotions', router: createResourceRouter(definitions[7]!) },
+  { path: '/coupons', router: createResourceRouter(definitions[8]!) },
+  { path: '/notification-templates', router: createResourceRouter(definitions[9]!) },
+  { path: '/system-settings', router: createResourceRouter(definitions[10]!) },
+  { path: '/commissions', router: createResourceRouter(definitions[11]!) },
 ];

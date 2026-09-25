@@ -5,7 +5,7 @@ import { query, queryOne } from '../config/database';
 import { optionalAuthenticate } from '../middleware/auth.middleware';
 import { searchItinerary } from '../services/itinerary.service';
 import { readPublicSettings } from '../services/settings.service';
-import { findPublicTrip, searchTrips, seatMap } from '../services/trip.service';
+import { findPublicTrip, getTripLayout, searchTrips, seatMap } from '../services/trip.service';
 import { ApiError } from '../utils/ApiError';
 import { asyncHandler, sendList, sendSuccess } from '../utils/http';
 import { buildPagination, parseListQuery, parseId } from '../utils/query';
@@ -111,6 +111,21 @@ router.get(
     const trip = await findPublicTrip(tripId);
     if (!trip) throw ApiError.notFound('Viaje no encontrado');
     sendSuccess(res, await seatMap(tripId));
+  }),
+);
+
+/**
+ * Geometría del bus del viaje: pisos, rejilla y elementos físicos. Hermano del anterior y
+ * deliberadamente separado: aquel dice qué asientos hay y a qué precio, este qué forma tiene
+ * el vehículo. El identificador del layout no se acepta por parámetro; sale del viaje.
+ */
+router.get(
+  '/trips/:id/layout',
+  asyncHandler(async (req, res) => {
+    const tripId = parseId(req.params.id);
+    const trip = await findPublicTrip(tripId);
+    if (!trip) throw ApiError.notFound('Viaje no encontrado');
+    sendSuccess(res, await getTripLayout(tripId));
   }),
 );
 

@@ -100,7 +100,8 @@ export function Tabs<T extends string>({
   onChange,
   className,
 }: {
-  tabs: Array<{ id: T; label: string; count?: number }>;
+  /** `icon` es opcional: las pestañas que no lo pasan se pintan exactamente igual que antes. */
+  tabs: Array<{ id: T; label: string; count?: number; icon?: ReactNode }>;
   active: T;
   onChange: (id: T) => void;
   className?: string;
@@ -115,10 +116,15 @@ export function Tabs<T extends string>({
           aria-selected={active === tab.id}
           onClick={() => onChange(tab.id)}
           className={cn(
-            'relative whitespace-nowrap px-4 py-3 text-sm font-medium transition',
+            'relative inline-flex items-center gap-2 whitespace-nowrap px-4 py-3 text-sm font-medium transition',
             active === tab.id ? 'text-brand-600' : 'text-slate-500 hover:text-slate-800',
           )}
         >
+          {tab.icon && (
+            <span className="shrink-0 [&>svg]:h-[18px] [&>svg]:w-[18px]" aria-hidden>
+              {tab.icon}
+            </span>
+          )}
           {tab.label}
           {tab.count !== undefined && (
             <span className={cn('ml-1.5 rounded-full px-1.5 py-0.5 text-xs', active === tab.id ? 'bg-brand-100 text-brand-700' : 'bg-slate-100 text-slate-500')}>

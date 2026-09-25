@@ -1,6 +1,7 @@
 import type { NextFunction, Request, Response } from 'express';
 import { findPasswordHash, loadAuthenticatedUser } from '../repositories/user.repository';
 import { ApiError } from '../utils/ApiError';
+import { isSessionRevoked } from '../services/session-revocation.service';
 import { sessionFingerprint, verifyToken, type TokenPayload } from '../utils/security';
 
 function extractToken(req: Request): string | null {
@@ -26,6 +27,10 @@ async function assertSessionIsCurrent(payload: TokenPayload): Promise<void> {
   if (!passwordHash || payload.pwd !== sessionFingerprint(passwordHash)) {
     throw ApiError.unauthorized('Tu sesión ya no es válida. Vuelve a iniciar sesión.');
   }
+  // F12-07: un token cerrado con `POST /auth/logout` no vuelve a entrar.
+  if (typeof payload.jti === 'string' && (await isSessionRevoked(payload.jti))) {
+    throw ApiError.unauthorized('Tu sesión se cerró. Vuelve a iniciar sesión.');
+  }
 }
 
 export async function authenticate(req: Request, _res: Response, next: NextFunction): Promise<void> {
@@ -42,6 +47,7 @@ export async function authenticate(req: Request, _res: Response, next: NextFunct
     await assertSessionIsCurrent(payload);
 
     req.user = user;
+    req.session = { jti: typeof payload.jti === 'string' ? payload.jti : null, exp: typeof payload.exp === 'number' ? payload.exp : null };
     next();
   } catch (error) {
     next(error);

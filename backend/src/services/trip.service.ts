@@ -1,4 +1,5 @@
 import { execute, query, queryOne } from '../config/database';
+import { resolveTripLayoutId } from './bus-layout.service';
 import type { AuthenticatedUser } from '../types/entities';
 import { ApiError } from '../utils/ApiError';
 
@@ -12,6 +13,11 @@ export interface SeatAvailability {
   status: 'AVAILABLE' | 'INACTIVE';
   seat_type_name: string | null;
   is_taken: 0 | 1;
+  /** Piso al que pertenece el asiento (migración 010). Un bus puede tener uno o dos. */
+  deck_id: number | null;
+  deck_number: number | null;
+  /** Precio de ESTE asiento en ESTE viaje. Ver `seatMap` para cómo se resuelve. */
+  price: string;
 }
 
 /** Company id that owns a trip, resolved through routes. */
@@ -47,26 +53,153 @@ export const SEAT_HELD_SQL = `(bk.status IN ('CONFIRMED', 'COMPLETED')
      OR (bk.status = 'PENDING' AND (bk.expires_at IS NULL OR bk.expires_at > NOW())))`;
 
 /**
- * Seat map for a trip. A seat counts as taken when it belongs to a booking that is
- * still holding it (PENDING within its expiry window, CONFIRMED or COMPLETED).
+ * Capacidad de un viaje. Espera que el viaje esté aliasado como `t`.
+ *
+ * NO es `buses.capacity`. Un bus puede ir por su versión 7 mientras un viaje de marzo sigue
+ * anclado a la 1: preguntarle al bus de hoy cuántas plazas tenía aquel viaje da la cifra
+ * equivocada. La capacidad de un viaje es la de la versión que congeló.
+ *
+ * `buses.capacity` queda como respaldo SOLO para los viajes anteriores a la migración 010,
+ * que pueden no tener versión propia. Es una caché, no una fuente de verdad.
+ *
+ * Vive aquí y no en `booking.service` —donde nació— porque la usan además la búsqueda
+ * pública, el listado de viajes, el panel y la API de integración. Una sola definición: si
+ * algún día cambia la política de capacidad, cambia en un único sitio.
+ */
+export const TRIP_SEAT_CAPACITY_SQL = `COALESCE(
+        (SELECT bl.seat_count FROM bus_layouts bl WHERE bl.id = t.bus_layout_id),
+        (SELECT b.capacity FROM buses b WHERE b.id = t.bus_id)
+      )`;
+
+/**
+ * Mapa de asientos de un viaje. Un asiento cuenta como tomado cuando pertenece a una reserva
+ * que todavía lo retiene (PENDING dentro de su plazo, CONFIRMED o COMPLETED).
+ *
+ * DE DÓNDE SALEN LOS ASIENTOS (migración 010). Ya no del bus, sino de la VERSIÓN de
+ * distribución que el viaje tiene congelada. `resolveTripLayoutId` decide cuál es: la del
+ * viaje si la tiene, y si no la publicada del bus como red de transición. Así, reordenar un
+ * bus no le cambia el mapa a un viaje ya vendido.
+ *
+ * SOLO DEVUELVE ASIENTOS. Los baños, escaleras, puertas, huecos y el puesto del conductor
+ * viven en `bus_layout_elements` y NO salen por aquí. No es un descuido: esta misma función
+ * alimenta `GET /integration/trips/:id/availability`, que publica `capacity: seats.length`
+ * a sistemas de terceros. Colar un baño en esta lista le sumaría un pasajero inexistente a
+ * la capacidad de todos los integradores. Quien necesite el bus entero pide el árbol de la
+ * versión con `getLayoutTree`.
+ *
+ * EL PRECIO ES POR ASIENTO. `trip_seat_type_prices` puede fijar un precio distinto para cada
+ * tipo de asiento en cada viaje; donde no haya fila rige `trips.base_price`. Se proyecta
+ * aquí, junto al asiento, para que la pantalla muestre exactamente lo que se va a cobrar.
  */
 export async function seatMap(tripId: number): Promise<SeatAvailability[]> {
+  const layoutId = await resolveTripLayoutId(tripId);
   return query<SeatAvailability>(
     `SELECT s.id, s.seat_number, s.row_number, s.column_number, s.is_window, s.is_aisle, s.status,
             st.name AS seat_type_name,
+            s.deck_id, d.deck_number,
+            CAST(COALESCE(tsp.price, t.base_price) AS DECIMAL(10,2)) AS price,
             EXISTS (
               SELECT 1 FROM booking_seats bs
               JOIN bookings bk ON bk.id = bs.booking_id
               WHERE bs.trip_id = ? AND bs.seat_id = s.id AND ${SEAT_HELD_SQL}
             ) AS is_taken
      FROM trips t
-     JOIN buses b ON b.id = t.bus_id
-     JOIN seats s ON s.bus_id = b.id
+     JOIN seats s ON s.layout_id = ?
+     LEFT JOIN bus_layout_decks d ON d.id = s.deck_id
      LEFT JOIN seat_types st ON st.id = s.seat_type_id
+     LEFT JOIN trip_seat_type_prices tsp ON tsp.trip_id = t.id AND tsp.seat_type_id = s.seat_type_id
      WHERE t.id = ?
-     ORDER BY s.row_number ASC, s.column_number ASC, s.seat_number ASC`,
-    [tripId, tripId],
+     ORDER BY d.deck_number ASC, s.row_number ASC, s.column_number ASC, s.seat_number ASC`,
+    [tripId, layoutId, tripId],
   );
+}
+
+// --- Geometría pública de la distribución del viaje ----------------------------
+
+export interface PublicLayoutElement {
+  id: number;
+  element_type: 'BATHROOM' | 'STAIRS' | 'DRIVER' | 'DOOR' | 'EMPTY';
+  row_number: number;
+  column_number: number;
+  row_span: number;
+  col_span: number;
+  label: string | null;
+}
+
+export interface PublicLayoutDeck {
+  id: number;
+  deck_number: number;
+  name: string | null;
+  row_count: number;
+  column_count: number;
+  elements: PublicLayoutElement[];
+}
+
+export interface PublicTripLayout {
+  layout_id: number;
+  version: number;
+  status: 'DRAFT' | 'PUBLISHED' | 'ARCHIVED';
+  name: string | null;
+  decks: PublicLayoutDeck[];
+}
+
+/**
+ * Geometría de la distribución que le toca a un viaje: pisos, rejilla y elementos físicos.
+ *
+ * POR QUÉ NO ESTÁ EN `seatMap`. Aquella función publica la lista de ASIENTOS, y de su
+ * longitud sale la `capacity` que lee la API de integración; un baño colado ahí le sumaría
+ * un pasajero inexistente a todos los integradores. Son dos preguntas distintas —«qué se
+ * puede vender» y «qué forma tiene el bus»— y se responden por separado a propósito.
+ *
+ * QUÉ VERSIÓN DEVUELVE. La del viaje, vía `resolveTripLayoutId`: la congelada en
+ * `trips.bus_layout_id` si la tiene y, solo si no la tiene, la publicada del bus. De modo
+ * que un viaje vendido sobre la v1 sigue dibujándose con la v1 aunque el bus ya vaya por la
+ * v2. Esa es justamente la garantía que la migración 010 vino a dar.
+ *
+ * QUÉ NO DEVUELVE. Asientos, precios y cualquier dato de la empresa. Es público y se queda
+ * en la forma del vehículo; el identificador del layout ni siquiera se acepta como entrada,
+ * se deduce del viaje, así que no hay parámetro con el que pedir la distribución de otro.
+ */
+export async function getTripLayout(tripId: number): Promise<PublicTripLayout> {
+  const layoutId = await resolveTripLayoutId(tripId);
+
+  const layout = await queryOne<{ id: number; version: number; status: PublicTripLayout['status']; name: string | null }>(
+    'SELECT id, version, status, name FROM bus_layouts WHERE id = ? LIMIT 1',
+    [layoutId],
+  );
+  if (!layout) throw ApiError.badRequest('El viaje no tiene una distribución de asientos disponible');
+
+  const decks = await query<Omit<PublicLayoutDeck, 'elements'>>(
+    `SELECT id, deck_number, name, row_count, column_count
+     FROM bus_layout_decks WHERE layout_id = ? ORDER BY deck_number ASC`,
+    [layoutId],
+  );
+
+  // Los elementos se piden de una vez para todos los pisos y se reparten en memoria: un
+  // bus tiene uno o dos pisos, y una consulta por piso solo añadiría viajes a la base.
+  const elements = decks.length === 0
+    ? []
+    : await query<PublicLayoutElement & { deck_id: number }>(
+        `SELECT e.id, e.deck_id, e.element_type, e.row_number, e.column_number, e.row_span, e.col_span, e.label
+         FROM bus_layout_elements e
+         JOIN bus_layout_decks d ON d.id = e.deck_id
+         WHERE d.layout_id = ?
+         ORDER BY e.row_number ASC, e.column_number ASC`,
+        [layoutId],
+      );
+
+  return {
+    layout_id: layout.id,
+    version: layout.version,
+    status: layout.status,
+    name: layout.name,
+    decks: decks.map((deck) => ({
+      ...deck,
+      elements: elements
+        .filter((elemento) => elemento.deck_id === deck.id)
+        .map(({ deck_id: _deckId, ...elemento }) => elemento),
+    })),
+  };
 }
 
 // --- Ciclo de vida del viaje (PENDIENTES.md / auditoría BP-08) -----------------
@@ -81,7 +214,30 @@ export interface TripLifecycleResult {
 }
 
 /**
- * Avanza el ciclo de vida de los viajes: SCHEDULED → IN_PROGRESS → COMPLETED.
+ * Transiciones MANUALES permitidas por `PUT /trips/:id` (H-30). CANCELLED no aparece: se llega
+ * solo por `POST /trips/:id/cancel` y de ahí no se sale. Mantener el mismo estado siempre vale.
+ *
+ *   SCHEDULED · BOARDING · DELAYED  ⇄ entre sí, y → IN_PROGRESS
+ *   IN_PROGRESS                     → COMPLETED (nunca vuelve atrás)
+ *   COMPLETED                       → nada: un viaje realizado no se reabre
+ *
+ * COMPLETED solo desde IN_PROGRESS: completar a mano un viaje que no ha salido lo cerraría antes
+ * de tiempo (y el cierre completa sus reservas).
+ */
+export const TRIP_MANUAL_TRANSITIONS: Readonly<Record<string, readonly string[]>> = {
+  SCHEDULED: ['BOARDING', 'DELAYED', 'IN_PROGRESS'],
+  BOARDING: ['SCHEDULED', 'DELAYED', 'IN_PROGRESS'],
+  DELAYED: ['SCHEDULED', 'BOARDING', 'IN_PROGRESS'],
+  IN_PROGRESS: ['COMPLETED'],
+  COMPLETED: [],
+  CANCELLED: [],
+};
+
+/** Estados con los que se puede CREAR un viaje: los que aún admiten venta. */
+export const TRIP_CREATION_STATUSES = ['SCHEDULED', 'BOARDING', 'DELAYED'] as const;
+
+/**
+ * Avanza el ciclo de vida de los viajes: SCHEDULED/BOARDING → IN_PROGRESS → COMPLETED.
  *
  * Los tres estados existían en el ENUM y decenas de consultas filtraban por ellos, pero
  * nada los escribía nunca: un viaje que ya había salido seguía SCHEDULED para siempre y sus
@@ -108,12 +264,15 @@ export interface TripLifecycleResult {
  * completado» en `notification_templates`, y esta fase no inventa contenido.
  */
 export async function advanceTripLifecycle(): Promise<TripLifecycleResult> {
-  // 1. Ha llegado la hora de salir. Solo desde SCHEDULED: un viaje CANCELLED, COMPLETED o
-  //    ya IN_PROGRESS no entra, y BOARDING y DELAYED se dejan como están porque son estados
-  //    que gestiona la empresa a mano.
+  // 1. Ha llegado la hora de salir. Desde SCHEDULED y, desde 11F (H-30), también desde
+  //    BOARDING: el embarque ocurre ANTES de la salida, así que un viaje en embarque cuya hora
+  //    de salida ya pasó ha salido; antes se quedaba en BOARDING para siempre.
+  //    DELAYED NO avanza solo: «retrasado» significa justamente que no salió a su hora y el
+  //    sistema no conoce la hora real; la empresa lo pasa a BOARDING o IN_PROGRESS (o corrige
+  //    la salida y lo vuelve a SCHEDULED). CANCELLED, COMPLETED e IN_PROGRESS no entran.
   const started = await execute(
     `UPDATE trips SET status = 'IN_PROGRESS'
-     WHERE status = 'SCHEDULED' AND departure_datetime <= NOW()`,
+     WHERE status IN ('SCHEDULED', 'BOARDING') AND departure_datetime <= NOW()`,
   );
 
   // 2. Ha llegado la hora de llegar. Se exige `arrival_datetime`: la columna es opcional en
@@ -172,10 +331,10 @@ const SEARCH_SELECT = `SELECT t.id, t.departure_datetime, t.arrival_datetime, t.
     ol.city AS origin_city, ol.name AS origin_terminal,
     dl.city AS destination_city, dl.name AS destination_terminal,
     co.id AS company_id, co.name AS company_name, co.logo_url AS company_logo,
-    b.id AS bus_id, b.capacity, b.amenities, bt.name AS bus_type_name,
+    b.id AS bus_id, ${TRIP_SEAT_CAPACITY_SQL} AS capacity, b.amenities, bt.name AS bus_type_name,
     (SELECT ROUND(AVG(rv.rating), 1) FROM reviews rv WHERE rv.company_id = co.id AND rv.status = 'PUBLISHED') AS company_rating,
     (SELECT COUNT(*) FROM reviews rv WHERE rv.company_id = co.id AND rv.status = 'PUBLISHED') AS company_reviews,
-    (b.capacity - (
+    (${TRIP_SEAT_CAPACITY_SQL} - (
       SELECT COUNT(*) FROM booking_seats bs
       JOIN bookings bk ON bk.id = bs.booking_id
       WHERE bs.trip_id = t.id AND ${SEAT_HELD_SQL}

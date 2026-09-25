@@ -7,6 +7,7 @@ import {
   assertBookingInput,
   confirmBookingPaymentOnConnection,
   createBookingOnConnection,
+  registerManualPaymentOnConnection,
   type BookingSettings,
 } from './booking.service';
 import { searchTrips } from './trip.service';
@@ -251,6 +252,19 @@ export async function findGroupBookingIds(groupId: number, user: AuthenticatedUs
   return rows.map((row) => row.id);
 }
 
+export const ITINERARY_CARD_NOT_SUPPORTED = 'El pago con tarjeta no está disponible para itinerarios.';
+
+/**
+ * Rechaza la tarjeta en el pago de un itinerario (auditoría FASE 9, hallazgo H-23).
+ *
+ * Aquí no hay cobro por Culqi: confirmar con `CARD` dejaba pagos PAID con método tarjeta y
+ * sin ningún cargo detrás. Hasta que exista un cobro real para itinerarios, la tarjeta se
+ * rechaza con 400 antes de leer o tocar nada. El resto de métodos no cambia.
+ */
+export function assertItineraryMethodSupported(method: string): void {
+  if (method === 'CARD') throw ApiError.badRequest(ITINERARY_CARD_NOT_SUPPORTED, { method: ITINERARY_CARD_NOT_SUPPORTED });
+}
+
 /**
  * Confirma el pago de TODOS los tramos del itinerario en UNA sola transacción.
  *
@@ -274,6 +288,8 @@ export async function payItinerary(
   method: PaymentMethod,
   providerTransactionId?: string | null,
 ): Promise<number[]> {
+  // Segunda barrera tras la ruta: quien llame aquí directamente tampoco confirma con tarjeta.
+  assertItineraryMethodSupported(method);
   const bookingIds = await findGroupBookingIds(groupId, user);
   if (bookingIds.length === 0) throw ApiError.notFound('Itinerario no encontrado');
 
@@ -292,6 +308,34 @@ export async function payItinerary(
     // notificación es el del itinerario, no el de los cerrojos.
     for (const bookingId of bookingIds) {
       await confirmBookingPaymentOnConnection(connection, bookingId, method, providerTransactionId ?? null);
+    }
+  });
+
+  return bookingIds;
+}
+
+/**
+ * Registra el pago manual de TODOS los tramos sin confirmarlos (H-22).
+ *
+ * Es la contrapartida de `payItinerary` para quien no puede dar un pago por cobrado —el
+ * pasajero—: cada tramo queda con su pago PENDING pendiente de verificación y el backoffice
+ * de cada empresa lo aprueba o rechaza por `POST /payments/:id/approve|reject`. Una sola
+ * transacción con los viajes bloqueados en orden, igual que el pago.
+ */
+export async function registerItineraryManualPayment(
+  groupId: number,
+  user: AuthenticatedUser,
+  method: PaymentMethod,
+): Promise<number[]> {
+  assertItineraryMethodSupported(method);
+  const bookingIds = await findGroupBookingIds(groupId, user);
+  if (bookingIds.length === 0) throw ApiError.notFound('Itinerario no encontrado');
+
+  await withTransaction(async (connection) => {
+    const [tripRows] = await connection.query('SELECT DISTINCT trip_id FROM bookings WHERE group_id = ?', [groupId]);
+    await lockTripsInOrder(connection, (tripRows as Array<{ trip_id: number }>).map((row) => row.trip_id));
+    for (const bookingId of bookingIds) {
+      await registerManualPaymentOnConnection(connection, bookingId, method, user.id);
     }
   });
 

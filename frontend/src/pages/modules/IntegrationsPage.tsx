@@ -61,7 +61,7 @@ export function IntegrationsPage({ scope = 'company' }: { scope?: 'company' | 'a
   // El Panel Admin gestiona la integración de plataforma; ahí se exige además el rol.
   const canEdit = hasPermission('companies.update') && (scope === 'company' || hasRole('ADMIN'));
 
-  const integrations = data.data?.integrations ?? [];
+  const integrations = useMemo(() => data.data?.integrations ?? [], [data.data]);
   const encryptionReady = data.data?.encryption_configured ?? false;
 
   const visible = useMemo(() => {

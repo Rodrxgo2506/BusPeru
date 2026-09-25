@@ -3,6 +3,7 @@ import { env } from '../config/env';
 import * as repository from '../repositories/api-key.repository';
 import { ApiError } from '../utils/ApiError';
 import { businessTimeMs } from '../utils/businessTime';
+import { logError } from '../utils/logger';
 
 /**
  * Autenticación por API Key (auditoría BP-11).
@@ -154,7 +155,7 @@ export async function authenticateApiKey(plainKey: string): Promise<ApiKeyIdenti
   try {
     await repository.touchLastUsed(row.id);
   } catch (error) {
-    console.error('No se pudo actualizar last_used_at de la clave de API:', error);
+    logError('No se pudo actualizar last_used_at de la clave de API', error);
   }
 
   return identity;

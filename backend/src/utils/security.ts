@@ -23,6 +23,13 @@ export interface TokenPayload {
    * Un token sin esta marca —emitido antes de que existiera— deja de ser válido.
    */
   pwd?: string;
+  /**
+   * F12-07 · identificador aleatorio de ESTE token, para poder revocarlo al cerrar sesión. Lo
+   * pone `signToken`; los tokens anteriores no lo llevan y caducan solos.
+   */
+  jti?: string;
+  /** Caducidad (segundos desde epoch), la añade `jsonwebtoken` al firmar. */
+  exp?: number;
 }
 
 /**
@@ -43,7 +50,12 @@ export function sessionFingerprint(passwordHash: string): string {
 }
 
 export function signToken(payload: TokenPayload): string {
-  return jwt.sign(payload, env.jwt.secret, { expiresIn: env.jwt.expiresIn } as jwt.SignOptions);
+  // Solo se firman los datos de sesión: `jti` es siempre nuevo y `exp` lo calcula la librería.
+  const { jti: _jti, exp: _exp, ...datos } = payload;
+  return jwt.sign(datos, env.jwt.secret, {
+    expiresIn: env.jwt.expiresIn,
+    jwtid: crypto.randomBytes(16).toString('hex'),
+  } as jwt.SignOptions);
 }
 
 /**

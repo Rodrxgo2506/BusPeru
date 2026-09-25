@@ -1,7 +1,7 @@
 import { Router } from 'express';
 import { query, queryOne } from '../config/database';
 import { authenticateApiKeyRequest, requireApiKey, requireApiKeyPermission } from '../middleware/api-key.middleware';
-import { SEAT_HELD_SQL, seatMap } from '../services/trip.service';
+import { SEAT_HELD_SQL, TRIP_SEAT_CAPACITY_SQL, seatMap } from '../services/trip.service';
 import { ApiError } from '../utils/ApiError';
 import { asyncHandler, sendList, sendSuccess } from '../utils/http';
 import { buildPagination, parseListQuery, parseId, safeColumn, stableOrderBy } from '../utils/query';
@@ -46,7 +46,7 @@ const TRIP_SELECT = `SELECT t.id, t.departure_datetime, t.arrival_datetime, t.ba
     r.id AS route_id, r.name AS route_name,
     ol.city AS origin_city, ol.name AS origin_terminal,
     dl.city AS destination_city, dl.name AS destination_terminal,
-    b.code AS bus_code, b.plate_number, b.capacity, bt.name AS bus_type_name,
+    b.code AS bus_code, b.plate_number, ${TRIP_SEAT_CAPACITY_SQL} AS capacity, bt.name AS bus_type_name,
     (SELECT COUNT(*) FROM booking_seats bs
       JOIN bookings bk ON bk.id = bs.booking_id
       WHERE bs.trip_id = t.id AND ${SEAT_HELD_SQL}) AS seats_taken

@@ -9,6 +9,11 @@ declare global {
       /** Persona autenticada con JWT. La pone `authenticate`. */
       user?: AuthenticatedUser;
       /**
+       * F12-07 · identificador y caducidad del token con el que llegó la petición, para que
+       * `POST /auth/logout` revoque ESE token. Nunca contiene el token.
+       */
+      session?: { jti: string | null; exp: number | null };
+      /**
        * Empresa autenticada con una API Key. La pone `authenticateApiKeyRequest`.
        *
        * Vive aparte de `user` a propósito: una llave no es una persona y no debe

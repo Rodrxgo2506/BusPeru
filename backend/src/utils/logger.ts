@@ -1,4 +1,5 @@
 import { env } from '../config/env';
+import { redactKnownSecrets, sanitizeUrl } from './log-sanitizer';
 
 /**
  * Registro de errores del servidor (auditoría BP-17).
@@ -36,6 +37,20 @@ export interface LogContext {
   /** Identificador de la API Key, NUNCA la clave ni su hash. */
   apiKeyId?: number;
   companyId?: number;
+
+  /* --- Sucesos de proveedores externos (webhook de Culqi) ------------------ */
+  /** Quién originó el suceso: `CULQI`. */
+  provider?: string;
+  /** Descriptor del suceso tal como lo envía el proveedor, recortado. */
+  event?: string;
+  /** Identificador PÚBLICO del cargo (`chr_…`). No es un secreto ni una credencial. */
+  chargeId?: string;
+  paymentId?: number;
+  bookingId?: number;
+  /** Qué se hizo con el suceso. Valores cerrados, ver `WebhookOutcome`. */
+  outcome?: string;
+  /** Aclaración corta y SIEMPRE escrita por nosotros; nunca contenido del proveedor. */
+  detail?: string;
 }
 
 /** Detalle técnico de un error de MySQL, sin la sentencia. */
@@ -79,7 +94,10 @@ function emit(record: Record<string, unknown>): void {
   // Durante la suite se silencia: cada prueba que provoca un 500 escupiría su traza y
   // ensuciaría la salida. Las pruebas de BP-17 interceptan `console.error` y sí la leen.
   if (env.nodeEnv === 'test' && process.env.LOG_ERRORS !== 'true') return;
-  console.error(JSON.stringify(record));
+  // H-31: la ruta se sanea aunque quien llama ya lo haya hecho, y cualquier secreto configurado
+  // que haya llegado al mensaje, a la traza o al contexto se sustituye antes de escribir.
+  const saneado = typeof record.path === 'string' ? { ...record, path: sanitizeUrl(record.path) } : record;
+  console.error(redactKnownSecrets(JSON.stringify(saneado)));
 }
 
 /**
@@ -100,6 +118,51 @@ export function logError(message: string, error: unknown, context: LogContext = 
       ...(cause?.stack ? { stack: truncate(cause.stack, MAX_STACK) } : {}),
       ...(databaseDetail(error) ? { database: databaseDetail(error) } : {}),
     },
+  });
+}
+
+/**
+ * Registra un suceso que NO es un fallo pero que hay que poder auditar después.
+ *
+ * Existe por el webhook de Culqi (auditoría de observabilidad). Un webhook que llega y
+ * encuentra el pago ya conciliado hace lo correcto —nada— y precisamente por eso no dejaba
+ * ningún rastro: no se podía saber si Culqi lo entregó, cuántas veces ni con qué resultado.
+ * Para un mecanismo cuya razón de ser es la conciliación cuando la respuesta HTTP se pierde,
+ * eso era un punto ciego.
+ *
+ * Comparte transporte y formato con `logError`: una línea JSON, el mismo `emit`, el mismo
+ * silencio durante la suite. No es un registrador paralelo.
+ */
+export function logEvent(message: string, context: LogContext = {}): void {
+  emit({
+    timestamp: new Date().toISOString(),
+    level: 'info',
+    message,
+    ...context,
+  });
+}
+
+/**
+ * Una línea de registro de acceso (F15-08). Lista CERRADA: no hay forma de colar cabeceras,
+ * cookies, `Authorization`, cuerpo ni query. La ruta llega ya sin query y `emit` la sanea otra vez.
+ */
+export interface AccessLogEntry {
+  requestId?: string;
+  method: string;
+  path: string;
+  status: number;
+  durationMs: number;
+  /** Solo el id numérico de la persona autenticada, nunca su correo ni su token. */
+  userId?: number;
+}
+
+/** Registra una petición atendida. Mismo transporte y formato que el resto: una línea JSON. */
+export function logAccess(entry: AccessLogEntry): void {
+  emit({
+    timestamp: new Date().toISOString(),
+    level: 'info',
+    message: 'http_request',
+    ...entry,
   });
 }
 

@@ -1,14 +1,28 @@
 import { Router, type Request } from 'express';
 import { query, queryOne, withTransaction } from '../config/database';
 import { authenticate, requireAuth } from '../middleware/auth.middleware';
-import { requirePermission } from '../middleware/permission.middleware';
+import { z } from 'zod';
+import { requirePermission, requireRole } from '../middleware/permission.middleware';
 import { validate } from '../middleware/validate.middleware';
 import { recordAudit } from '../services/audit.service';
 import { NOTIFICATION_EVENTS, notify } from '../services/notification.service';
+import {
+  REFUND_CLOSING_STATUSES,
+  assertRefundCanClose,
+  consultarFilas,
+  recordCompletedRefund,
+  refundThroughCulqi,
+  reviewManualPayment,
+  withRefundLock,
+  type ManualPaymentDecision,
+  type RefundClosingStatus,
+} from '../services/payment.service';
+import { optionalText } from '../validators/common';
 import { ApiError } from '../utils/ApiError';
 import { asyncHandler, sendList, sendSuccess } from '../utils/http';
 import { buildPagination, parseListQuery, safeColumn, stableOrderBy, parseId } from '../utils/query';
-import { createRefundSchema, updateRefundSchema } from '../validators/resource.validators';
+import { centsToDecimal, toCentsExact } from '../utils/money';
+import { createRefundSchema } from '../validators/resource.validators';
 
 const router = Router();
 router.use(authenticate);
@@ -134,12 +148,20 @@ paymentRouter.get(
     const where = scope ? ` WHERE ${scope.sql}` : '';
     const params = scope?.params ?? [];
 
-    const summary = await queryOne(
+    /**
+     * VISTA DE CAJA (H-47): el dinero que entró y salió, no la contabilidad de empresas.
+     *   cash_collected = Σ pagos que llegaron a cobrarse (PAID o REFUNDED)
+     *   cash_refunded  = Σ reembolsos COMPLETED
+     *   cash_net       = cash_collected − cash_refunded
+     * Antes `total_collected` sumaba solo PAID y `refunded` sumaba el importe ENTERO de los pagos
+     * REFUNDED: un reembolso parcial dejaba «cobrado 0» y «reembolsado 100». Las claves antiguas se
+     * mantienen con el significado de caja.
+     */
+    const cobros = await queryOne<{ cash_collected: string; today_collected: string; yesterday_collected: string; total_payments: number }>(
       `SELECT
-        COALESCE(SUM(CASE WHEN p.status = 'PAID' THEN p.amount ELSE 0 END), 0) AS total_collected,
-        COALESCE(SUM(CASE WHEN p.status = 'PAID' AND DATE(p.paid_at) = CURDATE() THEN p.amount ELSE 0 END), 0) AS today_collected,
-        COALESCE(SUM(CASE WHEN p.status = 'PAID' AND DATE(p.paid_at) = CURDATE() - INTERVAL 1 DAY THEN p.amount ELSE 0 END), 0) AS yesterday_collected,
-        COALESCE(SUM(CASE WHEN p.status = 'REFUNDED' THEN p.amount ELSE 0 END), 0) AS refunded,
+        COALESCE(SUM(CASE WHEN p.status IN ('PAID','REFUNDED') THEN p.amount ELSE 0 END), 0) AS cash_collected,
+        COALESCE(SUM(CASE WHEN p.status IN ('PAID','REFUNDED') AND DATE(p.paid_at) = CURDATE() THEN p.amount ELSE 0 END), 0) AS today_collected,
+        COALESCE(SUM(CASE WHEN p.status IN ('PAID','REFUNDED') AND DATE(p.paid_at) = CURDATE() - INTERVAL 1 DAY THEN p.amount ELSE 0 END), 0) AS yesterday_collected,
         COUNT(*) AS total_payments
        FROM payments p
        JOIN bookings bk ON bk.id = p.booking_id
@@ -147,7 +169,28 @@ paymentRouter.get(
        JOIN routes r ON r.id = t.route_id${where}`,
       params,
     );
-    sendSuccess(res, summary);
+    const devoluciones = await queryOne<{ cash_refunded: string }>(
+      `SELECT COALESCE(SUM(rf.amount), 0) AS cash_refunded
+       FROM refunds rf
+       JOIN payments p ON p.id = rf.payment_id
+       JOIN bookings bk ON bk.id = p.booking_id
+       JOIN trips t ON t.id = bk.trip_id
+       JOIN routes r ON r.id = t.route_id
+       WHERE rf.status = 'COMPLETED'${scope ? ` AND ${scope.sql}` : ''}`,
+      params,
+    );
+    const cobradoCents = toCentsExact(String(cobros?.cash_collected ?? '0'));
+    const devueltoCents = toCentsExact(String(devoluciones?.cash_refunded ?? '0'));
+    sendSuccess(res, {
+      cash_collected: centsToDecimal(cobradoCents),
+      cash_refunded: centsToDecimal(devueltoCents),
+      cash_net: centsToDecimal(cobradoCents - devueltoCents),
+      total_collected: centsToDecimal(cobradoCents),
+      today_collected: cobros?.today_collected ?? '0.00',
+      yesterday_collected: cobros?.yesterday_collected ?? '0.00',
+      refunded: centsToDecimal(devueltoCents),
+      total_payments: Number(cobros?.total_payments ?? 0),
+    });
   }),
 );
 
@@ -166,6 +209,68 @@ paymentRouter.get(
     if (!payment) throw ApiError.notFound('Pago no encontrado');
     sendSuccess(res, payment);
   }),
+);
+
+/**
+ * Verificación manual de pagos (auditoría FASE 9, hallazgo H-22).
+ *
+ * Un pago con Yape, Plin, transferencia, efectivo u otro que registra el pasajero queda
+ * PENDING hasta que alguien que responde del dinero lo verifica. Pueden hacerlo ADMIN (todas
+ * las empresas) y COMPANY_ADMIN (solo la suya): `payments.create`, que ya tienen, más el rol,
+ * el mismo patrón que la cancelación de viajes. OPERATOR no tiene `payments.create` y
+ * CUSTOMER sí lo tiene para pagar, pero no el rol: ninguno de los dos verifica.
+ *
+ * Alcance: el pago se busca con la misma visibilidad que `GET /payments/:id`; uno de otra
+ * empresa responde 404, como el resto de la API.
+ */
+const reviewPaymentSchema = z.object({ reason: optionalText(500) });
+
+function reviewHandler(decision: ManualPaymentDecision) {
+  return asyncHandler(async (req, res) => {
+    const paymentId = parseId(req.params.id);
+    const user = requireAuth(req);
+
+    const conditions = ['p.id = ?'];
+    const params: unknown[] = [paymentId];
+    const scope = visibilityScope(req);
+    if (scope) {
+      conditions.push(scope.sql);
+      params.push(...scope.params);
+    }
+    const visible = await queryOne(`${PAYMENT_SELECT} WHERE ${conditions.join(' AND ')} LIMIT 1`, params);
+    if (!visible) throw ApiError.notFound('Pago no encontrado');
+
+    const { outcome, bookingId } = await reviewManualPayment(paymentId, decision, user.id, (req.body.reason as string | undefined) ?? null);
+
+    if (outcome === 'APPROVED' || outcome === 'REJECTED') {
+      await recordAudit(req, {
+        action: 'PAYMENT',
+        entityType: 'payments',
+        entityId: paymentId,
+        description: outcome === 'APPROVED' ? `Aprobó el pago manual de la reserva #${bookingId}` : `Rechazó el pago manual de la reserva #${bookingId}`,
+        newValues: { outcome, reason: req.body.reason ?? null },
+      });
+    }
+
+    const payment = await queryOne<Record<string, unknown>>(`${PAYMENT_SELECT} WHERE p.id = ? LIMIT 1`, [paymentId]);
+    sendSuccess(res, { ...payment, review_outcome: outcome });
+  });
+}
+
+paymentRouter.post(
+  '/:id/approve',
+  requirePermission('payments.create'),
+  requireRole('ADMIN', 'COMPANY_ADMIN'),
+  validate(reviewPaymentSchema),
+  reviewHandler('APPROVE'),
+);
+
+paymentRouter.post(
+  '/:id/reject',
+  requirePermission('payments.create'),
+  requireRole('ADMIN', 'COMPANY_ADMIN'),
+  validate(reviewPaymentSchema),
+  reviewHandler('REJECT'),
 );
 
 /* ---------------------------------------------------------------------- refunds */
@@ -266,12 +371,13 @@ refundRouter.post(
          WHERE payment_id = ? AND status NOT IN ('FAILED', 'CANCELLED')`,
         [paymentId],
       );
-      const yaReembolsado = Number((sumRows as Array<{ total: number }>)[0]?.total ?? 0);
-      const disponible = Number((Number(payment.amount) - yaReembolsado).toFixed(2));
+      // En céntimos enteros (H-51): el saldo reembolsable no se decide con coma flotante.
+      const yaReembolsadoCents = toCentsExact(String((sumRows as Array<{ total: string }>)[0]?.total ?? '0'));
+      const disponibleCents = toCentsExact(String(payment.amount)) - yaReembolsadoCents;
 
-      if (disponible <= 0) throw ApiError.badRequest('El pago ya está reembolsado por completo');
-      if (amount > disponible) {
-        throw ApiError.badRequest(`El importe supera lo reembolsable de este pago (S/ ${disponible.toFixed(2)})`);
+      if (disponibleCents <= 0) throw ApiError.badRequest('El pago ya está reembolsado por completo');
+      if (toCentsExact(amount) > disponibleCents) {
+        throw ApiError.badRequest(`El importe supera lo reembolsable de este pago (S/ ${centsToDecimal(disponibleCents)})`);
       }
 
       /**
@@ -287,7 +393,7 @@ refundRouter.post(
 
       const [result] = await connection.query(
         `INSERT INTO refunds (payment_id, booking_id, amount, reason, status) VALUES (?, ?, ?, ?, ?)`,
-        [paymentId, bookingId, amount, body.reason ?? null, status],
+        [paymentId, bookingId, centsToDecimal(toCentsExact(amount)), body.reason ?? null, status],
       );
       return (result as { insertId: number }).insertId;
     });
@@ -301,56 +407,99 @@ refundRouter.post(
  * Processing a refund updates the refund, the payment and the booking, and records the
  * negative financial transaction — all atomically.
  */
+/**
+ * Cuerpo de `process`: solo un estado de cierre (H-44). PENDING o PROCESSING no cierran nada y
+ * antes se aceptaban sellando `processed_at`.
+ */
+const processRefundSchema = z.object({ status: z.enum(REFUND_CLOSING_STATUSES).optional() });
+
 refundRouter.post(
   '/:id/process',
   requirePermission('payments.refund'),
-  validate(updateRefundSchema),
+  validate(processRefundSchema),
   asyncHandler(async (req, res) => {
     const refundId = parseId(req.params.id);
-    const status = (req.body.status as string) ?? 'COMPLETED';
+    const status: RefundClosingStatus = (req.body.status as RefundClosingStatus | undefined) ?? 'COMPLETED';
 
-    await withTransaction(async (connection) => {
-      const [rows] = await connection.query(
-        `SELECT rf.*, r.company_id, bk.user_id, bk.booking_code,
-                ol.city AS origin_city, dl.city AS destination_city
-         FROM refunds rf
+    // El dinero se devuelve por Culqi ANTES de cerrar el reembolso, y fuera de la
+    // transaccion: sostener sus cerrojos durante una llamada de red bloquearia el pago y la
+    // reserva. Si Culqi falla, esto lanza y el reembolso se queda como estaba, reintentable.
+    // Devuelve null cuando el cobro no paso por la pasarela (efectivo, transferencia): en
+    // ese caso el reembolso se cierra como siempre porque el dinero se mueve por fuera.
+    // Todo el procesamiento —Culqi y cierre— va bajo un cerrojo por reembolso (FASE 8H): dos
+    // peticiones simultáneas ya no pueden pedir dos devoluciones del mismo dinero.
+    // H-44: el cerrojo es por PAGO y las reglas de cierre se comprueban ANTES de pedir nada a
+    // Culqi —alcance, estado terminal y límite de lo cobrado— y otra vez dentro de la transacción.
+    await withRefundLock(refundId, async () => {
+      const alcance = await queryOne<{ company_id: number }>(
+        `SELECT r.company_id FROM refunds rf
          JOIN bookings bk ON bk.id = rf.booking_id
          JOIN trips t ON t.id = bk.trip_id
          JOIN routes r ON r.id = t.route_id
-         JOIN locations ol ON ol.id = r.origin_location_id
-         JOIN locations dl ON dl.id = r.destination_location_id
-         WHERE rf.id = ? LIMIT 1 FOR UPDATE`,
+         WHERE rf.id = ? LIMIT 1`,
         [refundId],
       );
-      const refund = (rows as Record<string, unknown>[])[0];
-      if (!refund) throw ApiError.notFound('Reembolso no encontrado');
-      // Alcance por empresa (BP-23): la empresa ya viene resuelta por el JOIN de arriba.
-      assertCompanyInScope(req, Number(refund.company_id));
-      if (refund.status === 'COMPLETED') throw ApiError.badRequest('El reembolso ya fue procesado');
+      if (!alcance) throw ApiError.notFound('Reembolso no encontrado');
+      assertCompanyInScope(req, Number(alcance.company_id));
+      await assertRefundCanClose(consultarFilas, refundId, status);
 
-      await connection.query('UPDATE refunds SET status = ?, processed_at = NOW() WHERE id = ?', [status, refundId]);
+      const providerRefundId = status === 'COMPLETED' ? await refundThroughCulqi(refundId) : null;
 
-      if (status === 'COMPLETED') {
-        await connection.query("UPDATE payments SET status = 'REFUNDED' WHERE id = ?", [refund.payment_id]);
-        await connection.query(
-          `INSERT INTO financial_transactions (company_id, booking_id, payment_id, type, direction, amount, currency, description, status, transaction_date)
-           VALUES (?, ?, ?, 'REFUND', 'DEBIT', ?, 'PEN', ?, 'COMPLETED', NOW())`,
-          [refund.company_id, refund.booking_id, refund.payment_id, refund.amount, `Reembolso de la reserva #${refund.booking_id}`],
+      await withTransaction(async (connection) => {
+        const [rows] = await connection.query(
+          `SELECT rf.*, r.company_id, bk.user_id, bk.booking_code,
+                  ol.city AS origin_city, dl.city AS destination_city
+           FROM refunds rf
+           JOIN bookings bk ON bk.id = rf.booking_id
+           JOIN trips t ON t.id = bk.trip_id
+           JOIN routes r ON r.id = t.route_id
+           JOIN locations ol ON ol.id = r.origin_location_id
+           JOIN locations dl ON dl.id = r.destination_location_id
+           WHERE rf.id = ? LIMIT 1 FOR UPDATE`,
+          [refundId],
+        );
+        const refund = (rows as Record<string, unknown>[])[0];
+        if (!refund) throw ApiError.notFound('Reembolso no encontrado');
+        // Alcance por empresa (BP-23): la empresa ya viene resuelta por el JOIN de arriba.
+        assertCompanyInScope(req, Number(refund.company_id));
+        // Segunda comprobación, sobre la fila ya bloqueada: nada pudo cambiar bajo el cerrojo del
+        // pago, pero el cierre no se escribe sin volver a verificarlo.
+        await assertRefundCanClose(
+          async <T>(sql: string, params: unknown[]) => (await connection.query(sql, params))[0] as T[],
+          refundId,
+          status,
         );
 
-        await notify(connection, {
-          userId: Number(refund.user_id),
-          event: NOTIFICATION_EVENTS.REFUND_COMPLETED,
-          eventKey: `${NOTIFICATION_EVENTS.REFUND_COMPLETED}:${refundId}`,
-          context: {
-            booking_code: String(refund.booking_code),
+        await connection.query(
+          'UPDATE refunds SET status = ?, processed_at = NOW(), provider_refund_id = COALESCE(?, provider_refund_id) WHERE id = ?',
+          [status, providerRefundId, refundId],
+        );
+
+        if (status === 'COMPLETED') {
+          // H-26 · H-27 · H-28: libro de la empresa o de la plataforma, reversión proporcional de la
+          // comisión y estado del pago según lo devuelto. Ver `recordCompletedRefund`.
+          await recordCompletedRefund(connection, {
+            id: refundId,
+            payment_id: Number(refund.payment_id),
             booking_id: Number(refund.booking_id),
-            origin_city: String(refund.origin_city),
-            destination_city: String(refund.destination_city),
-            amount: `S/ ${Number(refund.amount).toFixed(2)}`,
-          },
-        });
-      }
+            amount: String(refund.amount),
+            company_id: Number(refund.company_id),
+          });
+
+          await notify(connection, {
+            userId: Number(refund.user_id),
+            event: NOTIFICATION_EVENTS.REFUND_COMPLETED,
+            eventKey: `${NOTIFICATION_EVENTS.REFUND_COMPLETED}:${refundId}`,
+            context: {
+              booking_code: String(refund.booking_code),
+              booking_id: Number(refund.booking_id),
+              origin_city: String(refund.origin_city),
+              destination_city: String(refund.destination_city),
+              amount: `S/ ${Number(refund.amount).toFixed(2)}`,
+            },
+          });
+        }
+      });
     });
 
     await recordAudit(req, { action: 'REFUND', entityType: 'refunds', entityId: refundId, description: `Procesó reembolso (${status})` });

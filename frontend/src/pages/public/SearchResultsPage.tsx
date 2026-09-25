@@ -1,7 +1,8 @@
-import { Armchair, BadgeCheck, BedDouble, ChevronLeft, ChevronRight, Heart, Pencil, Search, Snowflake, SlidersHorizontal, Star, Tv, Usb, Wifi, X } from 'lucide-react';
+import { Armchair, BadgeCheck, BedDouble, Bus, ChevronLeft, ChevronRight, Heart, Pencil, Search, Snowflake, SlidersHorizontal, Star, Tv, Usb, Wifi, X } from 'lucide-react';
 import { useEffect, useMemo, useState } from 'react';
 import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { Button, Card, EmptyState, ErrorState } from '@/components/ui';
+import { TARJETA_FLOTANTE as FLOTANTE, TravelBackdrop } from '@/components/common/TravelBackdrop';
 import { useAsync } from '@/hooks/useAsync';
 import { ItineraryResultsPage } from './ItineraryResultsPage';
 import { publicService } from '@/services';
@@ -37,13 +38,28 @@ function departureHour(trip: PublicTrip): number {
   return Number(String(trip.departure_datetime).slice(11, 13));
 }
 
+/**
+ * `/buscar` sirve dos pantallas distintas según `?type=`.
+ *
+ * Aquí solo se decide cuál, sin más hooks que `useSearchParams` (H-25). Antes la ida vivía en
+ * este mismo componente, con sus hooks DESPUÉS del `return` del itinerario: al pasar en la
+ * misma ruta de `?type=ROUND_TRIP` a `/buscar` (el «Buscar» de la barra inferior) React
+ * ejecutaba más hooks que en el render anterior y rompía la pantalla. Como componentes
+ * distintos, cambiar de modo desmonta uno y monta el otro, cada uno con sus hooks fijos.
+ */
 export function SearchResultsPage() {
   const [searchParams] = useSearchParams();
-  const navigate = useNavigate();
 
   // Ida y vuelta y multidestino tienen su propia pantalla; la búsqueda de IDA sigue igual.
   const tripType = searchParams.get('type');
   if (tripType === 'ROUND_TRIP' || tripType === 'MULTI_CITY') return <ItineraryResultsPage />;
+  return <OneWayResultsPage />;
+}
+
+/** Resultados de la búsqueda de IDA: filtros, orden y paginación sobre los viajes encontrados. */
+function OneWayResultsPage() {
+  const [searchParams] = useSearchParams();
+  const navigate = useNavigate();
 
   const origin = searchParams.get('origin') ?? '';
   const destination = searchParams.get('destination') ?? '';
@@ -288,22 +304,49 @@ export function SearchResultsPage() {
   );
 
   return (
-    <div className="mx-auto max-w-7xl px-4 py-6 sm:px-6 lg:px-8">
+    <>
+      {/* `isolate` crea el contexto de apilamiento que necesita la capa `-z-10` del paisaje;
+          sin el, se escaparia al contexto raiz y la taparia el blanco del armazon publico.
+          El cajon de filtros de movil se queda FUERA de este contexto a proposito: dentro,
+          su `z-50` quedaria por debajo de la cabecera fija, que es `z-40` en el raiz. */}
+      <div className="relative isolate mx-auto max-w-7xl px-4 py-6 sm:px-6 lg:px-8">
+        <TravelBackdrop />
       {/* Cabecera de búsqueda */}
-      <div className="mb-6 overflow-hidden rounded-card bg-gradient-to-r from-brand-500 to-brand-600">
-        <div className="flex flex-wrap items-center justify-between gap-4 p-6">
-          <div>
-            <h1 className="text-2xl font-bold text-white sm:text-3xl">
+      <div className="relative mb-6 overflow-hidden rounded-card bg-gradient-to-r from-brand-500 via-brand-500 to-brand-600 shadow-panel">
+        {/* Cordillera al fondo del banner: la misma silueta del paisaje de la página, para
+            que la franja naranja no sea un rectángulo plano. Solo decoración. */}
+        <svg
+          viewBox="0 0 600 120"
+          preserveAspectRatio="none"
+          className="pointer-events-none absolute inset-y-0 right-0 hidden h-full w-1/2 text-white/15 sm:block"
+          fill="currentColor"
+          aria-hidden
+        >
+          <path d="M0 120V78l78-32 66 26 84-44 80 48 72-30 98 42 92-36 30 12v56Z" />
+          <path d="M0 120V98l104-22 84 24 92-18 78 26 114-22 90 20 38-10v24Z" className="text-white/10" fill="currentColor" />
+        </svg>
+
+        <div className="relative flex flex-wrap items-center justify-between gap-4 p-5 sm:p-6">
+          <div className="flex min-w-0 items-center gap-4">
+            <span
+              className="hidden h-14 w-14 shrink-0 items-center justify-center rounded-full bg-white/20 text-white ring-1 ring-white/30 sm:flex"
+              aria-hidden
+            >
+              <Bus className="h-7 w-7" />
+            </span>
+            <div className="min-w-0">
+            <h1 className="text-2xl font-bold tracking-tight text-white sm:text-[32px] sm:leading-tight">
               {origin || 'Todos los orígenes'} <span className="opacity-70">→</span> {destination || 'Todos los destinos'}
             </h1>
             <p className="mt-1 text-sm text-white/85">
               {date ? `Ida: ${formatDate(date)}` : 'Todas las fechas'} <span className="mx-1.5 opacity-60">•</span> 1 pasajero
             </p>
+            </div>
           </div>
           <button
             type="button"
             onClick={() => navigate('/')}
-            className="inline-flex items-center gap-2 rounded-control bg-white px-4 py-2.5 text-sm font-semibold text-slate-700 shadow-sm transition hover:bg-slate-50"
+            className="inline-flex shrink-0 items-center gap-2 rounded-control bg-white px-4 py-2.5 text-sm font-semibold text-slate-700 shadow-sm transition hover:bg-brand-50 hover:text-brand-700"
           >
             Modificar búsqueda
             <Pencil className="h-4 w-4" />
@@ -311,9 +354,9 @@ export function SearchResultsPage() {
         </div>
       </div>
 
-      <div className="grid gap-6 lg:grid-cols-[264px_1fr]">
+      <div className="grid gap-6 lg:grid-cols-[276px_1fr]">
         <aside className="hidden lg:block">
-          <Card>{filtersPanel}</Card>
+          <Card className={`p-5 ${FLOTANTE}`}>{filtersPanel}</Card>
         </aside>
 
         <div className="lg:hidden">
@@ -326,7 +369,7 @@ export function SearchResultsPage() {
               <select
                 value={sort}
                 onChange={(event) => setSort(event.target.value as typeof sort)}
-                className="h-11 w-full cursor-pointer rounded-control border border-border bg-white px-3 text-sm font-semibold text-slate-700"
+                className="h-11 w-full cursor-pointer rounded-control border border-white/70 bg-white/85 px-3 text-sm font-semibold text-slate-700 shadow-card backdrop-blur-md focus:border-brand-500 focus:outline-none focus:ring-2 focus:ring-brand-500/20"
               >
                 <option value="recommended">Recomendados</option>
                 <option value="price">Menor precio</option>
@@ -337,23 +380,10 @@ export function SearchResultsPage() {
           </div>
         </div>
 
-        {showFilters && (
-          <div className="fixed inset-0 z-50 lg:hidden">
-            <button type="button" className="absolute inset-0 bg-ink/40" onClick={() => setShowFilters(false)} aria-label="Cerrar filtros" />
-            <div className="absolute inset-x-0 bottom-0 max-h-[88vh] animate-slide-up overflow-y-auto rounded-t-card bg-white p-5">
-              <div className="mb-3 flex justify-end">
-                <button type="button" onClick={() => setShowFilters(false)} className="rounded-lg p-2 text-slate-500" aria-label="Cerrar">
-                  <X className="h-5 w-5" />
-                </button>
-              </div>
-              {filtersPanel}
-            </div>
-          </div>
-        )}
 
         <div className="min-w-0">
           <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
-            <p className="text-sm font-medium text-slate-600">
+            <p className="text-[15px] font-semibold text-ink">
               {results.loading ? 'Buscando viajes...' : `${filtered.length} ${filtered.length === 1 ? 'viaje encontrado' : 'viajes encontrados'}`}
             </p>
             <label className="hidden items-center gap-2 text-sm lg:flex">
@@ -361,7 +391,7 @@ export function SearchResultsPage() {
               <select
                 value={sort}
                 onChange={(event) => setSort(event.target.value as typeof sort)}
-                className="h-10 cursor-pointer rounded-control border border-border bg-white px-3 text-sm font-medium text-slate-700 focus:border-brand-500 focus:outline-none"
+                className="h-10 cursor-pointer rounded-control border border-white/70 bg-white/85 px-3 text-sm font-semibold text-slate-700 shadow-card backdrop-blur-md transition hover:border-brand-200 focus:border-brand-500 focus:outline-none focus:ring-2 focus:ring-brand-500/20"
               >
                 <option value="recommended">Recomendados</option>
                 <option value="price">Menor precio</option>
@@ -372,13 +402,13 @@ export function SearchResultsPage() {
           </div>
 
           {results.error ? (
-            <Card padded={false}>
+            <Card padded={false} className={FLOTANTE}>
               <ErrorState error={results.error} onRetry={results.reload} />
             </Card>
           ) : results.loading ? (
             <div className="space-y-4">
               {Array.from({ length: 3 }).map((_, index) => (
-                <div key={index} className="card space-y-3 p-5">
+                <div key={index} className={`card space-y-3 p-5 ${FLOTANTE}`}>
                   <div className="skeleton h-5 w-1/3" />
                   <div className="skeleton h-4 w-2/3" />
                   <div className="skeleton h-10 w-full" />
@@ -386,7 +416,7 @@ export function SearchResultsPage() {
               ))}
             </div>
           ) : filtered.length === 0 ? (
-            <Card padded={false}>
+            <Card padded={false} className={FLOTANTE}>
               <EmptyState
                 title={allTrips.length === 0 ? 'No hay viajes programados para esta búsqueda' : 'Ningún viaje coincide con los filtros'}
                 description={
@@ -422,7 +452,7 @@ export function SearchResultsPage() {
               </div>
 
               {totalPages > 1 && (
-                <nav className="mt-6 flex flex-wrap items-center justify-between gap-2 rounded-card border border-border bg-white p-3" aria-label="Paginación de resultados">
+                <nav className={`mt-6 flex flex-wrap items-center justify-between gap-2 rounded-card border p-3 ${FLOTANTE}`} aria-label="Paginación de resultados">
                   <button
                     type="button"
                     onClick={() => setPage((value) => Math.max(1, value - 1))}
@@ -462,6 +492,21 @@ export function SearchResultsPage() {
         </div>
       </div>
     </div>
+
+        {showFilters && (
+          <div className="fixed inset-0 z-50 lg:hidden">
+            <button type="button" className="absolute inset-0 bg-ink/40" onClick={() => setShowFilters(false)} aria-label="Cerrar filtros" />
+            <div className="absolute inset-x-0 bottom-0 max-h-[88vh] animate-slide-up overflow-y-auto rounded-t-card bg-white p-5 shadow-elevated">
+              <div className="mb-3 flex justify-end">
+                <button type="button" onClick={() => setShowFilters(false)} className="rounded-lg p-2 text-slate-500" aria-label="Cerrar">
+                  <X className="h-5 w-5" />
+                </button>
+              </div>
+              {filtersPanel}
+            </div>
+          </div>
+        )}
+    </>
   );
 }
 
@@ -501,7 +546,7 @@ function TripResultCard({ trip, favourite, onToggleFavourite }: { trip: PublicTr
   const available = Number(trip.seats_available ?? 0);
 
   return (
-    <Card className="relative transition hover:shadow-panel">
+    <Card className={`relative p-5 transition hover:shadow-elevated sm:p-6 ${FLOTANTE}`}>
       <button
         type="button"
         onClick={onToggleFavourite}
@@ -512,7 +557,7 @@ function TripResultCard({ trip, favourite, onToggleFavourite }: { trip: PublicTr
         <Heart className={cn('h-5 w-5', favourite && 'fill-brand-500 text-brand-500')} />
       </button>
 
-      <div className="grid gap-5 lg:grid-cols-[150px_1fr_190px]">
+      <div className="grid gap-5 lg:grid-cols-[164px_1fr_204px] lg:gap-6">
         <div>
           <p className="pr-8 text-base font-extrabold uppercase leading-tight tracking-tight text-ink">{trip.company_name}</p>
           {trip.company_rating !== null ? (
@@ -574,7 +619,7 @@ function TripResultCard({ trip, favourite, onToggleFavourite }: { trip: PublicTr
             {available > 0 ? `${available} asientos disponibles` : 'Sin asientos disponibles'}
           </p>
           <Link to={`/viaje/${trip.id}/asientos`} className={cn('mt-1', available === 0 && 'pointer-events-none opacity-50')}>
-            <Button fullWidth disabled={available === 0}>
+            <Button fullWidth disabled={available === 0} iconRight={<ChevronRight className="h-4 w-4" />}>
               Ver asientos
             </Button>
           </Link>

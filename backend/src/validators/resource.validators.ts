@@ -239,6 +239,41 @@ export const createTicketMessageSchema = z.object({
 });
 
 /* ------------------------------------------------------------------ settlements */
+
+/**
+ * F12-04 · ¿Es `value` una fecha de calendario REAL con formato exacto AAAA-MM-DD?
+ * Se comprueba con aritmética de calendario (años bisiestos incluidos), sin `Date`: así no
+ * depende de la zona horaria del proceso y rechaza «2026-02-30», «2026-1-1» o «2026/01/01».
+ */
+export function isCalendarDate(value: unknown): value is string {
+  if (typeof value !== 'string') return false;
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(value);
+  if (!match) return false;
+  const year = Number(match[1]);
+  const month = Number(match[2]);
+  const day = Number(match[3]);
+  if (year < 1 || month < 1 || month > 12 || day < 1) return false;
+  const bisiesto = (year % 4 === 0 && year % 100 !== 0) || year % 400 === 0;
+  const diasDelMes = [31, bisiesto ? 29 : 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31][month - 1]!;
+  return day <= diasDelMes;
+}
+
+/**
+ * F12-04 · periodo de una liquidación: dos fechas reales AAAA-MM-DD con inicio ≤ fin. Devuelve
+ * los errores por campo (vacío si es válido). La ruta responde 400 con ellos: es un periodo
+ * imposible, no un cuerpo mal formado (esos siguen siendo 422 por Zod).
+ */
+export function settlementPeriodErrors(periodStart: unknown, periodEnd: unknown): Record<string, string> {
+  const errores: Record<string, string> = {};
+  if (!isCalendarDate(periodStart)) errores.period_start = 'Debe ser una fecha real con formato AAAA-MM-DD';
+  if (!isCalendarDate(periodEnd)) errores.period_end = 'Debe ser una fecha real con formato AAAA-MM-DD';
+  // Con formato AAAA-MM-DD el orden de texto es el orden de calendario.
+  if (Object.keys(errores).length === 0 && String(periodStart) > String(periodEnd)) {
+    errores.period_end = 'El fin del periodo no puede ser anterior a su inicio';
+  }
+  return errores;
+}
+
 export const settlementShape = {
   company_id: id,
   period_start: z.string().min(1),

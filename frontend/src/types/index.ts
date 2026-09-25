@@ -72,6 +72,63 @@ export interface Bus {
   seats_count?: number;
 }
 
+/* --------------------------------------------- distribución física del bus (migración 010) */
+
+/** Una VERSIÓN de la distribución. Los viajes se anclan a una y ya no cambia. */
+export interface BusLayout {
+  id: number;
+  bus_id: number;
+  version: number;
+  status: 'DRAFT' | 'PUBLISHED' | 'ARCHIVED';
+  name: string | null;
+  seat_count: number;
+  published_at: string | null;
+}
+
+export interface BusLayoutDeck {
+  id: number;
+  layout_id: number;
+  deck_number: number;
+  name: string | null;
+  row_count: number;
+  column_count: number;
+}
+
+export type LayoutElementType = 'BATHROOM' | 'STAIRS' | 'DRIVER' | 'DOOR' | 'EMPTY';
+
+/** Lo que ocupa una casilla y NO se vende: baño, escalera, conductor, puerta, hueco. */
+export interface BusLayoutElement {
+  id: number;
+  deck_id: number;
+  element_type: LayoutElementType;
+  row_number: number;
+  column_number: number;
+  row_span: number;
+  col_span: number;
+  label: string | null;
+}
+
+export interface LayoutSeat {
+  id: number;
+  deck_id: number | null;
+  seat_type_id: number | null;
+  seat_type_name: string | null;
+  seat_number: string;
+  row_number: number | null;
+  column_number: number | null;
+  is_window: 0 | 1;
+  is_aisle: 0 | 1;
+  status: 'AVAILABLE' | 'INACTIVE';
+}
+
+/** La versión entera, tal como la devuelve `GET /layouts/:id`. */
+export interface LayoutTree {
+  layout: BusLayout;
+  decks: BusLayoutDeck[];
+  elements: BusLayoutElement[];
+  seats: LayoutSeat[];
+}
+
 export interface Driver {
   id: number;
   company_id: number;
@@ -196,8 +253,41 @@ export interface Seat {
   seat_type_name?: string | null;
 }
 
+/**
+ * Asiento tal como lo devuelve `GET /public/trips/:id/seats`.
+ *
+ * `price` es el precio de ESE asiento en ESE viaje —`trip_seat_type_prices` si hay fila,
+ * `trips.base_price` si no—, ya resuelto por el backend. Llega como cadena porque es un
+ * DECIMAL: conviértelo con `Number` al sumar, nunca lo recalcules.
+ */
 export interface SeatAvailability extends Seat {
   is_taken: 0 | 1;
+  price: string;
+  deck_id: number | null;
+  deck_number: number | null;
+}
+
+/** Piso de la geometría pública: la rejilla declarada y lo que no se vende. */
+export interface TripLayoutDeck {
+  id: number;
+  deck_number: number;
+  name: string | null;
+  row_count: number;
+  column_count: number;
+  elements: Array<Omit<BusLayoutElement, 'deck_id'>>;
+}
+
+/**
+ * Forma del bus del viaje, de `GET /public/trips/:id/layout`. Es la versión CONGELADA del
+ * viaje, así que un viaje vendido sobre la v1 se sigue dibujando con la v1. No trae asientos
+ * ni precios: eso vive en el mapa de asientos, y están separados a propósito.
+ */
+export interface TripLayout {
+  layout_id: number;
+  version: number;
+  status: BusLayout['status'];
+  name: string | null;
+  decks: TripLayoutDeck[];
 }
 
 export interface Location {

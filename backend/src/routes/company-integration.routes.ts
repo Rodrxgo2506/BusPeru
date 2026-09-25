@@ -1,8 +1,9 @@
 import { Router, type Request } from 'express';
-import { authenticate } from '../middleware/auth.middleware';
+import { authenticate, requireAuth } from '../middleware/auth.middleware';
 import { requirePermission } from '../middleware/permission.middleware';
 import { validate } from '../middleware/validate.middleware';
 import { recordAudit } from '../services/audit.service';
+import { assertCompanyOperable } from '../services/company-status.service';
 import * as integrations from '../services/company-integration.service';
 import { asyncHandler, sendSuccess } from '../utils/http';
 import { saveIntegrationSchema } from '../validators/company-integration.validators';
@@ -52,6 +53,8 @@ function buildRouter(resolveScope: (req: Request) => integrations.Scope): Router
     validate(saveIntegrationSchema),
     asyncHandler(async (req, res) => {
       const scope = resolveScope(req);
+      // H-36: una empresa no activa no configura integraciones (desconectar y eliminar sí).
+      if (scope.kind === 'COMPANY') await assertCompanyOperable(requireAuth(req), scope.companyId);
       const provider = String(req.params.provider);
       const { view, created } = await integrations.save(scope, provider, req.body.credentials);
 
@@ -72,6 +75,7 @@ function buildRouter(resolveScope: (req: Request) => integrations.Scope): Router
     requirePermission('companies.update'),
     asyncHandler(async (req, res) => {
       const scope = resolveScope(req);
+      if (scope.kind === 'COMPANY') await assertCompanyOperable(requireAuth(req), scope.companyId);
       const view = await integrations.connect(scope, String(req.params.provider));
 
       await recordAudit(req, {

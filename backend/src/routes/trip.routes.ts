@@ -1,11 +1,13 @@
 import { Router } from 'express';
-import { execute, query, queryOne } from '../config/database';
+import { execute, query, queryOne, withTransaction } from '../config/database';
 import { authenticate, requireAuth } from '../middleware/auth.middleware';
-import { requirePermission } from '../middleware/permission.middleware';
+import { requirePermission, requireRole } from '../middleware/permission.middleware';
 import { validate } from '../middleware/validate.middleware';
 import { recordAudit } from '../services/audit.service';
+import { cancelTrip } from '../services/booking.service';
+import { assertCompanyOperable } from '../services/company-status.service';
 import { assertCrewAssignable } from '../services/driver.service';
-import { assertTripBelongsToUser, seatMap } from '../services/trip.service';
+import { TRIP_CREATION_STATUSES, TRIP_MANUAL_TRANSITIONS, TRIP_SEAT_CAPACITY_SQL, assertTripBelongsToUser, seatMap, tripCompanyId } from '../services/trip.service';
 import { ApiError } from '../utils/ApiError';
 import { asyncHandler, sendList, sendSuccess } from '../utils/http';
 import { buildPagination, parseListQuery, safeColumn, stableOrderBy, parseId } from '../utils/query';
@@ -17,7 +19,7 @@ router.use(authenticate);
 const TRIP_SELECT = `SELECT t.*, r.company_id, r.distance_km, r.estimated_duration_minutes,
     ol.city AS origin_city, ol.name AS origin_terminal,
     dl.city AS destination_city, dl.name AS destination_terminal,
-    co.name AS company_name, b.code AS bus_code, b.plate_number, b.capacity, bt.name AS bus_type_name,
+    co.name AS company_name, b.code AS bus_code, b.plate_number, ${TRIP_SEAT_CAPACITY_SQL} AS capacity, bt.name AS bus_type_name,
     (SELECT COUNT(*) FROM bookings bk WHERE bk.trip_id = t.id AND bk.status IN ('CONFIRMED','COMPLETED')) AS bookings_count,
     (SELECT COUNT(*) FROM booking_seats bs JOIN bookings bk ON bk.id = bs.booking_id
       WHERE bs.trip_id = t.id AND bk.status IN ('CONFIRMED','COMPLETED')) AS seats_sold,
@@ -192,25 +194,50 @@ router.post(
     // La tripulación se comprueba contra la empresa de la ruta, nunca contra lo que envíe
     // el cliente: un driver_id de otra empresa se rechaza aquí.
     const companyId = await companyOfRoute(Number(body.route_id));
+    // H-36: una empresa no activa no pone viajes a la venta.
+    await assertCompanyOperable(requireAuth(req), companyId);
     await assertCrewAssignable(
       companyId,
       body.driver_id === undefined || body.driver_id === null ? null : Number(body.driver_id),
       body.co_driver_id === undefined || body.co_driver_id === null ? null : Number(body.co_driver_id),
     );
 
-    const bus = await queryOne<{ capacity: number }>('SELECT capacity FROM buses WHERE id = ?', [body.bus_id]);
+    /**
+     * El viaje nace anclado a la version publicada del bus (migracion 010).
+     *
+     * La version la determina el BACKEND a partir del bus ya validado como propio; el cliente
+     * no puede enviar `bus_layout_id` —no esta en el esquema del recurso ni en la lista de
+     * columnas escribibles—, de modo que no hay forma de colar la distribucion de otro bus.
+     *
+     * Sin version publicada no se crea el viaje: un bus sin distribucion no tiene asientos
+     * que vender, y dejar nacer el viaje con `bus_layout_id` NULL lo dejaria dependiendo de
+     * la red de compatibilidad, que existe solo para los datos anteriores a la migracion.
+     */
+    const layout = await queryOne<{ id: number; seat_count: number }>(
+      "SELECT id, seat_count FROM bus_layouts WHERE bus_id = ? AND status = 'PUBLISHED' LIMIT 1",
+      [body.bus_id],
+    );
+    if (!layout) {
+      throw ApiError.badRequest('El bus seleccionado no tiene una distribución de asientos publicada');
+    }
+    // H-30: un viaje nace programado, en embarque o retrasado; no ya en curso, realizado ni cancelado.
+    if (body.status !== undefined && !(TRIP_CREATION_STATUSES as readonly string[]).includes(String(body.status))) {
+      throw ApiError.badRequest('Un viaje nuevo solo puede crearse programado, en embarque o retrasado');
+    }
+
     const result = await execute(
-      `INSERT INTO trips (route_id, bus_id, driver_id, co_driver_id, departure_datetime, arrival_datetime, base_price, available_seats, status, boarding_notes)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      `INSERT INTO trips (route_id, bus_id, bus_layout_id, driver_id, co_driver_id, departure_datetime, arrival_datetime, base_price, available_seats, status, boarding_notes)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [
         body.route_id,
         body.bus_id,
+        layout.id,
         body.driver_id ?? null,
         body.co_driver_id ?? null,
         body.departure_datetime,
         body.arrival_datetime ?? null,
         body.base_price,
-        body.available_seats ?? bus?.capacity ?? null,
+        body.available_seats ?? layout.seat_count,
         body.status ?? 'SCHEDULED',
         body.boarding_notes ?? null,
       ],
@@ -229,6 +256,9 @@ router.put(
     const tripId = parseId(req.params.id);
     const user = requireAuth(req);
     await assertTripBelongsToUser(tripId, user);
+    // H-36: tampoco los modifica. Cancelar sigue disponible por `POST /trips/:id/cancel`.
+    const empresaDelViaje = await tripCompanyId(tripId);
+    if (empresaDelViaje !== null) await assertCompanyOperable(user, empresaDelViaje);
 
     const body = req.body as Record<string, unknown>;
     await assertRouteAndBusOwnership(
@@ -265,26 +295,169 @@ router.put(
     const columns = allowed.filter((column) => body[column] !== undefined);
     if (columns.length === 0) throw ApiError.badRequest('No se enviaron cambios');
 
-    await execute(`UPDATE trips SET ${columns.map((column) => `${column} = ?`).join(', ')} WHERE id = ?`, [
-      ...columns.map((column) => body[column]),
-      tripId,
-    ]);
+    /**
+     * `bus_layout_id` NO esta en `allowed`: el cliente no lo escribe nunca. Pero si cambia el
+     * bus, la version tiene que cambiar con el, o el viaje quedaria apuntando a la
+     * distribucion de un bus que ya no es el suyo y venderia asientos inexistentes.
+     *
+     * UN VIAJE CON VENTAS YA NO CAMBIA DE BUS (auditoria 6F, hallazgo H-01). Cambiarlo
+     * reanclaba la version y dejaba las filas de `booking_seats` apuntando a asientos de la
+     * distribucion anterior: el asiento vendido desaparecia del mapa, el viaje volvia a
+     * figurar entero libre y se podia vender dos veces. Se comprobo empiricamente antes de
+     * escribir esto. La unica correccion segura es no permitir el cambio.
+     *
+     * TODO ESTO VA EN UNA TRANSACCION Y TRAS BLOQUEAR EL VIAJE. Sin el cerrojo quedaria una
+     * ventana entre «no hay ventas» y el UPDATE por la que una compra simultanea se colaria.
+     * El viaje es ademas el PRIMER cerrojo que toma el ciclo de reservas (BP-19/BP-21:
+     * TRIP -> BOOKING -> BOOKING_SEATS), asi que tomarlo aqui primero respeta ese orden y no
+     * puede formar un ciclo. No se pide ninguna conexion adicional dentro de la transaccion.
+     */
+    const valores: unknown[] = columns.map((column) => body[column]);
+    const asignaciones = columns.map((column) => `${column} = ?`);
+
+    await withTransaction(async (connection) => {
+      const [filas] = await connection.query(
+        'SELECT id, bus_id, bus_layout_id, status FROM trips WHERE id = ? LIMIT 1 FOR UPDATE',
+        [tripId],
+      );
+      const actual = (filas as Array<{ id: number; bus_id: number; bus_layout_id: number | null; status: string }>)[0];
+      if (!actual) throw ApiError.notFound('Viaje no encontrado');
+
+      /**
+       * Transiciones hacia y desde CANCELLED (FASE 8H), comprobadas bajo el cerrojo del viaje.
+       *
+       * · Un viaje cancelado no vuelve a ningún otro estado: sus reservas ya se cancelaron y
+       *   sus reembolsos ya se abrieron, así que reactivarlo lo dejaría a la venta sin nada
+       *   de lo que tenía.
+       * · Y a CANCELLED no se llega por aquí: cancelar tiene efectos —reservas, cupos,
+       *   reembolsos, avisos— que solo aplica `POST /trips/:id/cancel`. Cambiar la columna a
+       *   secas es justo el estado a medias que esa acción existe para evitar.
+       */
+      if (body.status !== undefined) {
+        const siguiente = String(body.status);
+        if (actual.status === 'CANCELLED' && siguiente !== 'CANCELLED') {
+          throw ApiError.badRequest('Un viaje cancelado no puede cambiar de estado');
+        }
+        if (siguiente === 'CANCELLED' && actual.status !== 'CANCELLED') {
+          throw ApiError.badRequest('Para cancelar un viaje usa la acción «Cancelar viaje»: gestiona sus reservas y reembolsos');
+        }
+        // H-30: el resto de transiciones siguen el ciclo de vida; no se reabre un viaje realizado
+        // ni se completa uno que no ha salido.
+        if (siguiente !== actual.status && !(TRIP_MANUAL_TRANSITIONS[actual.status] ?? []).includes(siguiente)) {
+          throw ApiError.badRequest(`Un viaje en estado ${actual.status} no puede pasar a ${siguiente}`);
+        }
+      }
+
+      /**
+       * Enviar el MISMO bus no es cambiar de bus: no se toca el anclaje.
+       *
+       * Antes si se tocaba, y ahi habia una segunda puerta al mismo destrozo: un viaje
+       * anclado a la v1 de su bus, con ventas, al que se le reenviaba su propio `bus_id`
+       * —cosa que hace cualquier formulario que mande el registro entero— saltaba a la
+       * version publicada de hoy. Mismo bus, misma peticion inocente, mismo histórico roto.
+       */
+      const cambiaDeBus = body.bus_id !== undefined && Number(body.bus_id) !== Number(actual.bus_id);
+
+      if (cambiaDeBus) {
+        // QUE CUENTA COMO VENTA: cualquier fila de `booking_seats` del viaje, sin mirar el
+        // estado de la reserva. Esas filas no se borran nunca —una reserva cancelada o
+        // caducada conserva las suyas como histórico (BP-19)—, y todas apuntan a asientos de
+        // la distribucion actual. Limitarse a las que hoy retienen asiento dejaria que el
+        // cambio rompiera el histórico de las canceladas, que es histórico igual.
+        const [ventas] = await connection.query(
+          'SELECT COUNT(*) AS total FROM booking_seats WHERE trip_id = ?',
+          [tripId],
+        );
+        const cuantas = Number((ventas as Array<{ total: number }>)[0]?.total ?? 0);
+        if (cuantas > 0) {
+          throw ApiError.badRequest(
+            'El bus no puede cambiarse porque el viaje ya tiene reservas: cancélalas o crea un viaje nuevo con el otro bus',
+          );
+        }
+
+        const [publicadas] = await connection.query(
+          "SELECT id, seat_count FROM bus_layouts WHERE bus_id = ? AND status = 'PUBLISHED' LIMIT 1",
+          [body.bus_id],
+        );
+        const layout = (publicadas as Array<{ id: number; seat_count: number }>)[0];
+        if (!layout) throw ApiError.badRequest('El bus seleccionado no tiene una distribución de asientos publicada');
+
+        asignaciones.push('bus_layout_id = ?');
+        valores.push(layout.id);
+        // Sin ventas, el viaje entero esta libre: la disponibilidad es la capacidad de la
+        // version nueva. Dejarla como estaba era lo que permitia sobrevender al cambiar a un
+        // bus mas pequeño.
+        asignaciones.push('available_seats = ?');
+        valores.push(layout.seat_count);
+      }
+
+      await connection.query(`UPDATE trips SET ${asignaciones.join(', ')} WHERE id = ?`, [...valores, tripId]);
+    });
 
     await recordAudit(req, { action: 'UPDATE', entityType: 'trips', entityId: tripId, description: 'Actualizó viaje', newValues: body });
     sendSuccess(res, await queryOne(`${TRIP_SELECT} WHERE t.id = ?`, [tripId]));
   }),
 );
 
+/**
+ * Cancela un viaje con todos sus efectos (FASE 8H): reservas, cupos, reembolsos y avisos, en
+ * una transacción. Ver `cancelTrip`.
+ *
+ * QUIÉN. `trips.update` y además rol ADMIN o COMPANY_ADMIN. OPERATOR conserva `trips.update`
+ * para operar el viaje —estado de embarque, tripulación, notas—, pero cancelarlo mueve dinero
+ * de los pasajeros y es una decisión de la empresa. No se tocó `role_permissions`.
+ *
+ * Repetir la llamada sobre un viaje ya cancelado responde 200 sin hacer nada.
+ */
 router.post(
   '/:id/cancel',
   requirePermission('trips.update'),
+  requireRole('ADMIN', 'COMPANY_ADMIN'),
   asyncHandler(async (req, res) => {
     const tripId = parseId(req.params.id);
     await assertTripBelongsToUser(tripId, requireAuth(req));
 
-    await execute("UPDATE trips SET status = 'CANCELLED' WHERE id = ?", [tripId]);
-    await recordAudit(req, { action: 'CANCEL', entityType: 'trips', entityId: tripId, description: 'Canceló viaje' });
-    sendSuccess(res, await queryOne(`${TRIP_SELECT} WHERE t.id = ?`, [tripId]));
+    const resultado = await cancelTrip(tripId);
+
+    if (!resultado.alreadyCancelled) {
+      const reembolsos = resultado.bookings.filter((booking) => booking.refundId !== null);
+      await recordAudit(req, {
+        action: 'CANCEL',
+        entityType: 'trips',
+        entityId: tripId,
+        description: `Canceló el viaje: ${resultado.bookings.length} reserva(s) cancelada(s), ${reembolsos.length} reembolso(s) abierto(s)`,
+        newValues: {
+          bookings_cancelled: resultado.bookings.map((booking) => booking.bookingId),
+          refunds_created: reembolsos.map((booking) => booking.refundId),
+        },
+      });
+      for (const booking of resultado.bookings) {
+        await recordAudit(req, {
+          action: 'CANCEL',
+          entityType: 'bookings',
+          entityId: booking.bookingId,
+          description: `Canceló la reserva ${booking.bookingCode} por cancelación del viaje`,
+        });
+        if (booking.refundId !== null) {
+          await recordAudit(req, {
+            action: 'CREATE',
+            entityType: 'refunds',
+            entityId: booking.refundId,
+            description: `Abrió un reembolso de la reserva ${booking.bookingCode} por cancelación del viaje`,
+          });
+        }
+      }
+    }
+
+    const viaje = await queryOne<Record<string, unknown>>(`${TRIP_SELECT} WHERE t.id = ?`, [tripId]);
+    sendSuccess(res, {
+      ...viaje,
+      cancellation: {
+        already_cancelled: resultado.alreadyCancelled,
+        bookings_cancelled: resultado.bookings.length,
+        refunds_created: resultado.bookings.filter((booking) => booking.refundId !== null).length,
+      },
+    });
   }),
 );
 

@@ -1,5 +1,5 @@
 import { ArrowRight, ArrowRightLeft, Check, Clock3, Pencil, Route as RouteIcon } from 'lucide-react';
-import { useEffect, useMemo } from 'react';
+import { useEffect, useMemo, useRef } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { decodeSegments } from '@/components/common/TripSearchForm';
 import { Badge, Button, Card, EmptyState, ErrorState, LoadingState } from '@/components/ui';
@@ -24,7 +24,8 @@ export function ItineraryResultsPage() {
   const checkout = useCheckout();
 
   const tripType = (searchParams.get('type') ?? 'ROUND_TRIP') as TripType;
-  const drafts = useMemo(() => decodeSegments(searchParams.get('segments')), [searchParams]);
+  const segmentsParam = searchParams.get('segments');
+  const drafts = useMemo(() => decodeSegments(segmentsParam), [segmentsParam]);
 
   const results = useAsync(
     () =>
@@ -34,15 +35,17 @@ export function ItineraryResultsPage() {
     [searchParams.get('segments'), tripType],
   );
 
-  // Al llegar con una búsqueda nueva se reinicia el itinerario del contexto.
-  const firmaBusqueda = `${tripType}|${searchParams.get('segments') ?? ''}`;
+  // Al llegar con una búsqueda nueva se reinicia el itinerario del contexto. Solo al cambiar la
+  // búsqueda: `checkout` cambia al elegir cada tramo y se lee por ref para no reevaluar entonces.
+  const checkoutRef = useRef(checkout);
+  checkoutRef.current = checkout;
   useEffect(() => {
-    const actual = checkout.segments.map((s) => `${s.origin}>${s.destination}@${s.date}`).join('|');
-    if (drafts.length >= 2 && (checkout.tripType !== tripType || actual !== (searchParams.get('segments') ?? ''))) {
-      checkout.startItinerary(tripType, drafts);
+    const contexto = checkoutRef.current;
+    const actual = contexto.segments.map((s) => `${s.origin}>${s.destination}@${s.date}`).join('|');
+    if (drafts.length >= 2 && (contexto.tripType !== tripType || actual !== (segmentsParam ?? ''))) {
+      contexto.startItinerary(tripType, drafts);
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [firmaBusqueda]);
+  }, [tripType, segmentsParam, drafts]);
 
   const seleccionados = checkout.segments.filter((segment) => segment.tripId !== null).length;
   const completo = checkout.segments.length >= 2 && seleccionados === checkout.segments.length;

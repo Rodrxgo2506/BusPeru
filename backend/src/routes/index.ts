@@ -7,6 +7,7 @@ import driverRoutes from './driver.routes';
 import authRoutes from './auth.routes';
 import oauthRoutes from './oauth.routes';
 import { companyIntegrationRouter, platformIntegrationRouter } from './company-integration.routes';
+import { culqiConfigRouter, culqiWebhookRouter } from './culqi.routes';
 import bookingRoutes from './booking.routes';
 import dashboardRoutes from './dashboard.routes';
 import { settlementRouter, transactionRouter } from './finance.routes';
@@ -20,10 +21,21 @@ import reviewRoutes from './review.routes';
 import { permissionRouter, roleRouter } from './role.routes';
 import supportRoutes from './support.routes';
 import tripRoutes from './trip.routes';
+import {
+  busLayoutsOfBusRouter,
+  busLayoutsRouter,
+  layoutDecksRouter,
+  layoutElementsRouter,
+  layoutSeatsRouter,
+} from './bus-layout.routes';
 import userRoutes from './user.routes';
 
 const router = Router();
 
+// El webhook va ANTES que cualquier otra ruta y no lleva `authenticate`: lo llama Culqi,
+// que no tiene sesion de BusPeru. Su autenticidad se establece de otro modo (ver el archivo).
+router.use('/culqi/webhook', culqiWebhookRouter);
+router.use('/culqi', culqiConfigRouter);
 router.use('/auth/oauth', oauthRoutes);
 router.use('/auth', authRoutes);
 router.use('/company/bank-accounts', bankAccountRoutes);
@@ -38,6 +50,16 @@ router.use('/users', userRoutes);
 router.use('/roles', roleRouter);
 router.use('/permissions', permissionRouter);
 router.use('/trips', tripRoutes);
+// Versiones de distribución del bus. `/buses` va antes del CRUD genérico para que
+// `/buses/:id/layouts` no lo capture la ruta de recurso `/buses/:id`; lo que no case con
+// `/:id/layouts` sigue su camino hacia el recurso de siempre.
+router.use('/buses', busLayoutsOfBusRouter);
+router.use('/layouts', busLayoutsRouter);
+router.use('/decks', layoutDecksRouter);
+router.use('/elements', layoutElementsRouter);
+// `/layout-seats` y no `/seats`: el recurso genérico sigue sirviendo la lectura de
+// asientos, y dos routers en la misma ruta dejarían el orden decidiendo quién atiende.
+router.use('/layout-seats', layoutSeatsRouter);
 router.use('/bookings', bookingRoutes);
 router.use('/payments', paymentRouter);
 router.use('/refunds', refundRouter);

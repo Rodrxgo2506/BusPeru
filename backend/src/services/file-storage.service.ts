@@ -3,6 +3,7 @@ import fs from 'fs';
 import path from 'path';
 import { env } from '../config/env';
 import { ApiError } from '../utils/ApiError';
+import { logError } from '../utils/logger';
 
 /**
  * Almacén de archivos subidos.
@@ -137,6 +138,6 @@ export function deleteFile(reference: string): void {
     const target = absolutePath(reference);
     if (fs.existsSync(target)) fs.unlinkSync(target);
   } catch (error) {
-    console.error('No se pudo eliminar el archivo del almacén:', error);
+    logError('No se pudo eliminar el archivo del almacén', error);
   }
 }

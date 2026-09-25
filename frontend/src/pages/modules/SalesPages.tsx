@@ -218,8 +218,37 @@ function Row({ label, value, strong }: { label: string; value: React.ReactNode; 
 }
 
 export function PaymentsPage({ scope }: { scope: 'company' | 'admin' }) {
+  const toast = useToast();
+  const { hasRole, hasPermission } = useAuth();
   const summary = useAsync(() => paymentService.summary(), []);
   const list = useList<Payment>((params) => paymentService.list(params));
+
+  /**
+   * Verificación de pagos manuales (H-22). Un Yape, Plin, transferencia, efectivo u otro que
+   * registra el pasajero queda PENDING hasta que la empresa o BusPerú confirma el dinero. Lo
+   * pueden hacer ADMIN y COMPANY_ADMIN (este solo en su empresa, que decide el backend); a los
+   * demás roles no se les ofrece. La tarjeta la confirma Culqi y nunca se verifica a mano.
+   */
+  const canVerify = hasRole('ADMIN', 'COMPANY_ADMIN') && hasPermission('payments.create');
+  const [review, setReview] = useState<{ payment: Payment; action: 'approve' | 'reject' } | null>(null);
+  const [reviewing, setReviewing] = useState(false);
+
+  const submitReview = async () => {
+    if (!review) return;
+    setReviewing(true);
+    try {
+      if (review.action === 'approve') await paymentService.approve(review.payment.id);
+      else await paymentService.reject(review.payment.id);
+      toast.success(review.action === 'approve' ? 'Pago aprobado y reserva confirmada.' : 'Pago rechazado.');
+      setReview(null);
+      list.reload();
+      summary.reload();
+    } catch (error) {
+      toast.error('No se pudo verificar el pago', error instanceof ApiError ? error.message : undefined);
+    } finally {
+      setReviewing(false);
+    }
+  };
 
   const columns: Array<Column<Payment>> = [
     { key: 'code', header: 'Código', render: (payment) => <span className="font-medium text-brand-600">{payment.transaction_code ?? `#${payment.id}`}</span> },
@@ -239,6 +268,27 @@ export function PaymentsPage({ scope }: { scope: 'company' | 'admin' }) {
     { key: 'amount', header: 'Monto', sortColumn: 'p.amount', render: (payment) => <span className="font-semibold">{formatCurrency(payment.amount)}</span> },
     ...(scope === 'admin' ? [{ key: 'company', header: 'Empresa', render: (payment: Payment) => payment.company_name ?? '—', hideOnMobile: true }] : []),
     { key: 'status', header: 'Estado', render: (payment) => <StatusBadge status={payment.status} /> },
+    ...(canVerify
+      ? [
+          {
+            key: 'verify',
+            header: 'Verificación',
+            headerClassName: 'text-right',
+            className: 'text-right',
+            render: (payment: Payment) =>
+              payment.status === 'PENDING' && payment.method !== 'CARD' ? (
+                <div className="flex justify-end gap-2">
+                  <Button size="sm" variant="success" onClick={() => setReview({ payment, action: 'approve' })}>
+                    Aprobar
+                  </Button>
+                  <Button size="sm" variant="secondary" onClick={() => setReview({ payment, action: 'reject' })}>
+                    Rechazar
+                  </Button>
+                </div>
+              ) : null,
+          },
+        ]
+      : []),
   ];
 
   return (
@@ -296,6 +346,21 @@ export function PaymentsPage({ scope }: { scope: 'company' | 'admin' }) {
           </>
         )}
       </Card>
+
+      <ConfirmDialog
+        open={review !== null}
+        onClose={() => setReview(null)}
+        onConfirm={submitReview}
+        loading={reviewing}
+        destructive={review?.action === 'reject'}
+        title={review?.action === 'approve' ? 'Aprobar pago' : 'Rechazar pago'}
+        confirmLabel={review?.action === 'approve' ? 'Sí, recibí el pago' : 'Sí, rechazar'}
+        message={
+          review?.action === 'approve'
+            ? `Confirma que recibiste ${formatCurrency(review?.payment.amount ?? 0)} por ${PAYMENT_METHOD_LABELS[review?.payment.method ?? ''] ?? review?.payment.method}. La reserva ${review?.payment.booking_code ?? ''} quedará confirmada.`
+            : 'El pago quedará rechazado y la reserva no se confirmará. El pasajero podrá pagar de otra forma mientras su reserva siga vigente.'
+        }
+      />
     </>
   );
 }
@@ -457,7 +522,7 @@ export function RefundsPage({ scope }: { scope: 'company' | 'admin' }) {
         confirmLabel={target?.action === 'COMPLETED' ? 'Sí, reembolsar' : 'Sí, rechazar'}
         message={
           target?.action === 'COMPLETED'
-            ? `Se marcará el pago como reembolsado y se registrará la transacción financiera por ${formatCurrency(target?.refund.amount ?? 0)}.`
+            ? `Se registrará la devolución de ${formatCurrency(target?.refund.amount ?? 0)} y la reversión proporcional de la comisión. El pago pasará a reembolsado solo cuando se haya devuelto por completo.`
             : 'La solicitud quedará marcada como rechazada. El pasajero podrá contactar a soporte si tiene dudas.'
         }
       />

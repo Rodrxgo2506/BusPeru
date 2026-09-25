@@ -18,7 +18,9 @@ describe('Liquidaciones y reportes', () => {
       const reserva = await post('/bookings', {
         trip_id: ctx.fixtures.tripA, seat_ids: [seat.id], passenger_email: 'cliente@test.pe',
       }, ctx.sessions.customer.token);
-      await post(`/bookings/${reserva.body.data.id}/pay`, { method: 'CARD' }, ctx.sessions.customer.token);
+      // CASH y no CARD: aqui solo hace falta una venta cobrada sobre la que liquidar. Desde
+      // la integracion de Culqi, CARD significa un cobro real con tarjeta y exige su token.
+      await post(`/bookings/${reserva.body.data.id}/pay`, { method: 'CASH' }, ctx.sessions.admin.token);
     }
   });
   after(teardownSuite);
@@ -42,8 +44,16 @@ describe('Liquidaciones y reportes', () => {
   });
 
   it('no vuelve a agrupar movimientos ya liquidados', async () => {
-    const segunda = await post('/settlements', {
+    // F12-02: el MISMO periodo devuelve la liquidación ya generada (200), sin crear otra.
+    const repetida = await post('/settlements', {
       company_id: ctx.fixtures.companyA, period_start: '2020-01-01', period_end: '2035-12-31',
+    }, ctx.sessions.admin.token);
+    assert.equal(repetida.status, 200);
+    assert.ok(Number(repetida.body.data.items_count) > 0, 'es la liquidación original');
+
+    // Un periodo distinto que se solapa genera otra, pero sin los movimientos ya liquidados.
+    const segunda = await post('/settlements', {
+      company_id: ctx.fixtures.companyA, period_start: '2020-01-01', period_end: '2035-12-30',
     }, ctx.sessions.admin.token);
     assert.equal(segunda.status, 201);
     assert.equal(Number(segunda.body.data.items_count), 0, 'los movimientos ya liquidados no se repiten');
@@ -131,11 +141,16 @@ describe('Liquidaciones y reportes', () => {
    * BP-23 · el mismo endpoint tampoco comprobaba la empresa, a diferencia de `POST`.
    */
   describe('BP-10 y BP-23 · pagar una liquidación es idempotente y acotado', () => {
-    /** Liquidación nueva sobre la empresa indicada, con los movimientos que queden sin liquidar. */
+    /**
+     * Liquidación nueva sobre la empresa indicada, con los movimientos que queden sin liquidar.
+     * Cada una con su propio periodo: desde F12-02 repetir el mismo periodo devuelve la existente.
+     */
+    let periodos = 1; // el 2020-01-01 ya lo usan las pruebas de arriba
     async function nuevaLiquidacion(companyId: number) {
+      periodos += 1;
       const res = await post(
         '/settlements',
-        { company_id: companyId, period_start: '2020-01-01', period_end: '2035-12-31' },
+        { company_id: companyId, period_start: `2020-01-${String(periodos).padStart(2, '0')}`, period_end: '2035-12-31' },
         ctx.sessions.admin.token,
       );
       assert.equal(res.status, 201);
@@ -165,9 +180,10 @@ describe('Liquidaciones y reportes', () => {
       const liquidacion = await nuevaLiquidacion(ctx.fixtures.companyA);
       await put(`/settlements/${liquidacion.id}`, { status: 'PAID' }, ctx.sessions.admin.token);
 
+      // F12-03: PAID es terminal; repetirlo se rechaza (409) y no ejecuta nada.
       const repetida = await put(`/settlements/${liquidacion.id}`, { status: 'PAID' }, ctx.sessions.admin.token);
-      assert.equal(repetida.status, 200, 'reintentar sigue siendo una respuesta correcta');
-      assert.equal(repetida.body.data.status, 'PAID');
+      assert.equal(repetida.status, 409);
+      assert.equal((await query<{ status: string }>('SELECT status FROM settlements WHERE id = ?', [liquidacion.id]))[0]!.status, 'PAID');
 
       const movimientos = await payouts(liquidacion.settlement_code);
       assert.equal(movimientos.length, 1, 'el ataque de la auditoría dejaba dos');
@@ -176,7 +192,8 @@ describe('Liquidaciones y reportes', () => {
     it('ni cinco reintentos seguidos alteran el importe acumulado', async () => {
       const liquidacion = await nuevaLiquidacion(ctx.fixtures.companyA);
       for (let intento = 0; intento < 5; intento += 1) {
-        assert.equal((await put(`/settlements/${liquidacion.id}`, { status: 'PAID' }, ctx.sessions.admin.token)).status, 200);
+        const esperado = intento === 0 ? 200 : 409;
+        assert.equal((await put(`/settlements/${liquidacion.id}`, { status: 'PAID' }, ctx.sessions.admin.token)).status, esperado);
       }
 
       const movimientos = await payouts(liquidacion.settlement_code);
@@ -191,8 +208,7 @@ describe('Liquidaciones y reportes', () => {
         put(`/settlements/${liquidacion.id}`, { status: 'PAID' }, ctx.sessions.admin.token),
         put(`/settlements/${liquidacion.id}`, { status: 'PAID' }, ctx.sessions.admin.token),
       ]);
-      assert.equal(uno.status, 200);
-      assert.equal(dos.status, 200);
+      assert.deepEqual([uno.status, dos.status].sort(), [200, 409], 'una paga; la otra encuentra la liquidación ya pagada');
 
       const movimientos = await payouts(liquidacion.settlement_code);
       assert.equal(movimientos.length, 1, 'el bloqueo de fila serializa las dos transiciones');
@@ -227,9 +243,10 @@ describe('Liquidaciones y reportes', () => {
       assert.equal(pagada.body.data.status, 'PAID');
       assert.equal((await payouts(liquidacion.settlement_code)).length, 1, 'PROCESSING → PAID sí emite, una vez');
 
+      // F12-03: PAID es terminal: no se anula ni se vuelve atrás.
       const cancelada = await put(`/settlements/${liquidacion.id}`, { status: 'CANCELLED' }, ctx.sessions.admin.token);
-      assert.equal(cancelada.body.data.status, 'CANCELLED');
-      assert.equal((await payouts(liquidacion.settlement_code)).length, 1, 'salir de PAID no borra ni añade movimientos');
+      assert.equal(cancelada.status, 409);
+      assert.equal((await payouts(liquidacion.settlement_code)).length, 1, 'ni se borra ni se añade el pago');
     });
 
     it('un rol de empresa no puede tocar la liquidación de otra empresa', async () => {

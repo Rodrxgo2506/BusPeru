@@ -5,9 +5,23 @@ import { authenticate, requireAuth } from '../middleware/auth.middleware';
 import { requirePermission } from '../middleware/permission.middleware';
 import { validate } from '../middleware/validate.middleware';
 import { recordAudit } from '../services/audit.service';
-import { cancelBooking, confirmBookingPayment, createBooking } from '../services/booking.service';
+import {
+  canVerifyManualPayments,
+  cancelBooking,
+  confirmBookingPayment,
+  createBooking,
+  registerManualPayment,
+} from '../services/booking.service';
+import { payBookingWithCard } from '../services/payment.service';
 import { expireDueBookings, type ExpiryScope } from '../services/booking-expiry.service';
-import { createItinerary, findGroupBookingIds, findItinerary, payItinerary } from '../services/itinerary.service';
+import {
+  assertItineraryMethodSupported,
+  createItinerary,
+  findGroupBookingIds,
+  findItinerary,
+  payItinerary,
+  registerItineraryManualPayment,
+} from '../services/itinerary.service';
 import { createItinerarySchema } from '../validators/itinerary.validators';
 import { ApiError } from '../utils/ApiError';
 import { asyncHandler, sendList, sendSuccess } from '../utils/http';
@@ -57,14 +71,47 @@ const createBookingSchema = z.object({
     .optional(),
 });
 
-const payBookingSchema = z.object({
+/**
+ * Cuerpo del pago.
+ *
+ * `provider_transaction_id` **ya no se acepta del cliente**. Antes se guardaba tal cual como
+ * prueba de cobro, de modo que cualquiera podía confirmar una reserva inventando un
+ * identificador. Ahora, con tarjeta, el único dato que llega es el token que Culqi entregó
+ * al navegador; el identificador de la transacción lo devuelve Culqi al backend.
+ */
+const payBookingSchema = z
+  .object({
+    method: z.enum(['CARD', 'YAPE', 'PLIN', 'TRANSFER', 'CASH', 'OTHER']),
+    /** `tkn_…` de Culqi. Obligatorio con tarjeta, prohibido en el resto. */
+    token: optionalText(120),
+  })
+  .superRefine((value, ctx) => {
+    if (value.method === 'CARD' && !value.token) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, message: 'Falta el token de pago', path: ['token'] });
+    }
+  });
+
+/**
+ * Pago de un itinerario. Solo el metodo: aqui NO se acepta token de Culqi.
+ *
+ * El cobro con tarjeta por pasarela esta implementado para la compra de un tramo. Un
+ * itinerario son N reservas de N empresas y un token de Culqi sirve para un unico cargo, asi
+ * que cobrar un grupo exige decidir antes si se hace un cargo por el total o uno por tramo.
+ * Hasta esa decision no se acepta token y `CARD` se rechaza con 400 en la ruta
+ * (`assertItineraryMethodSupported`, hallazgo H-23): no se aparenta un cobro que no ocurre.
+ */
+const payItinerarySchema = z.object({
   method: z.enum(['CARD', 'YAPE', 'PLIN', 'TRANSFER', 'CASH', 'OTHER']),
-  provider_transaction_id: optionalText(150),
 });
 
+/**
+ * `request_refund` se sigue aceptando por compatibilidad, pero ya no decide nada (H-50): una reserva
+ * pagada abre su reembolso siempre. Antes, además, `z.coerce.boolean` convertía el texto "false" en
+ * `true`; como el valor se ignora, eso deja de importar.
+ */
 const cancelBookingSchema = z.object({
   reason: optionalText(500),
-  request_refund: z.coerce.boolean().optional(),
+  request_refund: z.unknown().optional(),
 });
 
 /**
@@ -158,17 +205,42 @@ router.get(
 router.post(
   '/itineraries/:id/pay',
   requirePermission('payments.create', 'bookings.create'),
-  validate(payBookingSchema),
+  validate(payItinerarySchema),
   asyncHandler(async (req, res) => {
     const user = requireAuth(req);
     const groupId = parseId(req.params.id);
+
+    // H-23: la tarjeta se rechaza antes de cualquier lectura o efecto (ver el servicio).
+    assertItineraryMethodSupported(req.body.method);
 
     // La comprobación de visibilidad se hace ANTES de abrir la transacción, para no
     // sostenerla mientras se resuelven permisos.
     const bookingIds = await findGroupBookingIds(groupId, user);
     for (const bookingId of bookingIds) await findBookingOrFail(req, bookingId);
 
-    await payItinerary(groupId, user, req.body.method, req.body.provider_transaction_id ?? null);
+    // PENDIENTE DECLARADO: el cobro con tarjeta por Culqi está implementado para la compra
+    // de un solo tramo. Un itinerario son N reservas de N empresas y un token de Culqi sirve
+    // para un único cargo, así que cobrar un grupo exige decidir antes si se hace un cargo
+    // por el total o uno por tramo. Hasta esa decisión la tarjeta queda rechazada arriba y
+    // los demás métodos siguen igual, sin pasarela.
+    //
+    // H-22: igual que en la reserva suelta, el pasajero no confirma un pago manual. Sus
+    // tramos quedan con el pago PENDING y los verifica el backoffice de cada empresa.
+    if (!canVerifyManualPayments(user)) {
+      await registerItineraryManualPayment(groupId, user, req.body.method);
+      await recordAudit(req, {
+        action: 'PAYMENT',
+        entityType: 'booking_groups',
+        entityId: groupId,
+        description: `Registró un pago ${req.body.method} del itinerario pendiente de verificación (${bookingIds.length} tramos)`,
+      });
+      const itinerario = await findItinerary(groupId, user);
+      const segmentos = (itinerario.segments ?? []) as Array<{ status?: unknown }>;
+      sendSuccess(res, itinerario, segmentos.some((segmento) => segmento.status === 'PENDING') ? 202 : 200);
+      return;
+    }
+
+    await payItinerary(groupId, user, req.body.method, null);
 
     await recordAudit(req, {
       action: 'PAYMENT',
@@ -295,7 +367,57 @@ router.post(
     const bookingId = parseId(req.params.id);
     await findBookingOrFail(req, bookingId);
 
-    await confirmBookingPayment(bookingId, req.body.method, req.body.provider_transaction_id ?? null);
+    // Con tarjeta se cobra de verdad contra Culqi antes de confirmar nada. El resto de
+    // métodos son cobros presenciales o por transferencia, sin pasarela: ver H-22 abajo.
+    if (req.body.method === 'CARD') {
+      const resultado = await payBookingWithCard(requireAuth(req), bookingId, String(req.body.token));
+
+      if (resultado.status !== 'PAID') {
+        await recordAudit(req, {
+          action: 'PAYMENT',
+          entityType: 'bookings',
+          entityId: bookingId,
+          description: `Intento de pago con tarjeta no completado (${resultado.status})`,
+        });
+        // Un rechazo del banco no es un fallo del servidor: se devuelve 402, que es lo que
+        // significa exactamente «hace falta un medio de pago que funcione». Un resultado
+        // desconocido (H-29, `UNCONFIRMED`) conserva el código, pero su mensaje no afirma nada.
+        throw new ApiError(402, resultado.message);
+      }
+
+      await recordAudit(req, {
+        action: 'PAYMENT',
+        entityType: 'bookings',
+        entityId: bookingId,
+        description: 'Confirmó el pago con tarjeta (Culqi)',
+      });
+      sendSuccess(res, await findBookingOrFail(req, bookingId));
+      return;
+    }
+
+    // H-22: un pago manual solo lo da por cobrado el backoffice (ADMIN o COMPANY_ADMIN, este
+    // dentro de su empresa, que ya comprobó `findBookingOrFail`). Cualquier otro rol —el
+    // pasajero— lo deja registrado y PENDING, sin confirmar la reserva ni escribir movimientos:
+    // lo aprueba o rechaza después `POST /payments/:id/approve|reject`. Lo decide el ROL
+    // autenticado, nunca un campo del cuerpo, que el esquema además descarta.
+    const user = requireAuth(req);
+    if (!canVerifyManualPayments(user)) {
+      const registro = await registerManualPayment(bookingId, req.body.method, user.id);
+      if (registro === 'REGISTERED') {
+        await recordAudit(req, {
+          action: 'PAYMENT',
+          entityType: 'bookings',
+          entityId: bookingId,
+          description: `Registró un pago ${req.body.method} pendiente de verificación`,
+        });
+      }
+      const booking = await findBookingOrFail(req, bookingId);
+      // 202: aceptado y registrado, pero el cobro todavía no está verificado.
+      sendSuccess(res, booking, booking.status === 'PENDING' ? 202 : 200);
+      return;
+    }
+
+    await confirmBookingPayment(bookingId, req.body.method, null);
     await recordAudit(req, {
       action: 'PAYMENT',
       entityType: 'bookings',
@@ -343,7 +465,7 @@ router.post(
     const bookingId = parseId(req.params.id);
     await findBookingOrFail(req, bookingId);
 
-    await cancelBooking(bookingId, req.body.reason ?? null, Boolean(req.body.request_refund));
+    await cancelBooking(bookingId, req.body.reason ?? null);
     await recordAudit(req, {
       action: 'CANCEL',
       entityType: 'bookings',

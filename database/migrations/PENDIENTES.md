@@ -3,13 +3,21 @@
 `Dump20260831.sql` es la fuente de verdad de la base de datos y **no se ha modificado**. Los mockups muestran
 funcionalidades que la estructura actual no soporta. Cada una se documenta aquí con la migración segura propuesta.
 
-Cada sección declara su estado. Hay tres, y conviene no confundirlos:
+Cada sección declara su estado. Hay cuatro, y conviene no confundirlos:
 
 | Estado | Significado |
 | --- | --- |
-| **Implementado** | La migración se aplicó y la funcionalidad está construida y probada. Secciones 1, 2, 3, 4, 5, 6 y 8 (migraciones `002`–`009`). |
+| **Implementado** | La migración se aplicó y la funcionalidad está construida y probada. Secciones 1, 2, 3, 4, 5, 6, 8 y 9 (migraciones `002`–`011`), y la sección 11, que no necesitó migración. |
+| **Creada, pendiente en la base real** | Migración `012-drop-redundant-code-indexes.sql` (auditoría H-19): quita `idx_bookings_code` e `idx_coupons_code`, duplicados de sus índices únicos. Migración `013-settlement-item-unique-transaction.sql` (auditoría F12-02): UNIQUE sobre `settlement_items.financial_transaction_id`. Migración `014-revoked-sessions.sql` (auditoría F12-07): tabla `revoked_sessions` para revocar tokens al cerrar sesión; debe aplicarse antes de desplegar el código que la consulta. La suite aplica las tres en `busperu_test`; **ninguna está aplicada en `busperu`**. |
+| **Parcial** | Una parte está construida y otra no; la propia sección dice cuál. Hoy: la configuración de precios por tipo de asiento (sección 9) y la creación de reseñas desde el portal del cliente (sección 10). |
 | **Propuesto, sin ejecutar** | Ninguna sección queda en este estado. |
 | **Decisión: no implementar** | Se evaluó y se decidió deliberadamente **no** construirlo. No es un pendiente. Sección 7. |
+
+La sección 10 recoge el resultado de la auditoría H-18 sobre servicios del frontend sin pantalla, y la 12 el de la
+auditoría H-21 sobre `ON UPDATE` en tres claves ajenas, que no requirió cambio. La sección 9 no
+nace de un mockup concreto sino del modelo de datos: versiona la distribución física del bus para
+que un viaje vendido no cambie de mapa. Cierra con su propia lista de lo **parcial** y de la **deuda
+técnica**.
 
 ---
 
@@ -524,6 +532,523 @@ reutiliza en lugar de crear otro.
 
 ---
 
+## 9. Distribución física versionada del bus y precios por tipo de asiento
+
+**Qué faltaba:** `seats` colgaba directamente de `buses`, y el mapa de un viaje se resolvía contra los asientos
+**vivos** del bus: reordenar un bus le cambiaba el mapa a los viajes ya vendidos. No existía la noción de piso, ni
+de elementos que ocupan sitio sin ser asientos (baño, escalera, conductor, puerta), ni un precio distinto por tipo
+de asiento dentro de un mismo viaje.
+
+**Estado actual: implementado, con una parte parcial** (migraciones `010-bus-layout-versioning.sql` y
+`011-trip-seat-type-prices-restrict.sql`). La configuración de los precios por tipo de asiento **no tiene API ni
+pantalla**: ver 9.8.
+
+| Pieza | Estado |
+| --- | --- |
+| Versionado DRAFT → PUBLISHED → ARCHIVED, clonación y publicación | **Implementado** |
+| Pisos, rejilla, asientos y elementos no-asiento, con validación de colisiones | **Implementado** |
+| Editor de la distribución (Portal Empresa y Panel Admin) | **Implementado** |
+| Viaje anclado a una versión concreta | **Implementado** |
+| Mapa de asientos del cliente dibujado desde la distribución | **Implementado** |
+| Capacidad vendible (`seat_count` sin asientos `INACTIVE`) | **Implementado** |
+| Resolución del precio por tipo de asiento y congelado en la venta | **Implementado** |
+| Alta y edición de precios por tipo de asiento | **Parcial**: solo por base de datos |
+
+### 9.1 Modelo
+
+```
+buses
+  └── bus_layouts            una VERSIÓN de la distribución (v1, v2, …)
+        └── bus_layout_decks       sus pisos, cada uno con su rejilla filas × columnas
+              ├── seats                  asientos: se venden
+              └── bus_layout_elements    baño, escalera, conductor, puerta, hueco: no se venden
+
+trips.bus_layout_id ──→ bus_layouts   el viaje fija su versión al crearse
+trip_seat_type_prices                 precio por (viaje, tipo de asiento)
+booking_seats.price                   precio realmente cobrado, congelado en la venta
+```
+
+`seats` conserva `bus_id`: cada asiento pertenece a la vez a un bus, a una versión (`layout_id`) y a un piso
+(`deck_id`).
+
+### 9.2 Esquema
+
+**Migración `010` — aditiva y reejecutable.** No hay `DROP TABLE`, `DELETE` ni `TRUNCATE`. Los `ALTER` van guardados
+con el patrón `PREPARE/EXECUTE` y los rellenos con `WHERE … IS NULL` / `NOT EXISTS`, de modo que una segunda pasada
+no duplica nada. La base pasa de 41 a **45 tablas**.
+
+| Tabla / columna | Contenido |
+| --- | --- |
+| `bus_layouts` | `bus_id`, `version`, `status` (`DRAFT`/`PUBLISHED`/`ARCHIVED`), `name`, `seat_count`, `published_at`. Únicas: `uq_layout_bus_version (bus_id, version)` y `uq_layout_published_bus (published_scope)`. |
+| `bus_layouts.published_scope` | Columna **generada** `STORED`: vale `bus_id` si la fila está publicada y `NULL` en otro caso. Como los `NULL` no colisionan en un índice único, admite cualquier número de versiones `DRAFT` o `ARCHIVED` por bus y **como mucho una `PUBLISHED`**. Es la técnica de `company_integrations.company_scope` (sección 5). |
+| `bus_layout_decks` | `layout_id`, `deck_number`, `name`, `row_count`, `column_count`. Única `(layout_id, deck_number)`. La rejilla se llama `row_count`/`column_count` porque `rows` es palabra reservada en MariaDB 10.4. |
+| `bus_layout_elements` | `deck_id`, `element_type` (`BATHROOM`, `STAIRS`, `DRIVER`, `DOOR`, `EMPTY`), `row_number`, `column_number`, `row_span` y `col_span` (ambos 1 por defecto), `label`. |
+| `trip_seat_type_prices` | `trip_id`, `seat_type_id`, `price`. Única `(trip_id, seat_type_id)`. |
+| `seats.layout_id`, `seats.deck_id` | Nuevas, `NULL`, con índice. |
+| `trips.bus_layout_id` | Nueva, `NULL`, con índice. |
+| Índice único de `seats` | `uq_bus_seat_number (bus_id, seat_number)` se sustituye por `uq_layout_seat_number (layout_id, seat_number)`: el asiento «01» existe una vez **por versión**. Primero se crea el nuevo y después se retira el viejo. |
+
+**Claves ajenas de la `010`:**
+
+| Clave | ON DELETE | Por qué |
+| --- | --- | --- |
+| `fk_bus_layouts_bus` | CASCADE | La versión es parte del bus. |
+| `fk_bus_layout_decks_layout`, `fk_bus_layout_elements_deck` | CASCADE | El piso y sus elementos son parte de la versión. |
+| `fk_seats_layout`, `fk_seats_deck` | CASCADE | Igual que `fk_seats_bus`. El histórico no corre peligro: `fk_booking_seats_seat` es RESTRICT y no deja borrar un asiento vendido. |
+| `fk_trips_bus_layout` | RESTRICT | El candado del histórico: **una versión usada por un viaje no se puede borrar**. |
+| `fk_trip_seat_type_prices_trip` | CASCADE | Sin viaje, sus precios no significan nada. |
+| `fk_trip_seat_type_prices_type` | CASCADE → **RESTRICT en la `011`** | Ver abajo. |
+
+**Relleno de la `010`.** Cada bus existente recibió una versión 1 `PUBLISHED` con un piso 1 cuya rejilla se calculó
+con el `MAX(row_number)` y `MAX(column_number)` de sus asientos (0 si no los tenía). Todos sus asientos y **todos sus
+viajes, incluidos los pasados**, quedaron anclados a esa versión. No cambió ningún id, número, fila, columna, tipo ni
+estado de asiento, y `buses.capacity` no se tocó.
+
+**Migración `011` — un tipo de asiento con precios ya no se borra.** `fk_trip_seat_type_prices_type` pasa de
+`ON DELETE CASCADE` a **`ON DELETE RESTRICT`** y conserva `ON UPDATE CASCADE`. Con CASCADE, borrar un tipo del
+catálogo arrastraba en silencio los precios configurados en todos los viajes, y esos asientos pasaban a cobrar
+`trips.base_price` sin que nadie tocara el viaje. Ahora el borrado falla con `ER_ROW_IS_REFERENCED_2`, que
+`error.middleware.ts` traduce a **409**. `fk_trip_seat_type_prices_trip` sigue en CASCADE. La `011` no cambia columnas,
+índices ni datos, y es reejecutable: solo actúa si la clave sigue en CASCADE.
+
+### 9.3 Ciclo de vida de una versión
+
+| Estado | Qué significa | ¿Se edita? |
+| --- | --- | --- |
+| `DRAFT` | Borrador. | **Sí.** Es el único estado editable. |
+| `PUBLISHED` | Versión vigente del bus. Como mucho una por bus. | **No.** Para cambiarla se clona. |
+| `ARCHIVED` | Versión anterior. Los viajes que la usan la siguen usando. | **No.** |
+
+- **Copy-on-write.** Ninguna operación modifica una versión publicada o archivada; el servicio responde «Una versión
+  publicada o archivada no se modifica: clónala para editarla».
+- **Crear un borrador** (`POST /buses/:id/layouts`) crea una versión `DRAFT` vacía con `seat_count` 0 y, si no se
+  indican pisos, un «Piso 1» con rejilla 0 × 0. El número de versión lo calcula el servidor; `status`, `version` y
+  `bus_id` no se leen del cuerpo. El backend no impide que un bus tenga varios borradores.
+- **Clonar** (`POST /layouts/:id/clone`) copia pisos, elementos y asientos —con su estado— a una versión `DRAFT`
+  nueva, en una sola transacción. El `seat_count` del clon se **recuenta** sobre los asientos copiados; no se hereda.
+- **Publicar** (`POST /layouts/:id/publish`) exige un `DRAFT` con al menos un piso y al menos un asiento, sin asientos
+  fuera de un piso de la versión, y valida la geometría completa de cada piso (9.4). Después archiva la versión
+  publicada anterior, recalcula `seat_count`, marca la nueva como `PUBLISHED` y copia su `seat_count` a
+  `buses.capacity`. **Los viajes ya creados no cambian de versión.**
+- **Eliminar** (`DELETE /layouts/:id`) solo borra un `DRAFT` sin viajes asociados.
+
+### 9.4 Pisos, asientos, elementos y geometría
+
+La rejilla de cada piso va de `(1, 1)` a `(row_count, column_count)`. **Un 0 en `row_count` o `column_count` significa
+«rejilla sin declarar» y no limita**, para no dejar inservibles los pisos heredados de la migración.
+
+**Al colocar o mover** (en el editor, dentro de la transacción de la operación):
+
+- Fila y columna empiezan en 1, y la pieza, con toda su extensión, debe caber en la rejilla.
+- Un **elemento ocupa todas las casillas** de su `row_span × col_span`, no solo la de origen.
+- Ninguna casilla puede estar ocupada a la vez por dos piezas: dos asientos, dos elementos o un asiento y un elemento.
+- Un asiento necesita número (máximo 10 caracteres) único dentro de la versión; su tipo, si se indica, debe existir;
+  su estado es `AVAILABLE` o `INACTIVE`. Puede moverse a otro piso **de la misma versión**, nunca a otra versión ni a
+  otro bus.
+- `row_span` y `col_span` deben ser 1 o mayores, y el tipo de elemento, uno de los cinco.
+- **La rejilla no puede encoger** por debajo de los asientos ni de la extensión completa de los elementos que ya
+  contiene.
+- Un piso solo se borra **vacío**: con asientos o elementos se rechaza; nunca se borra en cascada.
+- Un asiento con reservas no se puede borrar.
+
+**Al publicar** se repasa además cada piso entero con la misma geometría del editor: posición y extensión válidas de
+cada elemento, elementos dentro de la rejilla, ningún par de elementos solapado y ningún asiento en una casilla ya
+ocupada. Así un dato que no entró por el editor —una carga manual, un clon de datos antiguos— no llega publicado.
+
+**Concurrencia.** Todas las escrituras del editor bloquean la fila del bus (`SELECT … FROM buses … FOR UPDATE`) y
+releen el estado dentro de la transacción. El ciclo de reserva bloquea viaje → reserva → asientos de la reserva y
+nunca `buses`, así que los dos conjuntos de cerrojos son disjuntos y no pueden formar un ciclo.
+
+### 9.5 Viaje y versión
+
+- `POST /trips` ancla el viaje a la versión **publicada** del bus en ese momento y, si no se envía `available_seats`,
+  lo inicializa con su `seat_count`. Un bus sin versión publicada no admite viajes. El cliente no puede enviar
+  `bus_layout_id`.
+- `PUT /trips/:id` **no permite cambiar el bus de un viaje que ya tiene `booking_seats`**. Sin ventas, cambiar de bus
+  reancla el viaje a la versión publicada del bus nuevo y reinicia `available_seats` con su `seat_count`. Enviar el
+  mismo bus no cuenta como cambio. Todo ocurre en una transacción, tras bloquear el viaje.
+- El mapa de un viaje sale de **su** versión (`trips.bus_layout_id`) aunque el bus ya vaya por otra. Solo si el viaje
+  no tuviera versión propia se usa la publicada del bus: es una red de transición para datos anteriores a la `010`.
+
+### 9.6 Capacidad vendible
+
+**`bus_layouts.seat_count` es el número de asientos VENDIBLES de la versión: los `AVAILABLE`.** Un asiento `INACTIVE`
+sigue existiendo, ocupa su casilla y se dibuja en el mapa, pero **no cuenta**, y la reserva lo rechaza con «El
+asiento N no está habilitado».
+
+| Dato | Definición actual |
+| --- | --- |
+| `bus_layouts.seat_count` | Asientos de la versión con `status = 'AVAILABLE'`. Definido una sola vez en `SELLABLE_SEAT_COUNT_SQL` (`bus-layout.service.ts`) y usado por el editor, la clonación, la publicación, el seed y las fixtures de la suite. Se recalcula al crear, borrar o **cambiar el estado** de un asiento. |
+| `buses.capacity` | Caché: al publicar se copia el `seat_count` de la versión publicada. Es la capacidad **actual** del bus, no la de sus viajes. Sigue siendo una columna escribible de `PUT /buses/:id`, así que un cambio manual prevalece hasta la siguiente publicación. En la capacidad de un viaje solo interviene si el viaje no tiene versión propia. |
+| Capacidad de un viaje | `TRIP_SEAT_CAPACITY_SQL` (`trip.service.ts`): el `seat_count` de la versión del viaje y, solo si el viaje no tuviera versión, `buses.capacity`. La usan la búsqueda pública, el listado de viajes, el panel, los reportes y las fichas de viaje de la API de integración. |
+| `trips.available_seats` | Nace con el `seat_count` de la versión; baja al vender y, al liberar asientos, no supera la capacidad del viaje. |
+| `seats_available` (búsqueda pública) | Capacidad del viaje − asientos retenidos (reservas `CONFIRMED`, `COMPLETED` o `PENDING` dentro de plazo). |
+| `seats_count` (`GET /buses`) | Otro dato: número de **filas de asiento** de la versión publicada del bus, `INACTIVE` incluidos. La pantalla de flota lo muestra como «Asientos creados», junto a «Capacidad». |
+
+> **Nota histórica.** El relleno de la `010` calculó `seat_count` contando **todas** las filas, y el `COMMENT` de la
+> columna en el esquema sigue diciendo «Cache del numero de asientos de la version». La semántica vendible rige en el
+> código desde la corrección H-15. En la base actual las dos cifras coinciden porque todos sus asientos son
+> `AVAILABLE`, así que no hizo falta migración ni relleno.
+
+### 9.7 API de integración: disponibilidad de un viaje
+
+`GET /integration/v1/trips/:id/availability` (autenticado con `X-API-Key`) devuelve el mapa completo de asientos de la
+versión del viaje y este desglose, calculado sobre esa lista:
+
+| Campo | Significado |
+| --- | --- |
+| `capacity` | Capacidad **física** del mapa: todos los asientos de la versión, `INACTIVE` incluidos. |
+| `seats_taken` | Asientos retenidos por una reserva (`CONFIRMED`, `COMPLETED` o `PENDING` dentro de plazo). |
+| `seats_inactive` | Asientos físicos no vendibles (`INACTIVE`). |
+| `seats_available` | Asientos vendibles libres: `capacity − seats_taken − seats_inactive`. |
+
+En esa respuesta se cumple `capacity = seats_taken + seats_inactive + seats_available`, y `seats_available` coincide
+con el de la búsqueda pública. En cambio, el `capacity` de `GET /integration/v1/trips` y de
+`GET /integration/v1/trips/:id` —igual que el de la búsqueda pública— es la capacidad **vendible**
+(`TRIP_SEAT_CAPACITY_SQL`). Con asientos `INACTIVE` las dos cifras difieren exactamente en `seats_inactive`.
+
+### 9.8 Precios por tipo de asiento
+
+| | |
+| --- | --- |
+| Resolución | Precio de un asiento en un viaje = `trip_seat_type_prices.price` del par (viaje, tipo del asiento) y, si no hay fila, `trips.base_price`. |
+| Mapa | `GET /public/trips/:id/seats` y `GET /trips/:id/seats` proyectan ese `price` en cada asiento. El frontend lo muestra y suma, sin multiplicar el precio base por la cantidad. |
+| Cobro | `createBooking` lee los precios con los asientos ya bloqueados y calcula el importe con ellos. |
+| Histórico | El precio cobrado se escribe en **`booking_seats.price`** al vender. Cambiar después `trips.base_price` o `trip_seat_type_prices` no reescribe las ventas hechas. |
+| Borrado de un tipo | Rechazado con 409 mientras tenga precios configurados (migración `011`). |
+| **Configuración** | **Parcial.** No hay endpoint ni pantalla que cree, edite o borre filas de `trip_seat_type_prices`: hoy solo se cargan directamente en la base. Sin filas, cada viaje cobra su `base_price`. El editor de distribución no tiene campo de precio a propósito: el precio es por viaje, no por distribución. |
+
+### 9.9 Endpoints
+
+Permisos reutilizados, **ninguno nuevo**: leer `buses.view`, crear y editar `buses.update`, borrar `buses.delete`. En el
+dump, ADMIN y COMPANY_ADMIN tienen los tres y OPERATOR solo `buses.view`, así que consulta pero no edita. `company_id`,
+`layout_id` y `bus_id` nunca se aceptan del cliente: la propiedad se resuelve hacia arriba (asiento → piso → versión →
+bus → empresa). Un bus de otra empresa responde **403** «El bus pertenece a otra empresa». Todas las escrituras quedan
+en `audit_logs`.
+
+| Endpoint | Permiso | Qué hace |
+| --- | --- | --- |
+| `GET /buses/:id/layouts` | `buses.view` | Versiones del bus, de la más reciente a la más antigua. |
+| `POST /buses/:id/layouts` | `buses.update` | Crea un borrador. |
+| `GET /layouts/:id` | `buses.view` | Árbol completo: `{ layout, decks, elements, seats }`. |
+| `POST /layouts/:id/clone` | `buses.update` | Clona en un borrador nuevo. |
+| `POST /layouts/:id/publish` | `buses.update` | Publica un borrador y archiva la versión anterior. |
+| `DELETE /layouts/:id` | `buses.delete` | Borra un borrador sin viajes. |
+| `GET` / `POST /layouts/:id/decks` | `buses.view` / `buses.update` | Lista o añade pisos. |
+| `PATCH` / `DELETE /decks/:id` | `buses.update` / `buses.delete` | Edita número, nombre o rejilla; borra un piso vacío. |
+| `GET` / `POST /decks/:id/elements` | `buses.view` / `buses.update` | Lista o coloca elementos. |
+| `PATCH` / `DELETE /elements/:id` | `buses.update` / `buses.delete` | Edita tipo, posición, extensión o etiqueta; borra. |
+| `GET` / `POST /decks/:id/seats` | `buses.view` / `buses.update` | Lista o coloca asientos. |
+| `PATCH` / `DELETE /layout-seats/:id` | `buses.update` / `buses.delete` | Edita número, tipo, posición, piso, estado, ventana o pasillo; borra uno sin reservas. |
+| `GET /public/trips/:id/layout` | Público | Geometría de la versión **del viaje**: `{ layout_id, version, status, name, decks: [{ id, deck_number, name, row_count, column_count, elements }] }`. **Sin asientos, sin precios y sin datos de empresa.** El id de la versión no se acepta como parámetro: sale del viaje. Aplica la misma visibilidad que `GET /public/trips/:id`. |
+| `GET /public/trips/:id/seats` | Público | Asientos de la versión del viaje con `status`, `deck_id`, `deck_number`, `price` e `is_taken`. Los elementos no salen aquí. |
+
+**El recurso genérico `/seats` se retiró** (auditoría FASE 7, hallazgo H-16). Sus escrituras ya estaban cerradas,
+ninguna pantalla usaba su lectura, y esa lectura no distinguía versiones ni pisos y no aplicaba alcance por empresa a
+un `CUSTOMER`. `GET`, `POST`, `PUT` y `DELETE` sobre `/seats` y `/seats/:id` responden hoy **404**. Los asientos se
+leen y administran solo por los endpoints versionados de esta tabla: `/decks/:id/seats`, `/layout-seats/:id` y el
+árbol `GET /layouts/:id`. Los asientos de un viaje se consultan en `/public/trips/:id/seats` y `/trips/:id/seats`.
+La tabla `seats` no cambió.
+
+### 9.10 Frontend
+
+| Ruta | Guardia | Pantalla |
+| --- | --- | --- |
+| `/company/buses/:busId/asientos` | `buses.view` | `SeatConfigPage`, Portal Empresa |
+| `/admin/buses/:busId/asientos` | `buses.view` | `SeatConfigPage`, Panel Admin |
+| `/viaje/:tripId/asientos` | Pública | `SeatSelectionPage`, selección de asientos del cliente |
+
+**`SeatConfigPage`** tiene dos pestañas: «Editor» e «Historial de versiones». Si el bus tiene versión publicada, crea
+el borrador clonándola; si no, crea la primera versión como borrador. Solo se edita un `DRAFT`, y solo con
+`buses.update`. Herramientas: seleccionar, asiento, baño, escalera, conductor, puerta y espacio vacío; se pulsa una
+casilla libre para colocar. Permite añadir pisos, cambiar filas y columnas de la rejilla, editar número, tipo, fila,
+columna, piso, estado (Disponible / Inactivo), ventana y pasillo de un asiento, y tipo, posición, extensión y
+etiqueta de un elemento, y borrar asientos, elementos y pisos. Cada cambio se guarda en el momento contra su endpoint, sin un «guardar todo», así que las
+validaciones son las del backend. La pantalla **no borra borradores** aunque el endpoint exista, y **no tiene campo de
+precio**.
+
+**Mapa del cliente** (`SeatSelectionPage` + `SeatMap`). Pide la geometría (`/public/trips/:id/layout`) y los asientos
+(`/public/trips/:id/seats`) y dibuja la rejilla de cada piso con sus elementos. Muestra un selector de piso solo
+cuando hay más de uno, pinta los asientos `INACTIVE` como no disponibles y ofrece una leyenda por tipo de asiento con
+su precio real.
+
+### 9.11 Pruebas
+
+| Archivo | Tests | Cubre |
+| --- | --- | --- |
+| `33-bus-layout.test.ts` | 21 | Distribución versionada: modelo, anclaje y lectura |
+| `34-seat-pricing.test.ts` | 20 | Precio por tipo de asiento y capacidad por versión |
+| `35-layout-versioning.test.ts` | 35 | Borrador, clonación, publicación y archivado |
+| `36-layout-editor.test.ts` | 49 | Editor: pisos, elementos, asientos, reglas y permisos |
+| `37-bus-seats-count.test.ts` | 14 | `seats_count` del listado de buses |
+| `38-public-trip-layout.test.ts` | 26 | `GET /public/trips/:id/layout` |
+| `39-trip-bus-change.test.ts` | 28 | Un viaje con ventas no cambia de bus |
+| `40-seed.test.ts` | 25 | El seed crea versiones de distribución completas |
+| `41-trip-capacity.test.ts` | 24 | Capacidad efectiva del viaje |
+| `42-deck-bounds.test.ts` | 30 | La rejilla no encoge por debajo de su contenido |
+| `43-element-concurrency.test.ts` | 24 | Elementos y rejilla bajo el cerrojo del bus |
+| `44-seat-concurrency.test.ts` | 28 | Asientos y geometría bajo el cerrojo del bus |
+| `45-seat-type-prices.test.ts` | 22 | Los precios por tipo de asiento sobreviven al catálogo (`011`) |
+| `46-layout-publish-validation.test.ts` | 31 | Validación geométrica completa al publicar |
+| `48-inactive-seat-capacity.test.ts` | 15 | Capacidad vendible con asientos `INACTIVE` |
+
+No hay pruebas automáticas del frontend: el proyecto no tiene framework de tests de interfaz.
+
+### 9.12 Parcial y deuda técnica de esta sección
+
+| Tipo | Punto |
+| --- | --- |
+| **Parcial** | Precios por tipo de asiento sin API ni pantalla de configuración (9.8). |
+| **Observación / deuda técnica abierta** | `fk_seats_type` es `ON DELETE SET NULL`: borrar un tipo de asiento deja sus asientos sin tipo, y esos asientos pasan a cobrar `trips.base_price`. Se deja constancia del comportamiento actual. **No forma parte de H-17, no requiere acción, no es una tarea pendiente de implementación y no se propone ni se ejecuta ninguna migración sobre esta clave.** |
+| **Deuda técnica** | El `COMMENT` de `bus_layouts.seat_count` en el esquema describe la semántica anterior (9.6). |
+| **Deuda técnica** | El editor y el mapa de asientos no tienen pruebas automáticas de interfaz. |
+
+---
+
+## 10. Servicios del frontend sin pantalla: reseñas, reembolsos, roles y reportes (auditoría H-18)
+
+**Qué se auditó:** la capa `frontend/src/services/index.ts` declara métodos que ninguna página, componente, hook o
+contexto llama hoy. La auditoría final del proyecto (FASE 7, hallazgo H-18) los revisó uno a uno contra el backend: 30
+métodos en total.
+
+**Estado: H-18 cerrado.** Cerrarlo **no** significa que todas las pantallas posibles existan. Significa esto:
+
+- **No hay código muerto que eliminar.** Los 30 métodos apuntan a endpoints que existen y funcionan, y ninguno se ha
+  borrado.
+- La mayoría no tiene consumidor directo **por diseño**, y se mantienen (10.5).
+- Se identificaron **mejoras funcionales futuras**, ninguna crítica: la creación de reseñas desde el portal del cliente
+  (**parcial**), la vista pública del texto de las reseñas y el alta manual o parcial de reembolsos desde una interfaz
+  administrativa (ambas **opcionales**).
+- Roles y reportes quedan documentados como **decisión arquitectónica** y **deuda menor**, respectivamente.
+
+| Pieza | Estado |
+| --- | --- |
+| Creación de reseñas desde el portal del cliente | **Parcial**: backend completo, sin interfaz |
+| Moderación y respuesta de reseñas (empresa y ADMIN) | **Implementado** |
+| Vista pública del texto de las reseñas | Mejora opcional: endpoint existente, sin pantalla |
+| Solicitud y procesamiento de reembolsos | **Implementado** |
+| Alta manual o parcial de reembolsos desde una interfaz administrativa | Mejora opcional: solo por API |
+| Roles de aplicación | Decisión arquitectónica: cuatro roles fijos |
+| Lista de reportes | Deuda menor: duplicada en el frontend |
+
+### 10.1 Reseñas
+
+| | |
+| --- | --- |
+| Backend | `POST /reviews` existe y está probado (`08-review.test.ts`). Recibe `booking_id`, `rating` (1–5), `title` y `comment`; `trip_id` y `company_id` los deduce el servidor de la reserva. |
+| Frontend | `reviewService.create` existe y apunta a `POST /reviews`. |
+| Permiso | `reviews.create`, que en el dump tienen `CUSTOMER` y `ADMIN`. |
+| Reglas | La reserva debe ser del propio usuario (salvo ADMIN) y estar `CONFIRMED` o `COMPLETED`; una sola reseña por reserva y usuario (409 si se repite). Nace `PENDING` y no se ve en público hasta que se modera. |
+| Moderación | **Implementada, con pantalla**: `/company/reviews` y `/admin/reviews` publican u ocultan, y la empresa responde. El contenido es del pasajero y la empresa no puede reescribirlo. |
+| Interfaz del cliente | **No existe.** Ninguna pantalla del portal del cliente permite crear una reseña. |
+| Público | `GET /public/reviews` y `publicService.reviews` existen y devuelven las 12 reseñas `PUBLISHED` más recientes, opcionalmente por empresa. **Ninguna pantalla muestra hoy su texto**; el sitio público solo enseña la nota media y el número de reseñas. |
+
+**Estado: parcial.** La creación de reseñas desde el portal del cliente es una **mejora funcional futura**, no un fallo
+del sistema: reservas, pagos y moderación funcionan sin ella. Mientras no exista, la moderación y la nota pública solo
+reflejan reseñas creadas por API. Mostrar el texto de las reseñas publicadas en el sitio público es una **mejora
+opcional**.
+
+**Decisión pendiente antes de construir esa interfaz: `CONFIRMED` frente a `COMPLETED`.** Hoy el backend admite
+reseñar reservas `CONFIRMED` —pagadas, de un viaje que todavía no ha salido— además de las `COMPLETED`, aunque su
+mensaje de error hable de «viajes realizados». La suite (`08-review`) fija ese comportamiento. Antes de la interfaz hay
+que decidir si se podrán reseñar **solo viajes `COMPLETED`** o **también reservas `CONFIRMED`**. Esta regla no se ha
+cambiado.
+
+### 10.2 Reembolsos
+
+**El flujo normal de reembolso está implementado de principio a fin, con pantalla:**
+
+1. El cliente cancela su reserva desde «Mis viajes», o la empresa o el ADMIN la cancelan desde el listado de reservas.
+   Además, **cancelar un viaje** cancela sus reservas y abre los reembolsos de lo cobrado automáticamente (sección 11).
+   Se aplican las reglas de `cancelBooking`: no se cancela una reserva ya cancelada, completada o vencida, ni con el
+   viaje en curso o realizado, y hace falta `booking.cancellation_hours` de antelación (24 h por defecto) salvo que el
+   viaje esté cancelado.
+2. Si la reserva tenía un pago `PAID`, se abre un reembolso `PENDING` por su importe, en la misma transacción. También
+   se abre uno automáticamente cuando Culqi cobra pero la reserva no se puede confirmar.
+3. Los reembolsos se consultan en `/company/refunds` y `/admin/refunds`. Quien tiene `payments.refund` —en el dump, solo
+   ADMIN— los **completa o rechaza** ahí mismo.
+4. Al completar un reembolso de un pago cobrado con Culqi, la devolución se pide a Culqi antes de cerrarlo; si Culqi
+   falla, el reembolso queda como estaba y se puede reintentar. Un pago en efectivo o por transferencia se cierra sin
+   pasarela.
+
+**`refundService.create` → `POST /refunds` es otra cosa:** un **mecanismo manual del ADMIN** (`payments.refund`) para
+abrir un reembolso fuera de ese flujo, incluso parcial. Valida que el pago esté `PAID`, pertenezca a la reserva indicada
+y no se reembolse por encima de lo cobrado. **No tiene pantalla propia**, y eso **no** significa que falte el flujo
+normal de reembolso. Una posible mejora futura sería el **alta manual o parcial de reembolsos desde una interfaz
+administrativa**.
+
+### 10.3 Roles
+
+La aplicación tiene **cuatro roles**: `ADMIN`, `COMPANY_ADMIN`, `OPERATOR` y `CUSTOMER`. Están integrados en el frontend:
+
+- `RoleName` es exactamente esa unión;
+- `RoleRoute` restringe el Portal Empresa a `COMPANY_ADMIN`, `OPERATOR` y `ADMIN` (este último, con empresa) y el
+  Panel Admin a `ADMIN`;
+- `homePathFor` decide el portal de inicio de cada rol.
+
+Por eso **no existe una interfaz para crear roles arbitrarios**: un rol nuevo no tendría portal, página de inicio ni
+navegación. La pantalla de roles lista los roles y edita **sus permisos**, que es como se ajusta el acceso.
+`roleService.create`, `update` y `remove` (`POST /roles`, `PUT /roles/:id`, `DELETE /roles/:id`, solo ADMIN) siguen
+disponibles para administración por API. **No se recomienda implementar la creación arbitraria de roles** mientras la
+aplicación use roles fijos.
+
+### 10.4 Reportes
+
+`GET /reports` existe y devuelve las claves de los reportes disponibles. El frontend no lo usa: `FinancePages` mantiene
+su propia lista en `REPORT_LABELS`, con título y descripción de cada uno. **Hoy las dos listas coinciden** (las siete
+claves). Es una pequeña duplicación, no un fallo: un reporte nuevo en el backend no aparecería en pantalla hasta
+añadirlo también a `REPORT_LABELS`.
+
+### 10.5 Resto de métodos sin consumidor directo
+
+Se mantienen. Ninguno es código muerto:
+
+| Métodos | Por qué no tienen consumidor directo |
+| --- | --- |
+| `get` de `userService`, `tripService`, `busTypeService`, `seatTypeService`, `locationService`, `routeService`, `routeStopService`, `promotionService`, `couponService`, `settingService`, `commissionService` y `templateService` | Los genera el helper genérico `crud()`, que da los cinco métodos a cada recurso; las pantallas editan desde el listado. |
+| `routeStopService.update` | Mismo helper; las paradas se crean y eliminan desde la pantalla, pero no se editan. |
+| `paymentService.get`, `driverService.get`, `integrationService.get`, `reviewService.get` | Operaciones de detalle: la pantalla trabaja con los datos del listado. Quedan disponibles para una vista de detalle futura. |
+| `reviewService.remove` | La moderación oculta o rechaza reseñas cambiando su estado en lugar de borrarlas. `DELETE /reviews/:id` queda para el ADMIN por API. |
+| `publicService.terminals` | El buscador trabaja con `publicService.cities`. |
+| `busLayoutService.listDecks`, `listElements`, `listSeats` | El editor lee la versión entera de una vez con `GET /layouts/:id` (sección 9). |
+| `busLayoutService.removeLayout` | El editor no borra borradores, aunque el endpoint existe (sección 9.10). |
+
+`notificationService.unreadCount` **sí tiene consumidor**: el contador de avisos de `PortalLayout`.
+
+---
+
+## 11. Cancelación de viajes, reservas y reembolsos (FASE 8H)
+
+**Qué faltaba** (auditoría 8G): `POST /trips/:id/cancel` solo cambiaba `trips.status`. Las reservas pagadas quedaban
+`CONFIRMED` sin reembolso ni aviso, una reserva `PENDING` podía pagarse después, y `PUT /trips/:id` permitía cancelar
+sin efectos o reactivar un viaje cancelado.
+
+**Estado actual: implementado, sin migración.** Usa el esquema, los estados y las tablas existentes; las plantillas
+nuevas las crea `ensureSystemTemplates` al arrancar el backend.
+
+### 11.1 Quién y desde qué estado
+
+| | |
+| --- | --- |
+| Endpoint | `POST /trips/:id/cancel` |
+| Permiso | `trips.update` **y** rol `ADMIN` o `COMPANY_ADMIN`. **OPERATOR no puede cancelar** (403), aunque conserva `trips.update` para operar el viaje. `role_permissions` no cambió. |
+| Alcance | Una empresa solo cancela viajes de sus rutas; uno ajeno responde 404. ADMIN cancela cualquiera. |
+| Se puede cancelar desde | `SCHEDULED`, `BOARDING`, `DELAYED` |
+| No se puede cancelar desde | `IN_PROGRESS`, `COMPLETED` (400). Un viaje ya `CANCELLED` responde 200 sin hacer nada: repetir la llamada es seguro. |
+| `PUT /trips/:id` | No puede sacar a un viaje de `CANCELLED` (no se reactiva) ni ponerlo en `CANCELLED`: cancelar tiene efectos que solo aplica `POST /trips/:id/cancel`. Ambos casos responden 400. El resto de la edición no cambia. |
+| Interfaz | En `/company/trips` y `/admin/trips` el botón «Cancelar viaje» solo aparece en los estados cancelables y para ADMIN o COMPANY_ADMIN. |
+
+### 11.2 Qué hace la cancelación
+
+Todo ocurre en **una transacción** que empieza bloqueando el viaje (el mismo primer cerrojo que la venta, el pago y la
+expiración):
+
+| Reserva antes | Reserva después | Asientos | Pago | Reembolso | Aviso |
+| --- | --- | --- | --- | --- | --- |
+| `PENDING` | `CANCELLED` | Liberados; `available_seats` recupera sus cupos | `PENDING` → `CANCELLED`. Un `PROCESSING` (cobro con tarjeta en vuelo) no se toca: lo resuelve el flujo de Culqi (11.4) | No | `trip.cancelled`: «no se realizó ningún cobro» |
+| `CONFIRMED` con pago `PAID` | `CANCELLED` | Liberados | Sigue `PAID` hasta procesar el reembolso | **Uno**, `PENDING`, por el importe cobrado | `trip.cancelled`: «generamos una solicitud de reembolso» |
+| `CANCELLED`, `EXPIRED`, `COMPLETED` | Sin cambio | Sin cambio | Sin cambio | No | No |
+
+- `booking_seats` **se conserva siempre**: el asiento deja de estar retenido porque la reserva ya no está vigente.
+- Cada reserva se cancela con `cancelBookingOnConnection`, las mismas reglas que cuando cancela el pasajero.
+- La cancelación **no crea movimientos financieros**.
+- Auditoría: la cancelación del viaje (con los ids afectados), cada reserva cancelada y cada reembolso abierto.
+- Tras confirmar la transacción se envía el correo `trip.cancelled_email` a cada pasajero con `sendEmail` (Resend si
+  está configurado). Si el envío falla se registra y la cancelación sigue en pie.
+
+**Itinerarios.** Solo se cancela y reembolsa la reserva del tramo cuyo viaje se cancela. Los demás tramos siguen
+`CONFIRMED`, con su pago intacto, y el grupo conserva todas sus reservas.
+
+### 11.3 Pagos de un viaje cancelado
+
+**Una reserva de un viaje `CANCELLED` no puede pagarse.** `confirmBookingPaymentOnConnection` relee el estado del viaje
+bajo su cerrojo y lo rechaza (400). Por esa función pasan efectivo, transferencia, Yape y Plin, el pago de
+itinerarios, la tarjeta y el webhook de Culqi. El cobro con tarjeta además lo comprueba **antes** de pedir el cargo, así
+que en el caso normal Culqi no llega a cobrar.
+
+### 11.4 Culqi: cargo aprobado sobre una reserva que ya no se puede confirmar
+
+Si Culqi cobra y la reserva ya no es confirmable —viaje cancelado, reserva cancelada o vencida, asiento tomado—, el
+dinero se cubre con `openCompensatingRefund`, la misma función por las dos vías:
+
+- **Respuesta HTTP del cobro:** el pago queda `PAID` con su `provider_transaction_id` y se abre un reembolso `PENDING`.
+- **Webhook de Culqi** (cuando la respuesta HTTP no llegó, por ejemplo tras un TIMEOUT): hace lo mismo y responde 200.
+
+La reserva **no se confirma**. La función es idempotente: bloquea el pago y, si ya está `PAID` o `REFUNDED`, no hace
+nada; y el reembolso solo se inserta si el pago no tiene ya uno vivo. Un webhook repetido no duplica el reembolso.
+
+### 11.5 Reembolsos
+
+| | |
+| --- | --- |
+| Creación | Idempotente: se inserta solo si el pago no tiene otro reembolso que no sea `FAILED` ni `CANCELLED`. Nace `PENDING`; el dinero no se da por devuelto. |
+| Procesamiento | `POST /refunds/:id/process`, con `payments.refund` (ADMIN). |
+| Concurrencia | Todo el procesamiento va bajo `GET_LOCK('<base>:refund:<id>', 0)` de MariaDB: una segunda petición simultánea sobre el mismo reembolso recibe 409 y no llega a Culqi. |
+| Culqi | Si el pago se cobró con Culqi, la devolución se pide antes de cerrar el reembolso y su identificador se guarda en `provider_refund_id` en cuanto Culqi responde. Un reintento que lo encuentra no pide una segunda devolución. |
+| Fallo de Culqi | El reembolso queda `PENDING` sin `provider_refund_id`, el pago sigue `PAID` y no hay movimiento: se puede reintentar. |
+| Al completar | Reembolso `COMPLETED`, pago `REFUNDED`, un movimiento `REFUND`/`DEBIT` y la notificación `refund.completed`. Un reembolso `COMPLETED` no se reprocesa. |
+
+### 11.6 Notificaciones
+
+| Plantilla | Tipo | Cuándo |
+| --- | --- | --- |
+| `trip.cancelled` | Interna | Al cancelar el viaje, a cada pasajero afectado, dentro de la transacción. `{{refund_message}}` dice si hubo reembolso o no hubo cobro. |
+| `trip.cancelled_email` | Correo | Al cancelar el viaje, tras confirmar la transacción. |
+| `refund.completed` | Interna | Al completar el reembolso. |
+
+### 11.7 Concurrencia validada
+
+| Situación | Resultado |
+| --- | --- |
+| Dos cancelaciones del mismo viaje | Se serializan en el cerrojo del viaje; la segunda no hace nada. Un solo reembolso. |
+| Cancelación y expiración de la misma reserva | Ambas bloquean primero el viaje; la reserva acaba `CANCELLED` o `EXPIRED`, con un solo aviso y los cupos liberados una vez. |
+| Pago mientras se cancela | El pago encuentra el viaje cancelado y se rechaza. |
+| Muchas cancelaciones a la vez | El alta del reembolso toma un cerrojo de hueco en `idx_refunds_payment` e InnoDB puede elegir víctima (`ER_LOCK_DEADLOCK`). La transacción se deshace entera y `withDeadlockRetry` la repite, hasta cinco veces con espera aleatoria. Lo mismo en cada transacción de la expiración. |
+| Cierre de pagos pendientes | Se bloquean solo los pagos de la reserva (`cancelOpenPayments`). Un `UPDATE … WHERE booking_id = ? AND status …` usaba `index_merge` con el índice de estado y bloqueaba pagos de otras reservas. |
+
+Cubierto por `49-trip-cancellation.test.ts` (38 tests), con escenarios de extremo a extremo para reserva pagada y
+pendiente, webhook sobre viaje cancelado y cancelación y expiración concurrentes.
+
+### 11.8 Deuda técnica
+
+| Punto | Detalle |
+| --- | --- |
+| ~~Reembolso compensatorio sin venta registrada~~ | **Resuelto en 11E-2 (H-26).** El compensatorio ya no toca la contabilidad de la empresa: su cobro (`PAYMENT`/`CREDIT`) y su devolución (`REFUND`/`DEBIT`) se asientan en el libro de la plataforma, con `company_id` NULL, y el pago lleva la marca `compensation` en `payment_data`. Sin migración: `financial_transactions.company_id` ya admitía NULL. |
+| ~~Aviso en la carrera tarjeta ↔ cancelación~~ | **Resuelto en 11F (H-29).** Con un cobro en vuelo (`PROCESSING`) o terminado en `TIMEOUT`, el aviso de cancelación ya no afirma que no hubo cobro: dice que el resultado aún no se puede confirmar. Si después se detecta el cargo, el compensatorio envía `booking.payment_compensated`, una vez por pago. |
+
+---
+
+## 12. `ON UPDATE RESTRICT` en tres claves ajenas (auditoría H-21)
+
+**Estado: revisado — no requiere cambio.** De las 76 claves ajenas, 73 usan `ON UPDATE CASCADE` y tres `RESTRICT`:
+
+| Tabla | FK | Columna → padre | ON DELETE | ON UPDATE | Origen |
+| --- | --- | --- | --- | --- | --- |
+| `trips` | `fk_trips_driver` | `driver_id` → `drivers.id` | SET NULL | RESTRICT | Migración `004` |
+| `trips` | `fk_trips_co_driver` | `co_driver_id` → `drivers.id` | SET NULL | RESTRICT | Migración `004` |
+| `bookings` | `fk_bookings_group` | `group_id` → `booking_groups.id` | SET NULL | RESTRICT | Migración `005` |
+
+**Por qué son RESTRICT.** Las migraciones 004 y 005 (y sus propuestas en las secciones 4 y 8) declaran solo
+`ON DELETE SET NULL`, que sí es una decisión explícita: borrar un conductor o un grupo nunca borra viajes ni reservas.
+`ON UPDATE` no se escribió y MariaDB aplica su valor por defecto, `RESTRICT`. El dump original escribe
+`ON UPDATE CASCADE` en sus 57 claves; de ahí la diferencia.
+
+**Por qué se deja así.**
+
+- Las tres columnas padre son `id` `AUTO_INCREMENT`. Ningún código, seed ni script las actualiza. `drivers` solo se escribe
+  por `driver.repository.update`, cuya lista blanca y el validador Zod excluyen `id`. `booking_groups` no tiene ningún
+  `UPDATE` ni API de edición: solo se inserta en `itinerary.service`.
+- Mientras nadie cambie esos ids, `RESTRICT` y `CASCADE` se comportan igual. Si alguien lo intentara a mano, `RESTRICT`
+  rechaza el cambio (error 1451) y deja intactos viajes y reservas; `CASCADE` reescribiría en silencio la tripulación de
+  viajes ya realizados o el grupo de reservas ya pagadas. Para relaciones históricas es la opción más protectora.
+- Comprobado en `busperu_test`, dentro de una transacción revertida: el `UPDATE` del id padre falla con 1451 sin tocar
+  a los hijos, y el `DELETE` sigue dejando la referencia a `NULL`.
+
+Cambiarlas a `CASCADE` solo daría uniformidad estética, así que no hay migración. Si algún día se unifican las 76
+reglas, debería ser una decisión de conjunto, no un cambio de estas tres.
+
+---
+
 ## Decisiones de mapeo de permisos
 
 El esquema define 43 permisos en 13 módulos. Algunas pantallas de los mockups no tienen un módulo propio, por lo
@@ -531,7 +1056,8 @@ que reutilizan el permiso más cercano en lugar de inventar permisos nuevos:
 
 | Pantalla / recurso                      | Permiso utilizado                                     |
 | --------------------------------------- | ----------------------------------------------------- |
-| Tipos de bus, tipos de asiento, asientos | `buses.*`                                             |
+| Tipos de bus, tipos de asiento           | `buses.*`                                             |
+| Distribución del bus (versiones, pisos, elementos y asientos del editor) | `buses.view` / `buses.update` / `buses.delete` |
 | Ciudades, terminales, paradas de ruta    | `routes.*`                                            |
 | Reembolsos                               | `payments.view` / `payments.refund`                   |
 | Liquidaciones, comisiones, finanzas      | `reports.view` (lectura) + `settings.update` (cambios) |

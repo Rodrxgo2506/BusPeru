@@ -1,4 +1,4 @@
-import { ArrowLeft, Banknote, Building2, CalendarDays, Check, CreditCard, Info, Lock, ShieldCheck, Smartphone, Ticket, User, Wallet } from 'lucide-react';
+import { ArrowLeft, Banknote, Building2, CalendarDays, Check, CreditCard, Lock, ShieldCheck, Smartphone, Ticket, User, Wallet } from 'lucide-react';
 import { useState, type FormEvent } from 'react';
 import { Navigate, useLocation, useNavigate } from 'react-router-dom';
 import { Button, Card, Input } from '@/components/ui';
@@ -6,12 +6,13 @@ import { useAuth } from '@/context/AuthContext';
 import { useToast } from '@/context/ToastContext';
 import { useAsync } from '@/hooks/useAsync';
 import { ApiError } from '@/services/api';
-import { bookingService, itineraryService, publicService } from '@/services';
-import type { PaymentMethod } from '@/types';
+import { bookingService, culqiService, itineraryService, publicService } from '@/services';
+import { CheckoutCancelled, openCulqiCheckout } from '@/services/culqi';
+import type { Booking, PaymentMethod } from '@/types';
 import { formatCurrency, formatDate, formatTime } from '@/utils/format';
 import { cn } from '@/utils/cn';
 import { CheckoutStepper, TrustBar } from './CheckoutStepper';
-import { isItinerary, useCheckout } from './CheckoutContext';
+import { isItinerary, selectionSubtotal, useCheckout } from './CheckoutContext';
 
 const METHODS: Array<{ id: PaymentMethod; label: string; description: string; icon: typeof CreditCard }> = [
   { id: 'CARD', label: 'Tarjeta de crédito / débito', description: 'Visa, Mastercard, American Express', icon: CreditCard },
@@ -30,6 +31,8 @@ export function PaymentPage() {
 
   const trip = useAsync(() => (checkout.tripId ? publicService.trip(checkout.tripId) : Promise.resolve(null)), [checkout.tripId]);
   const settings = useAsync(() => publicService.settings(), []);
+  /** Llave publica y disponibilidad de la tarjeta. La privada nunca llega aqui. */
+  const culqi = useAsync(() => culqiService.config(), []);
 
   /**
    * Compra de varios tramos (ida y vuelta / multidestino). Cuando la hay, el resumen y el
@@ -42,7 +45,9 @@ export function PaymentPage() {
     [itinerary, segments.map((s) => `${s.tripId}:${s.seatIds.join('-')}`).join('|')],
   );
 
-  const [method, setMethod] = useState<PaymentMethod>('CARD');
+  // H-23: un itinerario no se cobra por Culqi, así que la tarjeta no se ofrece ahí.
+  const availableMethods = itinerary ? METHODS.filter((option) => option.id !== 'CARD') : METHODS;
+  const [method, setMethod] = useState<PaymentMethod>(availableMethods[0]!.id);
   const [coupon, setCoupon] = useState(checkout.couponCode ?? '');
   const [processing, setProcessing] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -66,15 +71,61 @@ export function PaymentPage() {
     ? segments.reduce((sum, segment) => sum + segment.seatIds.length, 0)
     : checkout.seatIds.length;
 
-  const basePrice = Number(data?.base_price ?? 0);
+  // Suma de los precios EFECTIVOS de los asientos elegidos. No se multiplica el precio base
+  // por la cantidad: el backend cobra asiento a asiento y esta cifra debe coincidir.
   const subtotal = itinerary
-    ? segments.reduce((sum, segment, index) => {
-        const viaje = segmentTrips.data?.[index];
-        return sum + Number(viaje?.base_price ?? 0) * segment.seatIds.length;
-      }, 0)
-    : basePrice * checkout.seatIds.length;
+    ? segments.reduce((sum, segment) => sum + selectionSubtotal(segment.seatPrices), 0)
+    : selectionSubtotal(checkout.seatPrices);
 
   const total = subtotal + serviceFee * seatCount;
+
+  /**
+   * ¿Hay ya una reserva de este mismo checkout que se pueda seguir pagando?
+   *
+   * EL PROBLEMA QUE RESUELVE. Este paso crea la reserva ANTES de abrir Culqi, porque es la
+   * reserva la que retiene el asiento. Si el cobro no llega a completarse —la ventana se
+   * cierra, la tarjeta se rechaza, se recarga la página— esa reserva sigue viva con su
+   * retención de 15 minutos. Al reintentar se creaba OTRA reserva sobre los mismos asientos,
+   * y el backend la rechazaba con «Los asientos 01 ya fueron tomados»: el pasajero chocaba
+   * contra su propia reserva anterior sin ninguna forma de entenderlo.
+   *
+   * Se reutiliza solo si TODO encaja. `GET /bookings/:id` ya está acotado por el alcance de
+   * visibilidad del backend, así que una reserva ajena responde 404 y cae por el `catch`: la
+   * comprobación de propiedad no se reimplementa aquí.
+   *
+   * La autoridad sigue siendo el backend, que revalida bajo cerrojo al cobrar. Esto solo
+   * evita crear una reserva que se sabe de antemano que va a chocar.
+   */
+  const reservaReutilizable = async (): Promise<Booking | null> => {
+    if (checkout.bookingId === null) return null;
+
+    try {
+      const previa = await bookingService.get(checkout.bookingId);
+
+      const vigente =
+        previa.status === 'PENDING' &&
+        (!previa.expires_at || new Date(previa.expires_at.replace(' ', 'T')).getTime() > Date.now());
+      const mismoViaje = Number(previa.trip_id) === checkout.tripId;
+      // `seat_numbers` llega como "01, 02"; se compara como conjunto para no depender del orden.
+      const asientosPrevios = String(previa.seat_numbers ?? '')
+        .split(',')
+        .map((numero) => numero.trim())
+        .filter(Boolean)
+        .sort();
+      const mismosAsientos =
+        asientosPrevios.length === checkout.seatNumbers.length &&
+        asientosPrevios.every((numero, indice) => numero === [...checkout.seatNumbers].sort()[indice]);
+
+      if (vigente && mismoViaje && mismosAsientos) return previa;
+    } catch {
+      // No existe, no es suya o el backend no la deja ver. Se descarta y se crea una nueva.
+    }
+
+    // Caducada, cancelada, ya pagada o de otro viaje: se olvida el identificador y se sigue
+    // como si fuera la primera vez. Los asientos y el pasajero no se tocan.
+    checkout.setBooking(null);
+    return null;
+  };
 
   /**
    * Creates the booking (locking the seats) and confirms its payment. Card fields are
@@ -106,25 +157,63 @@ export function PaymentPage() {
         });
         const groupId = Number(grupo.group_id);
 
-        await itineraryService.pay(groupId, { method });
+        const pagado = await itineraryService.pay(groupId, { method });
+        // H-22: un pago manual queda pendiente hasta que la empresa lo verifique.
+        const tramos = (pagado.segments ?? []) as Array<{ status?: unknown }>;
+        if (tramos.some((tramo) => tramo.status !== 'CONFIRMED')) {
+          toast.info('Pago registrado. Pendiente de verificación.', `Itinerario ${String(grupo.group_code)}: te avisaremos cuando se confirme.`);
+          // Primero se sale del checkout y luego se limpia, para que esta pantalla no redirija al buscador.
+          navigate('/customer/trips', { replace: true });
+          checkout.reset();
+          return;
+        }
         checkout.setGroup(groupId);
         toast.success('¡Pago aprobado!', `Itinerario ${String(grupo.group_code)} confirmado.`);
         navigate(`/reserva/confirmacion/itinerario/${groupId}`, { replace: true });
         return;
       }
 
-      const booking = await bookingService.create({
-        trip_id: checkout.tripId,
-        seat_ids: checkout.seatIds,
-        ...titular,
-      });
+      const booking =
+        (await reservaReutilizable()) ??
+        (await bookingService.create({
+          trip_id: checkout.tripId,
+          seat_ids: checkout.seatIds,
+          ...titular,
+        }));
 
-      await bookingService.pay(booking.id, { method });
+      // Se anota YA, no al terminar el pago: si el cobro falla, el reintento tiene que saber
+      // que esta reserva existe y que es la que retiene el asiento.
       checkout.setBooking(booking.id);
+
+      if (method === 'CARD') {
+        // La ventana de Culqi devuelve un token; los datos de la tarjeta no pasan por aqui.
+        // El importe que se muestra sale del total real de la reserva que acaba de crear el
+        // backend, no de una suma hecha en el navegador: el backend vuelve a calcularlo y
+        // solo cobra el suyo, de modo que tocar este numero no cambia lo que se cobra.
+        const token = await openCulqiCheckout({
+          publicKey: culqi.data!.public_key,
+          amountCents: Math.round(Number(booking.total_amount) * 100),
+          currency: culqi.data!.currency,
+          description: `Reserva ${booking.booking_code}`,
+        });
+        await bookingService.pay(booking.id, { method, token });
+      } else {
+        const registrada = await bookingService.pay(booking.id, { method });
+        // H-22: un pago manual queda pendiente hasta que la empresa lo verifique.
+        if (registrada.status !== 'CONFIRMED') {
+          toast.info('Pago registrado. Pendiente de verificación.', `Reserva ${booking.booking_code}: te avisaremos cuando se confirme.`);
+          navigate(`/customer/bookings/${booking.id}`, { replace: true });
+          checkout.reset();
+          return;
+        }
+      }
       toast.success('¡Pago aprobado!', `Reserva ${booking.booking_code} confirmada.`);
       navigate(`/reserva/confirmacion/${booking.id}`, { replace: true });
     } catch (caught) {
-      setError(caught instanceof ApiError ? caught.message : 'No pudimos procesar tu pago. Inténtalo nuevamente.');
+      // Cerrar la ventana de Culqi no es un fallo: la reserva sigue viva con su retencion y
+      // el pasajero puede reintentar sin volver a elegir asientos.
+      if (caught instanceof CheckoutCancelled) setError(null);
+      else setError(caught instanceof ApiError || caught instanceof Error ? caught.message : 'No pudimos procesar tu pago. Inténtalo nuevamente.');
     } finally {
       setProcessing(false);
     }
@@ -161,7 +250,7 @@ export function PaymentPage() {
                       <p className="mt-1 flex items-center justify-between text-xs">
                         <span className="text-muted">Asientos: {entry.seatNumbers.join(', ') || '—'}</span>
                         <span className="font-semibold text-ink">
-                          {formatCurrency(Number(viaje?.base_price ?? 0) * entry.seatIds.length)}
+                          {formatCurrency(selectionSubtotal(entry.seatPrices))}
                         </span>
                       </p>
                     </li>
@@ -202,8 +291,8 @@ export function PaymentPage() {
               )}
               <SummaryRow
                 icon={<Wallet className="h-4 w-4 text-brand-500" />}
-                label={itinerary ? 'Subtotal de los tramos' : 'Precio por pasajero'}
-                value={formatCurrency(itinerary ? subtotal : basePrice)}
+                label={itinerary ? 'Subtotal de los tramos' : 'Subtotal'}
+                value={formatCurrency(subtotal)}
               />
               <SummaryRow icon={<Wallet className="h-4 w-4 text-brand-500" />} label="Cargo por servicio" value={formatCurrency(serviceFee * seatCount)} />
             </dl>
@@ -236,7 +325,7 @@ export function PaymentPage() {
           <form onSubmit={handlePay} className="mt-6 grid gap-5 lg:grid-cols-2">
             <fieldset className="space-y-3">
               <legend className="sr-only">Método de pago</legend>
-              {METHODS.map((option) => {
+              {availableMethods.map((option) => {
                 const Icon = option.icon;
                 const isSelected = method === option.id;
                 return (
@@ -267,6 +356,7 @@ export function PaymentPage() {
                   </label>
                 );
               })}
+              {itinerary && <p className="text-xs text-muted">Pago con tarjeta no disponible para itinerarios.</p>}
             </fieldset>
 
             <div className="space-y-4 rounded-card border border-border p-5">
@@ -281,24 +371,22 @@ export function PaymentPage() {
                     </span>
                   </div>
 
-                  {/* Fidelidad con el mockup: los campos se muestran pero están inertes.
-                      Este entorno no procesa tarjetas y el esquema no almacena datos de tarjeta. */}
-                  <Input label="Número de tarjeta" placeholder="1234 5678 9012 3456" disabled icon={<CreditCard className="h-4 w-4" />} />
-                  <Input label="Nombre en la tarjeta" placeholder="Ej: Rodrigo Perez Gomez" disabled />
-                  <div className="grid grid-cols-2 gap-4">
-                    <Input label="Fecha de vencimiento" placeholder="MM / AA" disabled />
-                    <Input label="CVV" placeholder="123" disabled icon={<Info className="h-4 w-4" />} />
-                  </div>
-
-                  <p className="rounded-control border border-warning-200 bg-warning-50 p-3 text-xs text-warning-700">
-                    Los campos de tarjeta son ilustrativos: este entorno no procesa pagos reales y BusPerú solo guarda el método y el estado del
-                    pago, nunca datos de tarjeta.
-                  </p>
+                  {culqi.data?.card_enabled ? (
+                    <p className="rounded-control border border-border bg-slate-50 p-3 text-xs text-slate-600">
+                      Al continuar se abrira la ventana segura de <strong className="text-ink">Culqi</strong> para introducir
+                      los datos de tu tarjeta. BusPeru no ve, no guarda ni transmite el numero de tu tarjeta: solo recibe un
+                      identificador de pago.
+                    </p>
+                  ) : (
+                    <p className="rounded-control border border-warning-200 bg-warning-50 p-3 text-xs text-warning-700">
+                      El pago con tarjeta no esta disponible en este momento. Elige otro metodo para completar tu compra.
+                    </p>
+                  )}
                 </>
               ) : (
                 <p className="rounded-control bg-slate-50 p-4 text-sm text-slate-600">
-                  Se registrará tu pago con el método <strong className="text-ink">{METHODS.find((entry) => entry.id === method)?.label}</strong>. El
-                  estado quedará como pagado para que puedas ver el flujo completo de la reserva.
+                  Se registrará tu pago con el método <strong className="text-ink">{METHODS.find((entry) => entry.id === method)?.label}</strong>. Tu
+                  reserva quedará pendiente de verificación hasta que la empresa confirme que recibió el pago.
                 </p>
               )}
 

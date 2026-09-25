@@ -9,7 +9,6 @@ const READ_MATRIX: Array<[string, string]> = [
   ['/companies', 'companies.view'],
   ['/buses', 'buses.view'],
   ['/bus-types', 'buses.view'],
-  ['/seats', 'buses.view'],
   ['/seat-types', 'buses.view'],
   ['/locations', 'routes.view'],
   ['/routes', 'routes.view'],
@@ -34,6 +33,16 @@ const READ_MATRIX: Array<[string, string]> = [
   ['/reports', 'reports.view'],
 ];
 
+/**
+ * Recursos del CRUD genérico (`routes/resources.ts`). Desde H-24 un CUSTOMER no los usa aunque
+ * tenga el permiso de lectura: lo público lo sirve `/public/*`. Para el resto de roles manda el
+ * permiso, como siempre.
+ */
+const GENERIC_RESOURCES = new Set([
+  '/companies', '/bus-types', '/buses', '/seat-types', '/locations', '/routes', '/route-stops',
+  '/promotions', '/coupons', '/notification-templates', '/system-settings', '/commissions',
+]);
+
 describe('RBAC dirigido por la base de datos', () => {
   let ctx: SuiteContext;
 
@@ -56,7 +65,7 @@ describe('RBAC dirigido por la base de datos', () => {
       const mismatches: string[] = [];
       for (const [path, permission] of READ_MATRIX) {
         const res = await get(path, session.token);
-        const allowed = session.user.permissions.includes(permission);
+        const allowed = session.user.permissions.includes(permission) && !(role === 'customer' && GENERIC_RESOURCES.has(path));
         const ok = allowed ? res.status === 200 : res.status === 403;
         if (!ok) mismatches.push(`${path} (${permission}, tiene=${allowed}) -> ${res.status}`);
       }

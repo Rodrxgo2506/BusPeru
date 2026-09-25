@@ -42,6 +42,8 @@ describe('BP-22 · expiración global sin contexto de empresa', () => {
     stopBookingExpiryScheduler();
     await execute('DELETE FROM booking_seats');
     await execute('DELETE FROM financial_transactions');
+    // Desde H-50 cancelar una reserva pagada abre su reembolso: va antes que los pagos que referencia.
+    await execute('DELETE FROM refunds');
     await execute('DELETE FROM payments');
     await execute('DELETE FROM bookings');
     await execute('UPDATE trips SET available_seats = (SELECT capacity FROM buses WHERE id = trips.bus_id)');
@@ -172,8 +174,8 @@ describe('BP-22 · expiración global sin contexto de empresa', () => {
     it('9 · no toca una CONFIRMED, ni de A ni de B, aunque su plazo pasara', async () => {
       const a = await reservar(ctx.fixtures.tripA);
       const b = await reservar(ctx.fixtures.tripB);
-      await post(`/bookings/${a}/pay`, { method: 'CASH' }, ctx.sessions.customer.token);
-      await post(`/bookings/${b}/pay`, { method: 'CASH' }, ctx.sessions.customer.token);
+      await post(`/bookings/${a}/pay`, { method: 'CASH' }, ctx.sessions.admin.token);
+      await post(`/bookings/${b}/pay`, { method: 'CASH' }, ctx.sessions.admin.token);
       await execute('UPDATE bookings SET expires_at = DATE_SUB(NOW(), INTERVAL 1 MINUTE)');
 
       assert.equal((await expireDueBookings()).expired, 0);

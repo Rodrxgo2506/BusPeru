@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import { query, queryOne } from '../config/database';
 import { authenticate, requireAuth } from '../middleware/auth.middleware';
+import { TRIP_SEAT_CAPACITY_SQL } from '../services/trip.service';
 import { ApiError } from '../utils/ApiError';
 import { asyncHandler, sendSuccess } from '../utils/http';
 
@@ -25,24 +26,25 @@ router.get(
           (SELECT COUNT(*) FROM bookings WHERE status IN ('CONFIRMED','COMPLETED')) AS bookings_confirmed,
           (SELECT COUNT(*) FROM booking_seats bs JOIN bookings bk ON bk.id = bs.booking_id
             WHERE bk.status IN ('CONFIRMED','COMPLETED')) AS tickets_sold,
-          (SELECT COALESCE(SUM(amount), 0) FROM payments WHERE status = 'PAID') AS revenue_total,
+          (SELECT COALESCE(SUM(CASE WHEN direction = 'CREDIT' THEN amount ELSE -amount END), 0) FROM financial_transactions
+            WHERE type IN ('PAYMENT','REFUND') AND status = 'COMPLETED' AND company_id IS NOT NULL) AS revenue_total,
           (SELECT COUNT(*) FROM refunds WHERE status = 'COMPLETED') AS refunds_processed,
-          (SELECT COALESCE(SUM(amount), 0) FROM financial_transactions WHERE type = 'COMMISSION' AND status = 'COMPLETED') AS commissions_total,
+          (SELECT COALESCE(SUM(CASE WHEN direction = 'DEBIT' THEN amount ELSE -amount END), 0) FROM financial_transactions
+            WHERE type = 'COMMISSION' AND status = 'COMPLETED' AND company_id IS NOT NULL) AS commissions_total,
           (SELECT COALESCE(SUM(net_amount), 0) FROM settlements WHERE status = 'PAID') AS settlements_paid`,
       ),
       query(
         `SELECT DATE(p.paid_at) AS day, COALESCE(SUM(p.amount), 0) AS amount, COUNT(*) AS payments
          FROM payments p
-         WHERE p.status = 'PAID' AND p.paid_at >= CURDATE() - INTERVAL 29 DAY
+         WHERE p.status IN ('PAID','REFUNDED') AND p.paid_at >= CURDATE() - INTERVAL 29 DAY
          GROUP BY DATE(p.paid_at) ORDER BY day ASC`,
       ),
       query(
-        `SELECT co.id, co.name, co.logo_url, COALESCE(SUM(p.amount), 0) AS revenue, COUNT(DISTINCT bk.id) AS bookings
+        `SELECT co.id, co.name, co.logo_url,
+                COALESCE(SUM(CASE WHEN ft.direction = 'CREDIT' THEN ft.amount ELSE -ft.amount END), 0) AS revenue,
+                COUNT(DISTINCT ft.booking_id) AS bookings
          FROM companies co
-         JOIN routes r ON r.company_id = co.id
-         JOIN trips t ON t.route_id = r.id
-         JOIN bookings bk ON bk.trip_id = t.id
-         JOIN payments p ON p.booking_id = bk.id AND p.status = 'PAID'
+         JOIN financial_transactions ft ON ft.company_id = co.id AND ft.type IN ('PAYMENT','REFUND') AND ft.status = 'COMPLETED'
          GROUP BY co.id, co.name, co.logo_url ORDER BY revenue DESC LIMIT 5`,
       ),
       query(
@@ -57,7 +59,7 @@ router.get(
       ),
       query(
         `SELECT p.method, COUNT(*) AS payments, COALESCE(SUM(p.amount), 0) AS amount
-         FROM payments p WHERE p.status = 'PAID' GROUP BY p.method ORDER BY amount DESC`,
+         FROM payments p WHERE p.status IN ('PAID','REFUNDED') GROUP BY p.method ORDER BY amount DESC`,
       ),
       query(
         `SELECT al.action, al.entity_type, al.description, al.created_at, u.first_name, u.last_name
@@ -92,10 +94,10 @@ router.get(
         `SELECT
           (SELECT COALESCE(SUM(p.amount), 0) FROM payments p
             JOIN bookings bk ON bk.id = p.booking_id JOIN trips t ON t.id = bk.trip_id JOIN routes r ON r.id = t.route_id
-            WHERE p.status = 'PAID' AND DATE(p.paid_at) = CURDATE() AND r.company_id IN (${placeholders})) AS sales_today,
+            WHERE p.status IN ('PAID','REFUNDED') AND EXISTS (SELECT 1 FROM financial_transactions fx WHERE fx.payment_id = p.id AND fx.type = 'PAYMENT' AND fx.company_id IS NOT NULL) AND DATE(p.paid_at) = CURDATE() AND r.company_id IN (${placeholders})) AS sales_today,
           (SELECT COALESCE(SUM(p.amount), 0) FROM payments p
             JOIN bookings bk ON bk.id = p.booking_id JOIN trips t ON t.id = bk.trip_id JOIN routes r ON r.id = t.route_id
-            WHERE p.status = 'PAID' AND DATE(p.paid_at) = CURDATE() - INTERVAL 1 DAY AND r.company_id IN (${placeholders})) AS sales_yesterday,
+            WHERE p.status IN ('PAID','REFUNDED') AND EXISTS (SELECT 1 FROM financial_transactions fx WHERE fx.payment_id = p.id AND fx.type = 'PAYMENT' AND fx.company_id IS NOT NULL) AND DATE(p.paid_at) = CURDATE() - INTERVAL 1 DAY AND r.company_id IN (${placeholders})) AS sales_yesterday,
           (SELECT COUNT(*) FROM booking_seats bs JOIN bookings bk ON bk.id = bs.booking_id
             JOIN trips t ON t.id = bk.trip_id JOIN routes r ON r.id = t.route_id
             WHERE bk.status IN ('CONFIRMED','COMPLETED') AND r.company_id IN (${placeholders})) AS tickets_sold,
@@ -112,12 +114,12 @@ router.get(
         `SELECT DATE(p.paid_at) AS day, COALESCE(SUM(p.amount), 0) AS amount
          FROM payments p
          JOIN bookings bk ON bk.id = p.booking_id JOIN trips t ON t.id = bk.trip_id JOIN routes r ON r.id = t.route_id
-         WHERE p.status = 'PAID' AND p.paid_at >= CURDATE() - INTERVAL 6 DAY AND r.company_id IN (${placeholders})
+         WHERE p.status IN ('PAID','REFUNDED') AND EXISTS (SELECT 1 FROM financial_transactions fx WHERE fx.payment_id = p.id AND fx.type = 'PAYMENT' AND fx.company_id IS NOT NULL) AND p.paid_at >= CURDATE() - INTERVAL 6 DAY AND r.company_id IN (${placeholders})
          GROUP BY DATE(p.paid_at) ORDER BY day ASC`,
         ids,
       ),
       query(
-        `SELECT t.id, t.departure_datetime, t.status, b.code AS bus_code, b.capacity,
+        `SELECT t.id, t.departure_datetime, t.status, b.code AS bus_code, ${TRIP_SEAT_CAPACITY_SQL} AS capacity,
                 ol.city AS origin_city, dl.city AS destination_city,
                 (SELECT COUNT(*) FROM booking_seats bs JOIN bookings bk ON bk.id = bs.booking_id
                   WHERE bs.trip_id = t.id AND bk.status IN ('CONFIRMED','COMPLETED')) AS seats_sold
@@ -134,7 +136,7 @@ router.get(
         `SELECT p.method, COALESCE(SUM(p.amount), 0) AS amount, COUNT(*) AS payments
          FROM payments p
          JOIN bookings bk ON bk.id = p.booking_id JOIN trips t ON t.id = bk.trip_id JOIN routes r ON r.id = t.route_id
-         WHERE p.status = 'PAID' AND r.company_id IN (${placeholders})
+         WHERE p.status IN ('PAID','REFUNDED') AND EXISTS (SELECT 1 FROM financial_transactions fx WHERE fx.payment_id = p.id AND fx.type = 'PAYMENT' AND fx.company_id IS NOT NULL) AND r.company_id IN (${placeholders})
          GROUP BY p.method ORDER BY amount DESC`,
         ids,
       ),

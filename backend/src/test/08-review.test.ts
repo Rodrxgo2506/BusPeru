@@ -16,7 +16,7 @@ describe('Reseñas: moderación y aislamiento', () => {
     const reserva = await post('/bookings', {
       trip_id: tripId, seat_ids: [at(seats, 0).id], passenger_email: 'cliente@test.pe',
     }, ctx.sessions.customer.token);
-    await post(`/bookings/${reserva.body.data.id}/pay`, { method: 'CASH' }, ctx.sessions.customer.token);
+    await post(`/bookings/${reserva.body.data.id}/pay`, { method: 'CASH' }, ctx.sessions.admin.token);
     return reserva.body.data;
   }
 

@@ -25,7 +25,11 @@ export function LoginPage() {
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
 
-  const redirectTo = (location.state as { from?: string } | null)?.from;
+  // H-35: react-router ≤ 7.17 acepta rutas con barra invertida («/\evil.com») como redirección
+  // externa (GHSA-wrjc-x8rr-h8h6). `from` lo pone el propio guard, pero solo se sigue si es una
+  // ruta interna: empieza por «/» y no por «//» ni «/\».
+  const from = (location.state as { from?: unknown } | null)?.from;
+  const redirectTo = typeof from === 'string' && /^\/(?![/\\])/.test(from) && !from.includes('\\') ? from : undefined;
 
   const handleSubmit = async (event: FormEvent) => {
     event.preventDefault();

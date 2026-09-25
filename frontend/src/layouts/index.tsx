@@ -23,11 +23,15 @@ export function CustomerLayout() {
   const navigate = useNavigate();
 
   return (
-    <div className="mx-auto max-w-7xl px-4 py-8 sm:px-6 lg:px-8">
+    /* `isolate` crea aquí el contexto de apilamiento del que depende el fondo panorámico de
+       «Mi perfil»: sin él, su capa `-z-10` se escaparía al contexto raíz y quedaría debajo
+       del blanco opaco del armazón público, es decir, invisible. En las demás pantallas del
+       área de cliente no cambia nada, porque ninguna dibuja fondo. */
+    <div className="relative isolate mx-auto max-w-7xl px-4 py-8 sm:px-6 lg:px-8">
       <div className="grid gap-6 lg:grid-cols-[260px_1fr]">
         {/* min-w-0: sin esto el nav con scroll horizontal estira la columna del grid. */}
         <aside className="min-w-0 lg:sticky lg:top-24 lg:self-start">
-          <div className="card overflow-hidden">
+          <div className="card overflow-hidden border-white/70 bg-white/85 shadow-panel backdrop-blur-md">
             <div className="flex items-center gap-3 border-b border-border p-5">
               <Avatar firstName={user?.first_name} lastName={user?.last_name} src={user?.avatar_url} size="lg" />
               <div className="min-w-0">

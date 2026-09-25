@@ -55,8 +55,10 @@ describe('BP-19 · integridad de asientos en reservas', () => {
   /** Deja el viaje sin reservas para que cada caso empiece con el bus entero libre. */
   beforeEach(async () => {
     await execute('DELETE FROM booking_seats');
-    await execute('DELETE FROM payments');
+    // Desde H-50 cancelar una reserva pagada abre su reembolso: va antes que los pagos que referencia.
+    await execute('DELETE FROM refunds');
     await execute('DELETE FROM financial_transactions');
+    await execute('DELETE FROM payments');
     await execute('DELETE FROM bookings');
     await execute('UPDATE trips SET available_seats = (SELECT capacity FROM buses WHERE id = trips.bus_id)');
   });
@@ -118,7 +120,7 @@ describe('BP-19 · integridad de asientos en reservas', () => {
     it('2 · el flujo completo de compra sigue funcionando de principio a fin', async () => {
       const asiento = await asientoLibre(ctx.fixtures.tripA);
       const reserva = await reservar(ctx.fixtures.tripA, asiento, ctx.sessions.customer.token);
-      const pago = await pagar(reserva.body.data.id, ctx.sessions.customer.token);
+      const pago = await pagar(reserva.body.data.id, ctx.sessions.admin.token);
 
       assert.equal(pago.status, 200);
       const estado = await queryOne<{ status: string }>('SELECT status FROM bookings WHERE id = ?', [reserva.body.data.id]);
@@ -143,7 +145,7 @@ describe('BP-19 · integridad de asientos en reservas', () => {
     it('4 · PENDING contra CONFIRMED: una reserva pagada bloquea la venta', async () => {
       const asiento = await asientoLibre(ctx.fixtures.tripA);
       const primera = await reservar(ctx.fixtures.tripA, asiento, ctx.sessions.customer.token);
-      await pagar(primera.body.data.id, ctx.sessions.customer.token);
+      await pagar(primera.body.data.id, ctx.sessions.admin.token);
 
       const segunda = await reservar(ctx.fixtures.tripA, asiento, ctx.sessions.companyAdmin.token);
       assert.equal(segunda.status, 409);
@@ -153,7 +155,7 @@ describe('BP-19 · integridad de asientos en reservas', () => {
     it('5 · CONFIRMED contra CONFIRMED: ningún camino produce dos pagadas', async () => {
       const asiento = await asientoLibre(ctx.fixtures.tripA);
       const primera = await reservar(ctx.fixtures.tripA, asiento, ctx.sessions.customer.token);
-      await pagar(primera.body.data.id, ctx.sessions.customer.token);
+      await pagar(primera.body.data.id, ctx.sessions.admin.token);
 
       // No hay forma de crear la segunda: la venta ya la rechaza, y confirmar exige haber
       // reservado antes. Se comprueba el resultado, no el camino.
@@ -214,7 +216,7 @@ describe('BP-19 · integridad de asientos en reservas', () => {
     it('9 · COMPLETED conserva el histórico y sigue ocupando su asiento', async () => {
       const asiento = await asientoLibre(ctx.fixtures.tripA);
       const reserva = await reservar(ctx.fixtures.tripA, asiento, ctx.sessions.customer.token);
-      await pagar(reserva.body.data.id, ctx.sessions.customer.token);
+      await pagar(reserva.body.data.id, ctx.sessions.admin.token);
       await execute("UPDATE bookings SET status = 'COMPLETED' WHERE id = ?", [reserva.body.data.id]);
 
       const otra = await reservar(ctx.fixtures.tripA, asiento, ctx.sessions.companyAdmin.token);
@@ -257,7 +259,7 @@ describe('BP-19 · integridad de asientos en reservas', () => {
       assert.equal((await pagar(segunda.body.data.id, ctx.sessions.companyAdmin.token)).status, 200);
 
       // Y ahora paga la primera. Antes de BP-19 esto devolvía 200 y dejaba dos CONFIRMED.
-      const pagoTardio = await pagar(primera.body.data.id, ctx.sessions.customer.token);
+      const pagoTardio = await pagar(primera.body.data.id, ctx.sessions.admin.token);
       assert.equal(pagoTardio.status, 409, 'el pago tardío debe rechazarse, no duplicar el asiento');
       assert.match(String(pagoTardio.body.message), /ya fueron tomados/i);
 
@@ -275,7 +277,7 @@ describe('BP-19 · integridad de asientos en reservas', () => {
       const segunda = await reservar(ctx.fixtures.tripA, asiento, ctx.sessions.companyAdmin.token);
       await pagar(segunda.body.data.id, ctx.sessions.companyAdmin.token);
 
-      await pagar(primera.body.data.id, ctx.sessions.customer.token);
+      await pagar(primera.body.data.id, ctx.sessions.admin.token);
 
       const pagados = await query(
         "SELECT id FROM payments WHERE booking_id = ? AND status = 'PAID'",
@@ -295,7 +297,7 @@ describe('BP-19 · integridad de asientos en reservas', () => {
 
       // No se endurece la política de retención: lo que se impide es pisar a otro, no pagar
       // con retraso cuando nadie ha ocupado el sitio.
-      const pago = await pagar(reserva.body.data.id, ctx.sessions.customer.token);
+      const pago = await pagar(reserva.body.data.id, ctx.sessions.admin.token);
       assert.equal(pago.status, 200);
       await sinDuplicados();
     });
@@ -357,7 +359,7 @@ describe('BP-19 · integridad de asientos en reservas', () => {
       // llegue antes, no pueden concluir las dos.
       const [venta, pagoTardio] = await Promise.all([
         reservar(ctx.fixtures.tripA, asiento, ctx.sessions.companyAdmin.token),
-        pagar(primera.body.data.id, ctx.sessions.customer.token),
+        pagar(primera.body.data.id, ctx.sessions.admin.token),
       ]);
 
       const exitos = [venta.status === 201, pagoTardio.status === 200].filter(Boolean);
@@ -409,7 +411,7 @@ describe('BP-19 · integridad de asientos en reservas', () => {
     it('19 · el mapa de asientos refleja exactamente lo que dice booking_seats', async () => {
       const asiento = await asientoLibre(ctx.fixtures.tripA);
       const reserva = await reservar(ctx.fixtures.tripA, asiento, ctx.sessions.customer.token);
-      await pagar(reserva.body.data.id, ctx.sessions.customer.token);
+      await pagar(reserva.body.data.id, ctx.sessions.admin.token);
 
       const mapa = await seatMap(ctx.fixtures.tripA);
       assert.equal(mapa.find((seat) => seat.id === asiento)?.is_taken, 1);
@@ -460,7 +462,7 @@ describe('BP-19 · integridad de asientos en reservas', () => {
     it('22 · availability coincide con el mapa de asientos', async () => {
       const asiento = await asientoLibre(ctx.fixtures.tripA);
       const reserva = await reservar(ctx.fixtures.tripA, asiento, ctx.sessions.customer.token);
-      await pagar(reserva.body.data.id, ctx.sessions.customer.token);
+      await pagar(reserva.body.data.id, ctx.sessions.admin.token);
 
       const res = await getWithKey(`/integration/v1/trips/${ctx.fixtures.tripA}/availability`, claveApi);
       assert.equal(res.status, 200);

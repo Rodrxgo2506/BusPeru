@@ -4,6 +4,7 @@ import { authenticate, requireAuth } from '../middleware/auth.middleware';
 import { requirePermission } from '../middleware/permission.middleware';
 import { validate } from '../middleware/validate.middleware';
 import { recordAudit } from '../services/audit.service';
+import { assertCompanyCanSell } from '../services/company-status.service';
 import { ApiError } from '../utils/ApiError';
 import { parseId } from '../utils/query';
 import { asyncHandler, sendSuccess } from '../utils/http';
@@ -56,6 +57,8 @@ apiKeyRouter.post(
       if (companyId !== null && !user.companyIds.includes(companyId)) throw ApiError.forbidden('No puedes crear llaves para otra empresa');
       companyId = companyId ?? ownCompany;
     }
+    // H-36: una API key vende por la empresa; no se emite para una empresa no activa (ni por el ADMIN).
+    if (companyId !== null) await assertCompanyCanSell(companyId);
 
     const { plain, prefix, hash } = generateApiKey();
     const result = await execute(

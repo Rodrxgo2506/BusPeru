@@ -66,7 +66,7 @@ describe('Autenticación y sesión', () => {
 
   it('exige sesión en todos los endpoints privados', async () => {
     const paths = [
-      '/users', '/roles', '/permissions', '/companies', '/buses', '/bus-types', '/seats', '/seat-types',
+      '/users', '/roles', '/permissions', '/companies', '/buses', '/bus-types', '/seat-types',
       '/locations', '/routes', '/route-stops', '/trips', '/bookings', '/payments', '/refunds', '/reviews',
       '/notifications', '/support/tickets', '/financial-transactions', '/settlements', '/audit-logs',
       '/api-keys', '/system-settings', '/commissions', '/promotions', '/coupons', '/notification-templates',

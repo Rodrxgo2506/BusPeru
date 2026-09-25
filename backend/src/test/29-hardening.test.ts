@@ -90,8 +90,10 @@ describe('BP-25 · robustez y bordes', () => {
     it('4 · las claims del token real se mantienen: no se rompió el contrato', async () => {
       const claims = jwt.decode(ctx.sessions.admin.token) as Record<string, unknown>;
 
-      // `pwd` es la huella de sesión de BP-18; `sub`/`role` sostienen la autorización.
-      assert.deepEqual(Object.keys(claims).sort(), ['exp', 'iat', 'pwd', 'role', 'roleId', 'sub']);
+      // `pwd` es la huella de sesión de BP-18; `sub`/`role` sostienen la autorización; `jti`
+      // identifica el token para revocarlo al cerrar sesión (F12-07).
+      assert.deepEqual(Object.keys(claims).sort(), ['exp', 'iat', 'jti', 'pwd', 'role', 'roleId', 'sub']);
+      assert.match(String(claims.jti), /^[0-9a-f]{32}$/);
       const rehecho = refirmar(ctx.sessions.admin.token, env.jwt.secret);
       assert.equal((await get('/auth/me', rehecho)).status, 200);
     });

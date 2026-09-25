@@ -1,4 +1,4 @@
-import { useEffect, useState, type FormEvent } from 'react';
+import { useEffect, useRef, useState, type FormEvent } from 'react';
 import { Button, Checkbox, Input, Modal, Select, Textarea } from '@/components/ui';
 import { ApiError } from '@/services/api';
 import { cn } from '@/utils/cn';
@@ -56,16 +56,20 @@ export function ResourceForm<T extends Record<string, unknown>>({
   const [generalError, setGeneralError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
 
+  // Los formularios reciben `fields` como array literal: cambia en cada render del padre. El
+  // formulario se rellena solo al abrirse o al cambiar el registro, con los campos de ese momento.
+  const visibleFieldsRef = useRef(visibleFields);
+  visibleFieldsRef.current = visibleFields;
+
   useEffect(() => {
     if (!open) return;
     const next: Record<string, string | boolean> = {};
-    for (const field of visibleFields) {
+    for (const field of visibleFieldsRef.current) {
       next[field.name] = normalize(initialValues?.[field.name], field);
     }
     setValues(next);
     setErrors({});
     setGeneralError(null);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, initialValues]);
 
   const handleSubmit = async (event: FormEvent) => {

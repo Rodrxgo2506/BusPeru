@@ -1,7 +1,23 @@
 import dotenv from 'dotenv';
 import path from 'path';
+import { assertDatabaseAllowedForEnvironment } from './database-guard';
+import { assertProductionConfig, parseTrustProxy, type TrustProxySetting } from './production-guard';
+import { assertProductionSecrets } from './secrets-guard';
 
 dotenv.config({ path: path.resolve(process.cwd(), '.env') });
+
+// F15-04: en producción, antes de resolver ningún default, cada variable crítica tiene que venir
+// definida. Fuera de producción no hace nada y los defaults locales siguen funcionando.
+assertProductionConfig(process.env);
+
+/** TRUST_PROXY ya validado; fuera de producción un valor inválido también se rechaza (F15-05). */
+function trustProxy(): TrustProxySetting {
+  const parsed = parseTrustProxy(process.env.TRUST_PROXY);
+  if (parsed === null) {
+    throw new Error('TRUST_PROXY no es válido: usa false, un número de proxies entre 1 y 10, o una lista de IPs/CIDR (true no se admite).');
+  }
+  return parsed;
+}
 
 function required(key: string, fallback?: string): string {
   const value = process.env[key] ?? fallback;
@@ -17,7 +33,9 @@ export const env = {
   db: {
     host: required('DB_HOST', 'localhost'),
     port: Number(process.env.DB_PORT ?? 3306),
-    name: required('DB_NAME', 'busperu'),
+    // Sin valor por defecto (FASE 11F-0): antes, un DB_NAME ausente se convertía en `busperu`,
+    // la base real. Ahora falta y se dice.
+    name: required('DB_NAME'),
     user: required('DB_USER', 'root'),
     password: process.env.DB_PASSWORD ?? '',
   },
@@ -26,6 +44,12 @@ export const env = {
     expiresIn: process.env.JWT_EXPIRES_IN ?? '8h',
   },
   frontendUrl: process.env.FRONTEND_URL ?? 'http://localhost:5173',
+  /**
+   * `trust proxy` de Express (F15-05). Por defecto `false`: no se confía en `X-Forwarded-For`,
+   * así que ningún cliente puede fijarse la IP con la que se aplica el rate limit. Detrás de un
+   * proxy inverso hay que declararlo (número de saltos o IPs del proxy); en producción es obligatorio.
+   */
+  trustProxy: trustProxy(),
   /** Cada cuánto se revisan las reservas PENDING vencidas. */
   bookingExpiryIntervalMs: Number(process.env.BOOKING_EXPIRY_INTERVAL_MS ?? 60_000),
   rateLimit: {
@@ -35,14 +59,59 @@ export const env = {
     auth: Number(process.env.RATE_LIMIT_AUTH ?? 20),
   },
   mail: {
-    /** `log` imprime en consola (solo desarrollo), `smtp` envía de verdad. */
-    transport: (process.env.MAIL_TRANSPORT ?? 'log') as 'log' | 'smtp' | 'memory',
+    /**
+     * `log` imprime en consola (solo desarrollo); `smtp` y `resend` envían de verdad;
+     * `memory` retiene los mensajes y solo lo usa la suite.
+     */
+    transport: (process.env.MAIL_TRANSPORT ?? 'log') as 'log' | 'smtp' | 'resend' | 'memory',
     host: process.env.MAIL_HOST ?? '',
     port: Number(process.env.MAIL_PORT ?? 587),
     secure: process.env.MAIL_SECURE === 'true',
     user: process.env.MAIL_USER ?? '',
     password: process.env.MAIL_PASSWORD ?? '',
     from: process.env.MAIL_FROM ?? 'BusPeru <no-reply@busperu.com>',
+  },
+  /**
+   * Resend, el proveedor de correo transaccional.
+   *
+   * La clave se lee EXCLUSIVAMENTE del entorno y no tiene valor por defecto: sin ella el
+   * transporte `resend` no arranca y lo dice, en vez de fingir que envía. No es `required()`
+   * a propósito —eso rompe el arranque de la suite y de cualquier despliegue que todavía no
+   * use Resend—; el transporte comprueba su presencia solo cuando se le pide enviar.
+   *
+   * `from` apunta por defecto al remitente de pruebas que Resend permite sin dominio
+   * verificado, SOLO fuera de producción: en producción `production-guard.ts` exige
+   * RESEND_FROM_EMAIL explícito y rechaza el dominio de pruebas (F15-11).
+   */
+  /**
+   * Culqi, la pasarela de pago (modelo AGREGADOR: cobra BusPerú con UNA cuenta de
+   * plataforma y después liquida a cada empresa con las comisiones y liquidaciones que ya
+   * existen). El módulo `company_integrations` sigue guardando credenciales CULQI por
+   * empresa para el panel, pero NO se usa para cobrar: son dos cosas distintas a propósito.
+   *
+   * `privateKey` no sale JAMAS del backend. `publicKey` sí se publica: la necesita el
+   * navegador para tokenizar la tarjeta contra Culqi sin que los datos pasen por BusPerú.
+   * Ninguna de las dos tiene valor por defecto y ninguna es `required()`: sin ellas el
+   * proceso arranca igual y solo falla el cobro con tarjeta, diciendo lo que falta.
+   */
+  culqi: {
+    publicKey: process.env.CULQI_PUBLIC_KEY ?? '',
+    privateKey: process.env.CULQI_PRIVATE_KEY ?? '',
+    /** Base de la API v2. Variable solo para poder apuntarla a un doble en pruebas. */
+    apiUrl: process.env.CULQI_API_URL ?? 'https://api.culqi.com/v2',
+    /**
+     * Secreto compartido del webhook. Culqi NO publica un esquema de firma HMAC, así que
+     * este valor lo eliges tú y lo pones en la URL que registras en CulqiPanel. Es un
+     * cerrojo de puerta, no la prueba del pago: esa se obtiene releyendo el cargo contra
+     * la API de Culqi. Ver `culqi-webhook.routes.ts`.
+     */
+    webhookSecret: process.env.CULQI_WEBHOOK_SECRET ?? '',
+    /** Milisegundos antes de cortar una llamada a Culqi. Un cobro no puede colgarse. */
+    timeoutMs: Number(process.env.CULQI_TIMEOUT_MS ?? 20_000),
+  },
+  resend: {
+    apiKey: process.env.RESEND_API_KEY ?? '',
+    from: process.env.RESEND_FROM_EMAIL ?? 'BusPerú <onboarding@resend.dev>',
   },
   storage: {
     /**
@@ -113,3 +182,10 @@ export const env = {
     return this.nodeEnv === 'production';
   },
 };
+
+// FASE 11F-0: fuera de producción solo se admite una base `*_test`. Falla aquí, al cargar la
+// configuración y antes de que exista el pool, para que no llegue a abrirse ninguna conexión.
+assertDatabaseAllowedForEnvironment(env.nodeEnv, env.db.name);
+
+// F12-08: en producción, secretos con la fortaleza y el formato que exige su uso. No imprime valores.
+assertProductionSecrets({ nodeEnv: env.nodeEnv, jwtSecret: env.jwt.secret, encryptionKey: env.integrations.encryptionKey });

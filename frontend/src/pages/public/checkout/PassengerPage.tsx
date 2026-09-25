@@ -7,7 +7,7 @@ import { useAsync } from '@/hooks/useAsync';
 import { publicService } from '@/services';
 import { formatCurrency, formatDate, formatTime } from '@/utils/format';
 import { CheckoutStepper, TrustBar } from './CheckoutStepper';
-import { isItinerary, useCheckout, type PassengerDetails } from './CheckoutContext';
+import { isItinerary, selectionSubtotal, useCheckout, type PassengerDetails } from './CheckoutContext';
 
 const EMPTY_PASSENGER: PassengerDetails = {
   first_name: '',
@@ -92,15 +92,15 @@ export function PassengerPage() {
 
   const data = trip.data;
   const serviceFee = Number(settings.data?.['booking.service_fee'] ?? 2.5);
-  const basePrice = Number(data?.base_price ?? 0);
-
   const seatCount = itinerary
     ? segments.reduce((sum, entry) => sum + entry.seatIds.length, 0)
     : checkout.seatIds.length;
 
+  // El subtotal es la suma de los precios EFECTIVOS que traia la seleccion, no el precio
+  // base por la cantidad: dos asientos del mismo viaje pueden costar distinto.
   const subtotal = itinerary
-    ? segments.reduce((sum, entry, index) => sum + Number(segmentTrips.data?.[index]?.base_price ?? 0) * entry.seatIds.length, 0)
-    : basePrice * checkout.seatIds.length;
+    ? segments.reduce((sum, entry) => sum + selectionSubtotal(entry.seatPrices), 0)
+    : selectionSubtotal(checkout.seatPrices);
 
   const total = subtotal + serviceFee * seatCount;
 
@@ -172,7 +172,9 @@ export function PassengerPage() {
               {!itinerary && (
                 <SummaryRow icon={<Ticket className="h-4 w-4 text-brand-500" />} label="Asientos" value={checkout.seatNumbers.join(', ')} />
               )}
-              <SummaryRow icon={<Wallet className="h-4 w-4 text-brand-500" />} label={itinerary ? 'Subtotal de los tramos' : 'Precio por pasajero'} value={formatCurrency(itinerary ? subtotal : basePrice)} />
+              {/* «Precio por pasajero» ya no existe: cada asiento tiene el suyo. Se muestra
+                  el subtotal, que es la suma real de los asientos elegidos. */}
+              <SummaryRow icon={<Wallet className="h-4 w-4 text-brand-500" />} label={itinerary ? 'Subtotal de los tramos' : 'Subtotal'} value={formatCurrency(subtotal)} />
               <SummaryRow icon={<Wallet className="h-4 w-4 text-brand-500" />} label="Cargo por servicio" value={formatCurrency(serviceFee * seatCount)} />
             </dl>
 

@@ -3,6 +3,7 @@ import { useState } from 'react';
 import { ResourcePage } from '@/components/common/ResourcePage';
 import { SeatMap } from '@/components/common/SeatMap';
 import { Badge, Button, Card, ConfirmDialog, EmptyState, ErrorState, LoadingState, Modal, PageHeader, StatusBadge, type Column } from '@/components/ui';
+import { useAuth } from '@/context/AuthContext';
 import { useToast } from '@/context/ToastContext';
 import { useAsync } from '@/hooks/useAsync';
 import { ApiError } from '@/services/api';
@@ -19,6 +20,9 @@ const TRIP_STATUS_OPTIONS = [
   { value: 'CANCELLED', label: 'Cancelado' },
 ];
 
+/** Estados desde los que el backend acepta cancelar un viaje. */
+const CANCELLABLE_STATUSES: string[] = ['SCHEDULED', 'BOARDING', 'DELAYED'];
+
 export function TripsPage({ scope }: { scope: 'company' | 'admin' }) {
   const routes = useAsync(() => routeService.list({ limit: 200 }), []);
   const buses = useAsync(() => busService.list({ limit: 200 }), []);
@@ -26,6 +30,11 @@ export function TripsPage({ scope }: { scope: 'company' | 'admin' }) {
   // y vuelve a validarlo al guardar, así que el selector nunca ofrece gente de otra empresa.
   const drivers = useAsync(() => driverService.list({ status: 'ACTIVE' }), []);
   const toast = useToast();
+  // Cancelar un viaje cancela sus reservas y abre reembolsos: es decisión de ADMIN o
+  // COMPANY_ADMIN. OPERATOR opera el viaje, pero no lo cancela. El backend aplica la misma
+  // regla; esto solo evita ofrecer una acción que respondería 403.
+  const { hasRole } = useAuth();
+  const canCancel = hasRole('ADMIN', 'COMPANY_ADMIN');
 
   const [seatsTrip, setSeatsTrip] = useState<Trip | null>(null);
   const [cancelTrip, setCancelTrip] = useState<Trip | null>(null);
@@ -101,7 +110,7 @@ export function TripsPage({ scope }: { scope: 'company' | 'admin' }) {
     setCancelling(true);
     try {
       await tripService.cancel(cancelTrip.id);
-      toast.success('Viaje cancelado correctamente.');
+      toast.success('Viaje cancelado.', 'Sus reservas se cancelaron y se generaron los reembolsos de los pagos cobrados.');
       setCancelTrip(null);
       setReloadToken((token) => token + 1);
     } catch (error) {
@@ -186,7 +195,7 @@ export function TripsPage({ scope }: { scope: 'company' | 'admin' }) {
             >
               <Eye className="h-4 w-4" />
             </button>
-            {trip.status !== 'CANCELLED' && (
+            {canCancel && CANCELLABLE_STATUSES.includes(trip.status) && (
               <button
                 type="button"
                 onClick={() => setCancelTrip(trip)}
@@ -248,7 +257,7 @@ export function TripsPage({ scope }: { scope: 'company' | 'admin' }) {
         loading={cancelling}
         title="Cancelar viaje"
         confirmLabel="Sí, cancelar viaje"
-        message="El viaje quedará marcado como cancelado. Las reservas asociadas deberán gestionarse desde el módulo de reservas."
+        message="El viaje quedará cancelado y no se podrá reactivar. Sus reservas se cancelarán y se liberarán sus asientos; las que estaban pagadas recibirán una solicitud de reembolso, y cada pasajero será notificado."
       />
     </>
   );

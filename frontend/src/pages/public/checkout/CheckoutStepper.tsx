@@ -1,4 +1,5 @@
 import { Check, Clock3, Lock, RotateCcw, Tag } from 'lucide-react';
+import { TARJETA_FLOTANTE } from '@/components/common/TravelBackdrop';
 import { cn } from '@/utils/cn';
 
 const STEPS = ['Buscar', 'Resultados', 'Asientos', 'Pasajeros', 'Pago', 'Confirmación'] as const;
@@ -52,7 +53,7 @@ const TRUST_ITEMS = [
 /** Footer strip repeated across the checkout mockups: orange outlined circular icons. */
 export function TrustBar({ className }: { className?: string }) {
   return (
-    <div className={cn('mt-6 rounded-card border border-border bg-white', className)}>
+    <div className={cn('mt-6 rounded-card border', TARJETA_FLOTANTE, className)}>
       <ul className="grid gap-5 p-5 sm:grid-cols-2 lg:grid-cols-4">
         {TRUST_ITEMS.map((item) => {
           const Icon = item.icon;

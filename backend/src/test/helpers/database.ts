@@ -115,7 +115,7 @@ export async function setupTestDatabase(databaseName: string): Promise<void> {
     // Migraciones aplicadas sobre el dump. La base de pruebas debe tener el mismo esquema
     // que la real, incluida la tabla de recuperación de contraseña (migración 002).
     const migrationsDir = path.resolve(__dirname, '../../../../database/migrations');
-    for (const file of ['002-password-reset-tokens.sql', '003-company-bank-accounts.sql', '004-drivers.sql', '005-booking-groups.sql', '006-company-documents.sql', '007-users-oauth.sql', '008-oauth-flows.sql', '009-company-integrations.sql']) {
+    for (const file of ['002-password-reset-tokens.sql', '003-company-bank-accounts.sql', '004-drivers.sql', '005-booking-groups.sql', '006-company-documents.sql', '007-users-oauth.sql', '008-oauth-flows.sql', '009-company-integrations.sql', '010-bus-layout-versioning.sql', '011-trip-seat-type-prices-restrict.sql', '012-drop-redundant-code-indexes.sql', '013-settlement-item-unique-transaction.sql', '014-revoked-sessions.sql']) {
       const migration = path.join(migrationsDir, file);
       if (!fs.existsSync(migration)) throw new Error(`Falta la migración ${file}`);
       for (const statement of splitStatements(fs.readFileSync(migration, 'utf8'))) {
@@ -145,8 +145,14 @@ export async function truncateOperationalData(databaseName: string): Promise<voi
     'booking_groups',
     'coupon_usages', 'booking_seats', 'bookings', 'review_responses', 'reviews',
     'support_messages', 'support_tickets', 'notifications', 'coupons', 'promotions',
-    'audit_logs', 'api_keys', 'seats', 'trips', 'route_stops', 'routes', 'buses',
-    'oauth_flows', 'company_integrations', 'password_reset_tokens', 'company_bank_accounts', 'company_documents', 'drivers', 'company_users', 'companies', 'locations', 'users', 'bus_types', 'seat_types',
+    'audit_logs', 'api_keys',
+    // Migración 010: las versiones de distribución se vacían antes que sus asientos y
+    // que el bus. `TRUNCATE` corre con las claves ajenas desactivadas y por tanto NO
+    // arrastra en cascada: si no se nombran aquí, la versión 1 sobrevive de un archivo de
+    // pruebas al siguiente y el segundo sembrado choca contra `uq_layout_bus_version`.
+    'trip_seat_type_prices', 'bus_layout_elements', 'bus_layout_decks', 'bus_layouts',
+    'seats', 'trips', 'route_stops', 'routes', 'buses',
+    'revoked_sessions', 'oauth_flows', 'company_integrations', 'password_reset_tokens', 'company_bank_accounts', 'company_documents', 'drivers', 'company_users', 'companies', 'locations', 'users', 'bus_types', 'seat_types',
     'company_commission_settings', 'system_settings', 'notification_templates',
   ];
 

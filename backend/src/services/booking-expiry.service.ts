@@ -2,7 +2,10 @@ import { query, withTransaction } from '../config/database';
 import { NOTIFICATION_EVENTS, notify } from './notification.service';
 import { purgeExpiredResetTokens } from './password-reset.service';
 import { advanceTripLifecycle } from './trip.service';
+import { TRIP_SEAT_CAPACITY_SQL, cancelOpenPayments, withDeadlockRetry } from './booking.service';
 import { purgeExpired as purgeExpiredOAuthFlows } from '../repositories/oauth-flow.repository';
+import { purgeExpiredRevocations } from './session-revocation.service';
+import { logError } from '../utils/logger';
 
 /**
  * Expiración de reservas PENDING cuyo `expires_at` ya venció.
@@ -105,8 +108,9 @@ export async function expireDueBookings(options: ExpiryOptions = {}): Promise<Ex
   const result: ExpiryResult = { expired: 0, bookingIds: [], seatsReleased: 0 };
 
   for (const candidate of due) {
-    // Una transacción por reserva: un fallo aislado no bloquea al resto.
-    const processed = await withTransaction(async (connection) => {
+    // Una transacción por reserva: un fallo aislado no bloquea al resto. Si InnoDB la elige
+    // como víctima de un interbloqueo, se repite entera: ver `withDeadlockRetry`.
+    const processed = await withDeadlockRetry(() => withTransaction(async (connection) => {
       // El viaje primero, igual que en la venta y en la confirmación (auditoría BP-19).
       // Las tres rutas que cambian la ocupación de un asiento toman ahora los cerrojos en
       // el mismo orden —viaje, luego reserva—, de modo que no pueden quedarse esperándose
@@ -127,16 +131,15 @@ export async function expireDueBookings(options: ExpiryOptions = {}): Promise<Ex
 
       await connection.query("UPDATE bookings SET status = 'EXPIRED' WHERE id = ?", [booking.id]);
 
-      await connection.query(
-        "UPDATE payments SET status = 'CANCELLED' WHERE booking_id = ? AND status IN ('PENDING', 'PROCESSING')",
-        [booking.id],
-      );
+      // Mismo efecto que antes, sin bloquear pagos de otras reservas: ver `cancelOpenPayments`.
+      await cancelOpenPayments(connection, booking.id, ['PENDING', 'PROCESSING']);
 
-      // Devuelve los cupos sin pasarse de la capacidad real del bus.
+      // Devuelve los cupos sin pasarse de la capacidad de LA VERSION que usa este viaje.
+      // Se sustituye el JOIN contra `buses` por subconsultas correlacionadas: un recurso
+      // menos que bloquear dentro de la transaccion de expiracion.
       await connection.query(
         `UPDATE trips t
-         JOIN buses b ON b.id = t.bus_id
-         SET t.available_seats = LEAST(COALESCE(t.available_seats, 0) + ?, b.capacity)
+         SET t.available_seats = LEAST(COALESCE(t.available_seats, 0) + ?, ${TRIP_SEAT_CAPACITY_SQL})
          WHERE t.id = ? AND t.available_seats IS NOT NULL`,
         [booking.passenger_count, booking.trip_id],
       );
@@ -173,7 +176,7 @@ export async function expireDueBookings(options: ExpiryOptions = {}): Promise<Ex
       });
 
       return { id: booking.id, seats: seatNumbers.length };
-    });
+    }));
 
     if (processed) {
       result.expired += 1;
@@ -198,7 +201,7 @@ export function startBookingExpiryScheduler(intervalMs: number): void {
         console.log(`↺ Reservas expiradas: ${result.expired} (${result.bookingIds.join(', ')}), asientos liberados: ${result.seatsReleased}`);
       }
     } catch (error) {
-      console.error('Error al expirar reservas vencidas:', error);
+      logError('Error al expirar reservas vencidas', error);
     }
 
     // El mismo ciclo avanza el ciclo de vida de los viajes: no hace falta un segundo
@@ -211,7 +214,7 @@ export function startBookingExpiryScheduler(intervalMs: number): void {
         );
       }
     } catch (error) {
-      console.error('Error al avanzar el estado de los viajes:', error);
+      logError('Error al avanzar el estado de los viajes', error);
     }
 
     // Aprovecha el mismo ciclo para purgar los códigos de recuperación caducados, en vez
@@ -220,7 +223,7 @@ export function startBookingExpiryScheduler(intervalMs: number): void {
       const purged = await purgeExpiredResetTokens();
       if (purged > 0) console.log(`↺ Códigos de recuperación purgados: ${purged}`);
     } catch (error) {
-      console.error('Error al purgar códigos de recuperación:', error);
+      logError('Error al purgar códigos de recuperación', error);
     }
 
     // Y los flujos OAuth caducados, por el mismo motivo. El borrado va por índice y con
@@ -229,7 +232,15 @@ export function startBookingExpiryScheduler(intervalMs: number): void {
       const purged = await purgeExpiredOAuthFlows();
       if (purged > 0) console.log(`↺ Flujos OAuth purgados: ${purged}`);
     } catch (error) {
-      console.error('Error al purgar flujos OAuth:', error);
+      logError('Error al purgar flujos OAuth', error);
+    }
+
+    // F12-07: las revocaciones de tokens ya caducados no pueden coincidir con ninguno vivo.
+    try {
+      const purged = await purgeExpiredRevocations();
+      if (purged > 0) console.log(`↺ Sesiones revocadas purgadas: ${purged}`);
+    } catch (error) {
+      logError('Error al purgar sesiones revocadas', error);
     }
   };
 

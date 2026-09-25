@@ -85,7 +85,7 @@ describe('Pago del itinerario: atomicidad', () => {
   describe('Confirmación completa', () => {
     it('un itinerario de 2 tramos confirma ambos', async () => {
       const grupo = await crearItinerario([ctx.fixtures.tripA, tripVuelta]);
-      const res = await post(`/bookings/itineraries/${grupo.group_id}/pay`, { method: 'YAPE' }, ctx.sessions.customer.token);
+      const res = await post(`/bookings/itineraries/${grupo.group_id}/pay`, { method: 'YAPE' }, ctx.sessions.admin.token);
 
       assert.equal(res.status, 200);
       assert.ok(res.body.data.segments.every((s: { status: string }) => s.status === 'CONFIRMED'));
@@ -94,7 +94,7 @@ describe('Pago del itinerario: atomicidad', () => {
 
     it('un itinerario de 3 tramos confirma los tres', async () => {
       const grupo = await crearItinerario([ctx.fixtures.tripA, tripVuelta, tripTercero]);
-      const res = await post(`/bookings/itineraries/${grupo.group_id}/pay`, { method: 'YAPE' }, ctx.sessions.customer.token);
+      const res = await post(`/bookings/itineraries/${grupo.group_id}/pay`, { method: 'YAPE' }, ctx.sessions.admin.token);
 
       assert.equal(res.status, 200);
       const reservas = await estados(grupo.group_id);
@@ -104,7 +104,7 @@ describe('Pago del itinerario: atomicidad', () => {
 
     it('crea exactamente un pago por tramo, no uno por grupo', async () => {
       const grupo = await crearItinerario([ctx.fixtures.tripA, tripVuelta, tripTercero]);
-      await post(`/bookings/itineraries/${grupo.group_id}/pay`, { method: 'YAPE' }, ctx.sessions.customer.token);
+      await post(`/bookings/itineraries/${grupo.group_id}/pay`, { method: 'YAPE' }, ctx.sessions.admin.token);
 
       const pagos = await query<{ booking_id: number; amount: number; status: string }>(
         'SELECT booking_id, amount, status FROM payments ORDER BY id',
@@ -122,10 +122,10 @@ describe('Pago del itinerario: atomicidad', () => {
 
     it('registra los movimientos financieros de cada tramo', async () => {
       const grupo = await crearItinerario([ctx.fixtures.tripA, tripVuelta]);
-      await post(`/bookings/itineraries/${grupo.group_id}/pay`, { method: 'YAPE' }, ctx.sessions.customer.token);
+      await post(`/bookings/itineraries/${grupo.group_id}/pay`, { method: 'YAPE' }, ctx.sessions.admin.token);
 
       const movimientos = await query<{ type: string; booking_id: number; company_id: number }>(
-        'SELECT type, booking_id, company_id FROM financial_transactions ORDER BY id',
+        'SELECT type, booking_id, company_id FROM financial_transactions WHERE company_id IS NOT NULL ORDER BY id',
       );
       const pagos = movimientos.filter((m) => m.type === 'PAYMENT');
       assert.equal(pagos.length, 2, 'un movimiento PAYMENT por tramo');
@@ -146,7 +146,7 @@ describe('Pago del itinerario: atomicidad', () => {
       const grupo = await crearItinerario([ctx.fixtures.tripA, tripVuelta]);
       await sabotear(grupo.group_id, 2);
 
-      const res = await post(`/bookings/itineraries/${grupo.group_id}/pay`, { method: 'YAPE' }, ctx.sessions.customer.token);
+      const res = await post(`/bookings/itineraries/${grupo.group_id}/pay`, { method: 'YAPE' }, ctx.sessions.admin.token);
       assert.equal(res.status, 400, JSON.stringify(res.body));
 
       const reservas = await estados(grupo.group_id);
@@ -159,7 +159,7 @@ describe('Pago del itinerario: atomicidad', () => {
       const grupo = await crearItinerario([ctx.fixtures.tripA, tripVuelta, tripTercero]);
       await sabotear(grupo.group_id, 3);
 
-      const res = await post(`/bookings/itineraries/${grupo.group_id}/pay`, { method: 'YAPE' }, ctx.sessions.customer.token);
+      const res = await post(`/bookings/itineraries/${grupo.group_id}/pay`, { method: 'YAPE' }, ctx.sessions.admin.token);
       assert.equal(res.status, 400);
 
       const reservas = await estados(grupo.group_id);
@@ -171,7 +171,7 @@ describe('Pago del itinerario: atomicidad', () => {
     it('no queda ningún pago confirmado a medias', async () => {
       const grupo = await crearItinerario([ctx.fixtures.tripA, tripVuelta, tripTercero]);
       await sabotear(grupo.group_id, 3);
-      await post(`/bookings/itineraries/${grupo.group_id}/pay`, { method: 'YAPE' }, ctx.sessions.customer.token);
+      await post(`/bookings/itineraries/${grupo.group_id}/pay`, { method: 'YAPE' }, ctx.sessions.admin.token);
 
       const pagados = await query("SELECT id FROM payments WHERE status = 'PAID'");
       assert.equal(pagados.length, 0, 'ningún pago quedó en PAID');
@@ -183,7 +183,7 @@ describe('Pago del itinerario: atomicidad', () => {
     it('no queda ningún movimiento financiero a medias', async () => {
       const grupo = await crearItinerario([ctx.fixtures.tripA, tripVuelta, tripTercero]);
       await sabotear(grupo.group_id, 3);
-      await post(`/bookings/itineraries/${grupo.group_id}/pay`, { method: 'YAPE' }, ctx.sessions.customer.token);
+      await post(`/bookings/itineraries/${grupo.group_id}/pay`, { method: 'YAPE' }, ctx.sessions.admin.token);
 
       assert.equal((await query('SELECT id FROM financial_transactions')).length, 0);
     });
@@ -191,7 +191,7 @@ describe('Pago del itinerario: atomicidad', () => {
     it('no se emite ninguna notificación de pago del tramo revertido', async () => {
       const grupo = await crearItinerario([ctx.fixtures.tripA, tripVuelta]);
       await sabotear(grupo.group_id, 2);
-      await post(`/bookings/itineraries/${grupo.group_id}/pay`, { method: 'YAPE' }, ctx.sessions.customer.token);
+      await post(`/bookings/itineraries/${grupo.group_id}/pay`, { method: 'YAPE' }, ctx.sessions.admin.token);
 
       const avisos = await query(
         "SELECT id FROM notifications WHERE JSON_UNQUOTE(JSON_EXTRACT(data,'$.event')) = 'booking.payment_confirmed'",
@@ -202,7 +202,7 @@ describe('Pago del itinerario: atomicidad', () => {
     it('el grupo y sus reservas siguen existiendo tras el rollback', async () => {
       const grupo = await crearItinerario([ctx.fixtures.tripA, tripVuelta]);
       await sabotear(grupo.group_id, 2);
-      await post(`/bookings/itineraries/${grupo.group_id}/pay`, { method: 'YAPE' }, ctx.sessions.customer.token);
+      await post(`/bookings/itineraries/${grupo.group_id}/pay`, { method: 'YAPE' }, ctx.sessions.admin.token);
 
       assert.equal((await query('SELECT id FROM booking_groups WHERE id = ?', [grupo.group_id])).length, 1);
       assert.equal((await estados(grupo.group_id)).length, 2, 'no se pierde ninguna reserva');
@@ -211,11 +211,11 @@ describe('Pago del itinerario: atomicidad', () => {
     it('tras corregir el problema, el pago vuelve a funcionar', async () => {
       const grupo = await crearItinerario([ctx.fixtures.tripA, tripVuelta]);
       await sabotear(grupo.group_id, 2);
-      assert.equal((await post(`/bookings/itineraries/${grupo.group_id}/pay`, { method: 'YAPE' }, ctx.sessions.customer.token)).status, 400);
+      assert.equal((await post(`/bookings/itineraries/${grupo.group_id}/pay`, { method: 'YAPE' }, ctx.sessions.admin.token)).status, 400);
 
       // Se restaura el tramo saboteado y se reintenta.
       await execute("UPDATE bookings SET status = 'PENDING' WHERE group_id = ? AND segment_order = 2", [grupo.group_id]);
-      const segundo = await post(`/bookings/itineraries/${grupo.group_id}/pay`, { method: 'YAPE' }, ctx.sessions.customer.token);
+      const segundo = await post(`/bookings/itineraries/${grupo.group_id}/pay`, { method: 'YAPE' }, ctx.sessions.admin.token);
 
       assert.equal(segundo.status, 200);
       assert.ok((await estados(grupo.group_id)).every((b) => b.status === 'CONFIRMED'));
@@ -226,8 +226,8 @@ describe('Pago del itinerario: atomicidad', () => {
   describe('Idempotencia', () => {
     it('pagar dos veces el mismo itinerario no duplica pagos', async () => {
       const grupo = await crearItinerario([ctx.fixtures.tripA, tripVuelta]);
-      await post(`/bookings/itineraries/${grupo.group_id}/pay`, { method: 'YAPE' }, ctx.sessions.customer.token);
-      const segundo = await post(`/bookings/itineraries/${grupo.group_id}/pay`, { method: 'YAPE' }, ctx.sessions.customer.token);
+      await post(`/bookings/itineraries/${grupo.group_id}/pay`, { method: 'YAPE' }, ctx.sessions.admin.token);
+      const segundo = await post(`/bookings/itineraries/${grupo.group_id}/pay`, { method: 'YAPE' }, ctx.sessions.admin.token);
 
       assert.equal(segundo.status, 200, 'reintentar no es un error');
       assert.equal((await query('SELECT id FROM payments')).length, 2, 'siguen siendo dos pagos');
@@ -236,17 +236,17 @@ describe('Pago del itinerario: atomicidad', () => {
 
     it('pagar dos veces no duplica movimientos financieros', async () => {
       const grupo = await crearItinerario([ctx.fixtures.tripA, tripVuelta]);
-      await post(`/bookings/itineraries/${grupo.group_id}/pay`, { method: 'YAPE' }, ctx.sessions.customer.token);
+      await post(`/bookings/itineraries/${grupo.group_id}/pay`, { method: 'YAPE' }, ctx.sessions.admin.token);
       const antes = (await query('SELECT id FROM financial_transactions')).length;
 
-      await post(`/bookings/itineraries/${grupo.group_id}/pay`, { method: 'YAPE' }, ctx.sessions.customer.token);
+      await post(`/bookings/itineraries/${grupo.group_id}/pay`, { method: 'YAPE' }, ctx.sessions.admin.token);
       assert.equal((await query('SELECT id FROM financial_transactions')).length, antes);
     });
 
     it('pagar dos veces no duplica la notificación de pago', async () => {
       const grupo = await crearItinerario([ctx.fixtures.tripA, tripVuelta]);
-      await post(`/bookings/itineraries/${grupo.group_id}/pay`, { method: 'YAPE' }, ctx.sessions.customer.token);
-      await post(`/bookings/itineraries/${grupo.group_id}/pay`, { method: 'YAPE' }, ctx.sessions.customer.token);
+      await post(`/bookings/itineraries/${grupo.group_id}/pay`, { method: 'YAPE' }, ctx.sessions.admin.token);
+      await post(`/bookings/itineraries/${grupo.group_id}/pay`, { method: 'YAPE' }, ctx.sessions.admin.token);
 
       const avisos = await query(
         "SELECT id FROM notifications WHERE JSON_UNQUOTE(JSON_EXTRACT(data,'$.event')) = 'booking.payment_confirmed'",
@@ -259,7 +259,7 @@ describe('Pago del itinerario: atomicidad', () => {
       const pendientesAntes = await query<{ id: number }>("SELECT id FROM payments WHERE status = 'PENDING' ORDER BY id");
       assert.equal(pendientesAntes.length, 2);
 
-      await post(`/bookings/itineraries/${grupo.group_id}/pay`, { method: 'YAPE' }, ctx.sessions.customer.token);
+      await post(`/bookings/itineraries/${grupo.group_id}/pay`, { method: 'YAPE' }, ctx.sessions.admin.token);
 
       const pagados = await query<{ id: number }>("SELECT id FROM payments WHERE status = 'PAID' ORDER BY id");
       assert.deepEqual(
@@ -269,19 +269,33 @@ describe('Pago del itinerario: atomicidad', () => {
       );
     });
 
-    it('conserva el provider_transaction_id en los N pagos de la compra', async () => {
+    /**
+     * CAMBIO DE CONTRATO, no una prueba debilitada.
+     *
+     * Antes este caso daba por buena una regla insegura: el cliente enviaba
+     * `provider_transaction_id` y el backend lo guardaba como prueba de cobro, de modo que
+     * cualquiera podia confirmar tres tramos inventandose un identificador. Con la
+     * integracion de Culqi ese campo dejo de aceptarse del cliente; el identificador lo
+     * devuelve la pasarela al backend. Lo que se comprueba ahora es justo lo contrario.
+     *
+     * Va con YAPE y no con CARD: desde H-23 la tarjeta se rechaza en itinerarios (test 51).
+     */
+    it('ya no acepta un provider_transaction_id enviado por el cliente', async () => {
       const grupo = await crearItinerario([ctx.fixtures.tripA, tripVuelta, tripTercero]);
-      await post(
+      const res = await post(
         `/bookings/itineraries/${grupo.group_id}/pay`,
-        { method: 'CARD', provider_transaction_id: 'chg_prueba_unico' },
-        ctx.sessions.customer.token,
+        { method: 'YAPE', provider_transaction_id: 'chg_inventado_por_el_cliente' },
+        ctx.sessions.admin.token,
       );
 
-      const pagos = await query<{ provider_transaction_id: string }>('SELECT provider_transaction_id FROM payments');
+      assert.equal(res.status, 200);
+      const pagos = await query<{ provider_transaction_id: string | null }>(
+        'SELECT provider_transaction_id FROM payments',
+      );
       assert.equal(pagos.length, 3);
       assert.ok(
-        pagos.every((p) => p.provider_transaction_id === 'chg_prueba_unico'),
-        'un mismo cobro externo puede quedar registrado en los tres tramos',
+        pagos.every((p) => p.provider_transaction_id === null),
+        'un identificador que llega del navegador no puede quedar registrado como cobro',
       );
     });
   });
@@ -303,7 +317,7 @@ describe('Pago del itinerario: atomicidad', () => {
         trip_id: ctx.fixtures.tripA, seat_ids: [at(seats, 0).id], passenger_email: 'cliente@test.pe', payment_method: 'YAPE',
       }, ctx.sessions.customer.token);
 
-      const pago = await post(`/bookings/${reserva.body.data.id}/pay`, { method: 'YAPE' }, ctx.sessions.customer.token);
+      const pago = await post(`/bookings/${reserva.body.data.id}/pay`, { method: 'YAPE' }, ctx.sessions.admin.token);
       assert.equal(pago.status, 200);
       assert.equal(pago.body.data.status, 'CONFIRMED');
 
@@ -314,7 +328,7 @@ describe('Pago del itinerario: atomicidad', () => {
 
     it('el reembolso de un tramo funciona contra su propio pago', async () => {
       const grupo = await crearItinerario([ctx.fixtures.tripA, tripVuelta]);
-      await post(`/bookings/itineraries/${grupo.group_id}/pay`, { method: 'YAPE' }, ctx.sessions.customer.token);
+      await post(`/bookings/itineraries/${grupo.group_id}/pay`, { method: 'YAPE' }, ctx.sessions.admin.token);
 
       const reservas = await estados(grupo.group_id);
       const vuelta = reservas[1]!;
@@ -348,11 +362,11 @@ describe('Pago del itinerario: atomicidad', () => {
       }, ctx.sessions.customer.token);
       assert.equal(creado.status, 201);
 
-      const res = await post(`/bookings/itineraries/${creado.body.data.group_id}/pay`, { method: 'YAPE' }, ctx.sessions.customer.token);
+      const res = await post(`/bookings/itineraries/${creado.body.data.group_id}/pay`, { method: 'YAPE' }, ctx.sessions.admin.token);
       assert.equal(res.status, 200);
 
       const movimientos = await query<{ company_id: number; type: string }>(
-        "SELECT company_id, type FROM financial_transactions WHERE type = 'PAYMENT'",
+        "SELECT company_id, type FROM financial_transactions WHERE type = 'PAYMENT' AND company_id IS NOT NULL",
       );
       const empresas = new Set(movimientos.map((m) => Number(m.company_id)));
       assert.equal(empresas.size, 2, 'cada empresa recibe su propio movimiento');
@@ -394,12 +408,13 @@ describe('Pago del itinerario: atomicidad', () => {
       assert.ok((await estados(grupo.group_id)).every((b) => b.status === 'PENDING'));
     });
 
-    it('resiste inyección SQL en el provider_transaction_id', async () => {
+    it('un provider_transaction_id malicioso del cliente se descarta sin efecto', async () => {
       const grupo = await crearItinerario([ctx.fixtures.tripA, tripVuelta]);
       const res = await post(
         `/bookings/itineraries/${grupo.group_id}/pay`,
-        { method: 'CARD', provider_transaction_id: "x'; DROP TABLE payments; --" },
-        ctx.sessions.customer.token,
+        // YAPE: desde H-23 CARD se rechaza antes de llegar a leer el cuerpo (test 51).
+        { method: 'YAPE', provider_transaction_id: "x'; DROP TABLE payments; --" },
+        ctx.sessions.admin.token,
       );
 
       assert.ok([200, 422].includes(res.status), `HTTP ${res.status}`);

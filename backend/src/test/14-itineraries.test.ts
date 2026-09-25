@@ -115,7 +115,7 @@ describe('Itinerarios de varios tramos', () => {
       const reserva = await post('/bookings', {
         trip_id: ctx.fixtures.tripA, seat_ids: [at(seats, 0).id], passenger_email: 'cliente@test.pe', payment_method: 'YAPE',
       }, ctx.sessions.customer.token);
-      const pago = await post(`/bookings/${reserva.body.data.id}/pay`, { method: 'YAPE' }, ctx.sessions.customer.token);
+      const pago = await post(`/bookings/${reserva.body.data.id}/pay`, { method: 'YAPE' }, ctx.sessions.admin.token);
 
       assert.equal(pago.status, 200);
       assert.equal(pago.body.data.status, 'CONFIRMED');
@@ -322,7 +322,7 @@ describe('Itinerarios de varios tramos', () => {
         ctx.sessions.customer.token,
       );
 
-      const pago = await post(`/bookings/itineraries/${creado.body.data.group_id}/pay`, { method: 'YAPE' }, ctx.sessions.customer.token);
+      const pago = await post(`/bookings/itineraries/${creado.body.data.group_id}/pay`, { method: 'YAPE' }, ctx.sessions.admin.token);
       assert.equal(pago.status, 200);
       assert.ok(pago.body.data.segments.every((s: { status: string }) => s.status === 'CONFIRMED'));
 

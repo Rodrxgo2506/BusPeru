@@ -4,6 +4,8 @@
  */
 import { execute, pool, query, queryOne } from '../config/database';
 import { env } from '../config/env';
+import { SELLABLE_SEAT_COUNT_SQL } from '../services/bus-layout.service';
+import { ensureCompanyCommission } from '../services/company-commission.service';
 import { hashPassword } from '../utils/security';
 
 const DEMO_PASSWORD = 'BusPeru2026';
@@ -118,32 +120,91 @@ async function seedLocations(): Promise<Record<string, number>> {
   return ids;
 }
 
-async function seedSeatsForBus(busId: number, capacity: number, seatTypeId: number): Promise<void> {
-  const existing = await queryOne<{ total: number }>('SELECT COUNT(*) AS total FROM seats WHERE bus_id = ?', [busId]);
-  if (Number(existing?.total ?? 0) > 0) return;
+/**
+ * La rejilla de un bus: cuantas columnas tiene el piso y en cuales de ellas hay asiento.
+ *
+ * Las que faltan son el pasillo. No se calcula partiendo las columnas por la mitad —eso era
+ * lo que hacia este seed antes y solo servia para buses de 2+2—: un cama 180° lleva 1+2 y su
+ * pasillo no cae en el centro. La rejilla es un DATO del piso desde la migracion 010, asi
+ * que aqui se declara.
+ */
+interface BusLayoutPlan {
+  capacity: number;
+  columnCount: number;
+  seatColumns: number[];
+}
 
-  const columnsPerRow = 4;
-  const rows = Math.ceil(capacity / columnsPerRow);
+/** Un asiento esta junto al pasillo si la columna de al lado no lleva asiento. */
+function nextToAisle(column: number, plan: BusLayoutPlan): boolean {
+  const anterior = column - 1;
+  const siguiente = column + 1;
+  const esPasillo = (candidata: number) =>
+    candidata >= 1 && candidata <= plan.columnCount && !plan.seatColumns.includes(candidata);
+  return esPasillo(anterior) || esPasillo(siguiente);
+}
+
+/**
+ * Version 1 PUBLICADA del bus, con su piso y sus asientos (migracion 010).
+ *
+ * Antes esto insertaba asientos sueltos colgados del bus, sin version ni piso. Con el modelo
+ * actual eso deja una base inservible: `POST /trips` exige una version publicada, el listado
+ * de buses cuenta cero asientos y el editor no puede tocar nada. Cada bus nace ahora con su
+ * version, su piso y sus asientos anclados a ambos.
+ *
+ * Es reejecutable como el resto del seed: si el bus ya tiene alguna version, no se toca.
+ */
+async function seedPublishedLayout(busId: number, plan: BusLayoutPlan, seatTypeId: number): Promise<number> {
+  const existente = await queryOne<{ id: number }>('SELECT id FROM bus_layouts WHERE bus_id = ? LIMIT 1', [busId]);
+  if (existente) return existente.id;
+
+  const rows = Math.ceil(plan.capacity / plan.seatColumns.length);
+
+  const layout = await execute(
+    `INSERT INTO bus_layouts (bus_id, version, status, name, seat_count, published_at)
+     VALUES (?, 1, 'PUBLISHED', 'Versión 1', 0, NOW())`,
+    [busId],
+  );
+  const deck = await execute(
+    `INSERT INTO bus_layout_decks (layout_id, deck_number, name, row_count, column_count)
+     VALUES (?, 1, 'Piso 1', ?, ?)`,
+    [layout.insertId, rows, plan.columnCount],
+  );
+
   let seatNumber = 1;
-
-  for (let row = 1; row <= rows && seatNumber <= capacity; row += 1) {
-    for (let column = 1; column <= columnsPerRow && seatNumber <= capacity; column += 1) {
+  for (let row = 1; row <= rows && seatNumber <= plan.capacity; row += 1) {
+    for (const column of plan.seatColumns) {
+      if (seatNumber > plan.capacity) break;
       await execute(
-        `INSERT INTO seats (bus_id, seat_type_id, seat_number, row_number, column_number, is_window, is_aisle, status)
-         VALUES (?, ?, ?, ?, ?, ?, ?, 'AVAILABLE')`,
+        `INSERT INTO seats (bus_id, layout_id, deck_id, seat_type_id, seat_number, row_number, column_number, is_window, is_aisle, status)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'AVAILABLE')`,
         [
           busId,
+          layout.insertId,
+          deck.insertId,
           seatTypeId,
           String(seatNumber).padStart(2, '0'),
           row,
           column,
-          column === 1 || column === columnsPerRow ? 1 : 0,
-          column === 2 || column === 3 ? 1 : 0,
+          column === 1 || column === plan.columnCount ? 1 : 0,
+          nextToAisle(column, plan) ? 1 : 0,
         ],
       );
       seatNumber += 1;
     }
   }
+
+  // `seat_count` y `capacity` salen de los asientos VENDIBLES que de verdad se crearon, no del
+  // numero que se pidio: es la misma definicion que aplica `publishLayout`.
+  await execute(`UPDATE bus_layouts SET seat_count = (${SELLABLE_SEAT_COUNT_SQL}) WHERE id = ?`, [
+    layout.insertId,
+    layout.insertId,
+  ]);
+  await execute('UPDATE buses SET capacity = (SELECT seat_count FROM bus_layouts WHERE id = ?) WHERE id = ?', [
+    layout.insertId,
+    busId,
+  ]);
+
+  return layout.insertId;
 }
 
 async function main(): Promise<void> {
@@ -238,27 +299,28 @@ async function main(): Promise<void> {
     }
   }
 
+  // H-46: las empresas sembradas reciben la tasa de `platform.default_commission`, igual que una
+  // empresa aprobada; una empresa que ya tenga la suya la conserva.
   for (const companyId of companyIds) {
-    const commission = await queryOne<{ id: number }>(
-      'SELECT id FROM company_commission_settings WHERE company_id = ? LIMIT 1',
-      [companyId],
-    );
-    if (!commission) {
-      await execute(
-        `INSERT INTO company_commission_settings (company_id, commission_type, commission_value, effective_from, status)
-         VALUES (?, 'PERCENTAGE', 10.00, NOW(), 'ACTIVE')`,
-        [companyId],
-      );
-    }
+    await ensureCompanyCommission(companyId);
   }
 
+  /**
+   * Los buses de siempre, ahora con la rejilla de su piso declarada.
+   *
+   * `seatColumns` dice en que columnas hay asiento; las que faltan son el pasillo. El cama
+   * 180° va 1+2 con el pasillo en la columna 2, y los otros dos 2+2 con el pasillo en la 3.
+   * Las capacidades no cambian: 42, 44 y 40, las mismas de antes.
+   */
   const buses = [
-    { code: 'EA-001', plate: 'B2X-963', brand: 'Marcopolo', model: 'Paradiso G8 1800 DD', year: 2023, capacity: 42, typeIndex: 0 },
-    { code: 'EA-002', plate: 'B4V-781', brand: 'Scania', model: 'K410 IB', year: 2022, capacity: 44, typeIndex: 1 },
-    { code: 'EA-003', plate: 'B7Z-229', brand: 'Mercedes-Benz', model: 'O500 RS', year: 2021, capacity: 40, typeIndex: 2 },
+    { code: 'EA-001', plate: 'B2X-963', brand: 'Marcopolo', model: 'Paradiso G8 1800 DD', year: 2023, capacity: 42, typeIndex: 0, columnCount: 4, seatColumns: [1, 3, 4] },
+    { code: 'EA-002', plate: 'B4V-781', brand: 'Scania', model: 'K410 IB', year: 2022, capacity: 44, typeIndex: 1, columnCount: 5, seatColumns: [1, 2, 4, 5] },
+    { code: 'EA-003', plate: 'B7Z-229', brand: 'Mercedes-Benz', model: 'O500 RS', year: 2021, capacity: 40, typeIndex: 2, columnCount: 5, seatColumns: [1, 2, 4, 5] },
   ];
 
   const busIds: number[] = [];
+  /** Version publicada de cada bus, en el mismo orden que `busIds`. */
+  const busLayoutIds: number[] = [];
   for (const bus of buses) {
     const busId = await upsert('buses', 'plate_number = ?', [bus.plate], {
       company_id: mainCompanyId,
@@ -273,7 +335,7 @@ async function main(): Promise<void> {
       status: 'ACTIVE',
     });
     busIds.push(busId);
-    await seedSeatsForBus(busId, bus.capacity, seatTypeIds[bus.typeIndex] ?? seatTypeIds[0]!);
+    busLayoutIds.push(await seedPublishedLayout(busId, bus, seatTypeIds[bus.typeIndex] ?? seatTypeIds[0]!));
   }
 
   const routeDefinitions = [
@@ -328,8 +390,10 @@ async function main(): Promise<void> {
         const departureSql = departure.toISOString().slice(0, 19).replace('T', ' ');
 
         const arrival = new Date(departure.getTime() + definition.minutes * 60_000);
-        const busId = busIds[(day + hour) % busIds.length];
-        if (busId === undefined) continue;
+        const busIndex = (day + hour) % busIds.length;
+        const busId = busIds[busIndex];
+        const layoutId = busLayoutIds[busIndex];
+        if (busId === undefined || layoutId === undefined) continue;
 
         const existingTrip = await queryOne<{ id: number }>(
           'SELECT id FROM trips WHERE route_id = ? AND bus_id = ? AND departure_datetime = ?',
@@ -337,17 +401,24 @@ async function main(): Promise<void> {
         );
         if (existingTrip) continue;
 
-        const bus = buses.find((entry) => busIds[buses.indexOf(entry)] === busId);
+        /**
+         * El viaje nace anclado a la version publicada de SU bus, igual que lo hace
+         * `POST /trips`. Sin esto quedaba con `bus_layout_id` NULL y dependiendo de la red
+         * de compatibilidad, que existe para los datos anteriores a la migracion 010 y no
+         * para los que crea el seed de hoy.
+         */
+        const seatCount = await queryOne<{ seat_count: number }>('SELECT seat_count FROM bus_layouts WHERE id = ?', [layoutId]);
         await execute(
-          `INSERT INTO trips (route_id, bus_id, departure_datetime, arrival_datetime, base_price, available_seats, status)
-           VALUES (?, ?, ?, ?, ?, ?, 'SCHEDULED')`,
+          `INSERT INTO trips (route_id, bus_id, bus_layout_id, departure_datetime, arrival_datetime, base_price, available_seats, status)
+           VALUES (?, ?, ?, ?, ?, ?, ?, 'SCHEDULED')`,
           [
             routeId,
             busId,
+            layoutId,
             departureSql,
             arrival.toISOString().slice(0, 19).replace('T', ' '),
             definition.price,
-            bus?.capacity ?? 42,
+            Number(seatCount?.seat_count ?? 0),
           ],
         );
       }

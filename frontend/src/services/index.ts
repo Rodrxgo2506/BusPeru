@@ -25,10 +25,16 @@ import type {
   Route,
   SeatAvailability,
   SeatType,
+  BusLayout,
+  BusLayoutDeck,
+  BusLayoutElement,
+  LayoutSeat,
+  LayoutTree,
   Settlement,
   SupportTicket,
   SystemSetting,
   Trip,
+  TripLayout,
   UserRow,
   VerificationStatus,
 } from '@/types';
@@ -79,6 +85,8 @@ export const publicService = {
     }>>('/public/itineraries/search', body)),
   trip: (id: number) => apiData(api.get<PublicTrip & { stops: Array<{ name: string; city: string; stop_order: number }> }>(`/public/trips/${id}`)),
   tripSeats: (id: number) => apiData(api.get<SeatAvailability[]>(`/public/trips/${id}/seats`)),
+  /** Geometría del bus del viaje: pisos, rejilla y elementos. Sin asientos ni precios. */
+  tripLayout: (id: number) => apiData(api.get<TripLayout>(`/public/trips/${id}/layout`)),
   destinations: () => apiData(api.get<Array<{ city: string; department: string | null; min_price: number; trips: number }>>('/public/destinations')),
   promotions: () => apiData(api.get<Promotion[]>('/public/promotions')),
   reviews: (companyId?: number) => apiData(api.get<Review[]>('/public/reviews', { company_id: companyId })),
@@ -186,7 +194,39 @@ export const driverService = {
   remove: (id: number) => apiData(api.delete<{ id: number }>(`/company/drivers/${id}`)),
 };
 export const busTypeService = crud<BusType>('/bus-types');
-export const seatService = crud<SeatAvailability>('/seats');
+/**
+ * Distribución física del bus: versiones, pisos, elementos y asientos.
+ *
+ * La empresa nunca viaja en el cuerpo: el backend la deduce del bus y la contrasta con la
+ * sesión. Tampoco se envían `layout_id` ni `bus_id` al crear un asiento; los pone el
+ * servidor a partir del piso.
+ */
+export const busLayoutService = {
+  listByBus: (busId: number) => apiData(api.get<BusLayout[]>(`/buses/${busId}/layouts`)),
+  tree: (layoutId: number) => apiData(api.get<LayoutTree>(`/layouts/${layoutId}`)),
+  /** Borrador vacío. Solo para un bus que todavía no tiene ninguna versión. */
+  createDraft: (busId: number, body?: { name?: string; decks?: Array<{ deck_number: number; name?: string; row_count?: number; column_count?: number }> }) =>
+    apiData(api.post<BusLayout>(`/buses/${busId}/layouts`, body ?? {})),
+  /** Copy-on-write: duplica una versión en un borrador editable. */
+  clone: (layoutId: number) => apiData(api.post<BusLayout>(`/layouts/${layoutId}/clone`, {})),
+  publish: (layoutId: number) => apiData(api.post<BusLayout>(`/layouts/${layoutId}/publish`, {})),
+  removeLayout: (layoutId: number) => apiData(api.delete<{ deleted: boolean }>(`/layouts/${layoutId}`)),
+
+  listDecks: (layoutId: number) => apiData(api.get<BusLayoutDeck[]>(`/layouts/${layoutId}/decks`)),
+  createDeck: (layoutId: number, body: Partial<BusLayoutDeck>) => apiData(api.post<BusLayoutDeck>(`/layouts/${layoutId}/decks`, body)),
+  updateDeck: (deckId: number, body: Partial<BusLayoutDeck>) => apiData(api.patch<BusLayoutDeck>(`/decks/${deckId}`, body)),
+  removeDeck: (deckId: number) => apiData(api.delete<{ deleted: boolean }>(`/decks/${deckId}`)),
+
+  listElements: (deckId: number) => apiData(api.get<BusLayoutElement[]>(`/decks/${deckId}/elements`)),
+  createElement: (deckId: number, body: Partial<BusLayoutElement>) => apiData(api.post<BusLayoutElement>(`/decks/${deckId}/elements`, body)),
+  updateElement: (elementId: number, body: Partial<BusLayoutElement>) => apiData(api.patch<BusLayoutElement>(`/elements/${elementId}`, body)),
+  removeElement: (elementId: number) => apiData(api.delete<{ deleted: boolean }>(`/elements/${elementId}`)),
+
+  listSeats: (deckId: number) => apiData(api.get<LayoutSeat[]>(`/decks/${deckId}/seats`)),
+  createSeat: (deckId: number, body: Partial<LayoutSeat>) => apiData(api.post<LayoutSeat>(`/decks/${deckId}/seats`, body)),
+  updateSeat: (seatId: number, body: Partial<LayoutSeat> & { deck_id?: number }) => apiData(api.patch<LayoutSeat>(`/layout-seats/${seatId}`, body)),
+  removeSeat: (seatId: number) => apiData(api.delete<{ deleted: boolean }>(`/layout-seats/${seatId}`)),
+};
 export const seatTypeService = crud<SeatType>('/seat-types');
 export const locationService = crud<Location>('/locations');
 export const routeService = crud<Route>('/routes');
@@ -218,10 +258,24 @@ export const bookingService = {
   cancel: (id: number, body: unknown) => apiData(api.post<Booking>(`/bookings/${id}/cancel`, body)),
 };
 
+/**
+ * Configuración publicable de la pasarela. Devuelve SOLO la llave pública: la privada no
+ * sale del backend y no existe ninguna variable `VITE_` para ella.
+ */
+export const culqiService = {
+  config: () =>
+    apiData(
+      api.get<{ provider: string; public_key: string; card_enabled: boolean; currency: string }>('/culqi/config'),
+    ),
+};
+
 export const paymentService = {
   list: (params?: QueryParams) => api.get<Payment[]>('/payments', params),
   get: (id: number) => apiData(api.get<Payment>(`/payments/${id}`)),
   summary: () => apiData(api.get<Record<string, number>>('/payments/summary')),
+  /** Verificación manual de Yape, Plin, transferencia, efectivo u otro (H-22). */
+  approve: (id: number) => apiData(api.post<Payment>(`/payments/${id}/approve`, {})),
+  reject: (id: number, reason?: string) => apiData(api.post<Payment>(`/payments/${id}/reject`, { reason: reason ?? null })),
 };
 
 export const refundService = {

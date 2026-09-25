@@ -1,6 +1,6 @@
 import { ArrowRightLeft, CalendarDays, CheckCircle2, Download, Route as RouteIcon, Ticket, User } from 'lucide-react';
 import QRCode from 'qrcode';
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import { Badge, Button, Card, ErrorState, LoadingState, StatusBadge } from '@/components/ui';
 import { useAsync } from '@/hooks/useAsync';
@@ -22,26 +22,32 @@ export function ItineraryConfirmationPage() {
   const itinerary = useAsync(() => itineraryService.get(Number(groupId)), [groupId]);
   const [codes, setCodes] = useState<Record<string, string>>({});
 
+  // `checkout` cambia con cada cambio del contexto, incluido el propio `reset`: se lee por ref
+  // para limpiar una sola vez por compra cargada.
+  const checkoutRef = useRef(checkout);
+  checkoutRef.current = checkout;
+  const loadedGroupId = itinerary.data?.group_id ?? null;
+
   useEffect(() => {
     // La compra terminó: se limpia la selección para que una búsqueda nueva empiece limpia.
-    if (itinerary.data) checkout.reset();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [itinerary.data?.group_id]);
+    if (loadedGroupId !== null) checkoutRef.current.reset();
+  }, [loadedGroupId]);
 
   const segments = (itinerary.data?.segments ?? []) as Array<Record<string, unknown>>;
+  // Los QR se regeneran solo si cambian los códigos, no cada vez que llega el mismo itinerario.
+  const bookingCodesKey = segments.map((segment) => String(segment.booking_code)).join('|');
 
   useEffect(() => {
-    if (segments.length === 0) return;
+    if (bookingCodesKey === '') return;
     void Promise.all(
-      segments.map(async (segment) => {
-        const code = String(segment.booking_code);
+      bookingCodesKey.split('|').map(async (code) => {
         const url = await QRCode.toDataURL(code, { width: 320, margin: 1, color: { dark: '#0F172A', light: '#FFFFFF' } });
         return [code, url] as const;
       }),
     )
       .then((pairs) => setCodes(Object.fromEntries(pairs)))
       .catch(() => setCodes({}));
-  }, [segments.map((segment) => String(segment.booking_code)).join('|')]);
+  }, [bookingCodesKey]);
 
   if (itinerary.loading) {
     return (

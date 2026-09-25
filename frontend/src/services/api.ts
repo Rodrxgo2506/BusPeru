@@ -1,6 +1,9 @@
+import { resolveApiUrl } from '@/config/api-url';
 import type { Pagination } from '@/types';
 
-const BASE_URL = import.meta.env.VITE_API_URL ?? 'http://localhost:3000/api';
+// F15-02: el backend local solo es el fallback EN DESARROLLO. Vite sustituye `import.meta.env.DEV`
+// por `false` al construir, así que el literal desaparece del bundle; la build exige VITE_API_URL.
+const BASE_URL = resolveApiUrl(import.meta.env.VITE_API_URL, import.meta.env.DEV ? 'http://localhost:3000/api' : null);
 
 /** Base de la API, para flujos que necesitan NAVEGAR (OAuth) en lugar de hacer fetch. */
 export const API_BASE_URL = BASE_URL;
@@ -117,6 +120,8 @@ export const api = {
   get: <T>(path: string, params?: QueryParams, signal?: AbortSignal) => request<T>(path, { params, signal }),
   post: <T>(path: string, body?: unknown) => request<T>(path, { method: 'POST', body }),
   put: <T>(path: string, body?: unknown) => request<T>(path, { method: 'PUT', body }),
+  /** El editor de distribución envía cambios parciales; PUT exigiría reenviar todo. */
+  patch: <T>(path: string, body?: unknown) => request<T>(path, { method: 'PATCH', body }),
   delete: <T>(path: string) => request<T>(path, { method: 'DELETE' }),
   /** Subida de archivos. El cuerpo debe ser un `FormData`. */
   upload: <T>(path: string, form: FormData) => request<T>(path, { method: 'POST', body: form }),

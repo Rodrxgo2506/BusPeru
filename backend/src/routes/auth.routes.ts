@@ -8,6 +8,7 @@ import { loadAuthenticatedUser } from '../repositories/user.repository';
 import { recordAudit } from '../services/audit.service';
 import * as authService from '../services/auth.service';
 import * as passwordReset from '../services/password-reset.service';
+import { revokeSession } from '../services/session-revocation.service';
 import { asyncHandler, sendSuccess } from '../utils/http';
 import {
   changePasswordSchema,
@@ -177,12 +178,18 @@ router.post(
   }),
 );
 
-// Tokens are stateless; logout is audited server-side and the client discards the token.
+/**
+ * F12-07 · cerrar sesión revoca ESTE token en el servidor (`revoked_sessions`), además de que el
+ * cliente lo descarte: una copia del token deja de valer. Las demás sesiones del usuario siguen
+ * abiertas; para cerrarlas todas está el cambio de contraseña.
+ */
 router.post(
   '/logout',
   authenticate,
   asyncHandler(async (req, res) => {
-    await recordAudit(req, { action: 'LOGOUT', entityType: 'users', entityId: req.user?.id, description: 'Cerró sesión' });
+    const user = requireAuth(req);
+    if (req.session?.jti && req.session.exp) await revokeSession(req.session.jti, user.id, req.session.exp);
+    await recordAudit(req, { action: 'LOGOUT', entityType: 'users', entityId: user.id, description: 'Cerró sesión' });
     sendSuccess(res, { message: 'Sesión cerrada correctamente' });
   }),
 );

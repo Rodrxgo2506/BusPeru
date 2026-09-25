@@ -66,9 +66,9 @@ describe('Notificaciones automáticas y expiración de reservas', () => {
     const reserva = await post('/bookings', { trip_id: ctx.fixtures.tripA, seat_ids: [at(seats, 0).id], passenger_email: 'cliente@test.pe' }, ctx.sessions.customer.token);
     const id = reserva.body.data.id;
 
-    await post(`/bookings/${id}/pay`, { method: 'YAPE' }, ctx.sessions.customer.token);
-    await post(`/bookings/${id}/pay`, { method: 'YAPE' }, ctx.sessions.customer.token);
-    await post(`/bookings/${id}/pay`, { method: 'YAPE' }, ctx.sessions.customer.token);
+    await post(`/bookings/${id}/pay`, { method: 'YAPE' }, ctx.sessions.admin.token);
+    await post(`/bookings/${id}/pay`, { method: 'YAPE' }, ctx.sessions.admin.token);
+    await post(`/bookings/${id}/pay`, { method: 'YAPE' }, ctx.sessions.admin.token);
 
     const avisos = await notificacionesDe(ctx.sessions.customer.user.id, `booking.payment_confirmed:${id}`);
     assert.equal(avisos.length, 1, 'pagar tres veces genera una sola notificación');
@@ -88,7 +88,9 @@ describe('Notificaciones automáticas y expiración de reservas', () => {
   it('notifica el reembolso completado una única vez', async () => {
     const seats = await freeSeats(ctx.fixtures.tripA);
     const reserva = await post('/bookings', { trip_id: ctx.fixtures.tripA, seat_ids: [at(seats, 0).id], passenger_email: 'cliente@test.pe' }, ctx.sessions.customer.token);
-    await post(`/bookings/${reserva.body.data.id}/pay`, { method: 'CARD' }, ctx.sessions.customer.token);
+    // CASH: lo que se prueba es la notificacion del reembolso, no el medio de pago. CARD
+    // exige ahora el token de Culqi porque cobra de verdad.
+    await post(`/bookings/${reserva.body.data.id}/pay`, { method: 'CASH' }, ctx.sessions.admin.token);
     await post(`/bookings/${reserva.body.data.id}/cancel`, { request_refund: true }, ctx.sessions.customer.token);
 
     const refund = (await get('/refunds?limit=50', ctx.sessions.admin.token)).body.data
@@ -212,7 +214,7 @@ describe('Notificaciones automáticas y expiración de reservas', () => {
       const seats = await freeSeats(ctx.fixtures.tripA);
       const reserva = await post('/bookings', { trip_id: ctx.fixtures.tripA, seat_ids: [at(seats, 0).id], passenger_email: 'cliente@test.pe' }, ctx.sessions.customer.token);
       const id = reserva.body.data.id;
-      await post(`/bookings/${id}/pay`, { method: 'CASH' }, ctx.sessions.customer.token);
+      await post(`/bookings/${id}/pay`, { method: 'CASH' }, ctx.sessions.admin.token);
       await execute('UPDATE bookings SET expires_at = DATE_SUB(NOW(), INTERVAL 1 MINUTE) WHERE id = ?', [id]);
 
       await post('/bookings/expire', {}, ctx.sessions.admin.token);
@@ -268,7 +270,7 @@ describe('Notificaciones automáticas y expiración de reservas', () => {
         ctx.sessions.customer.token,
       );
       assert.equal(reserva.status, 201);
-      assert.equal((await post(`/bookings/${reserva.body.data.id}/pay`, { method: 'CASH' }, ctx.sessions.customer.token)).status, 200);
+      assert.equal((await post(`/bookings/${reserva.body.data.id}/pay`, { method: 'CASH' }, ctx.sessions.admin.token)).status, 200);
       return reserva.body.data as { id: number; booking_code: string };
     }
 
@@ -441,7 +443,7 @@ describe('Notificaciones automáticas y expiración de reservas', () => {
         ctx.sessions.customer.token,
       );
       assert.equal(reserva.status, 201);
-      await post(`/bookings/${reserva.body.data.id}/pay`, { method: 'CASH' }, ctx.sessions.customer.token);
+      await post(`/bookings/${reserva.body.data.id}/pay`, { method: 'CASH' }, ctx.sessions.admin.token);
 
       await execute('UPDATE trips SET departure_datetime = DATE_ADD(NOW(), INTERVAL ? SECOND) WHERE id = ?', [
         Math.round(minutos * 60),

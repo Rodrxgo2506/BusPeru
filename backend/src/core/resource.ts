@@ -64,9 +64,46 @@ export interface ResourceDefinition {
   adminOnlyColumns?: string[];
   /** Business rule to run after a successful update (e.g. activating users of an approved company). */
   afterUpdate?: (id: number, previous: Record<string, unknown>, data: Record<string, unknown>) => Promise<void>;
+  /** Regla que debe cumplirse ANTES de escribir un cambio; si lanza, no se escribe nada (H-46). */
+  beforeUpdate?: (id: number, previous: Record<string, unknown>, data: Record<string, unknown>) => Promise<void>;
+  /** Regla previa al alta; si lanza, no se inserta nada (H-46). */
+  beforeCreate?: (data: Record<string, unknown>) => Promise<void>;
+  /** Regla posterior a un alta correcta (H-46: una empresa creada ya ACTIVE recibe su comisión). */
+  afterCreate?: (id: number, data: Record<string, unknown>) => Promise<void>;
+  /**
+   * Cierra las escrituras de este recurso y explica por dónde se hacen ahora: se responde
+   * con un error de negocio que dice a dónde ir, en vez de un 404 mudo.
+   *
+   * Hoy ningún recurso lo usa. Lo usaba `seats`, que se retiró por completo del CRUD
+   * genérico (auditoría FASE 7, hallazgo H-16): los asientos pertenecen a una versión de
+   * distribución y se administran desde `bus-layout.routes.ts`.
+   */
+  writesClosedReason?: string;
+  /**
+   * Qué puede hacer un CUSTOMER con este recurso por el CRUD genérico (auditoría FASE 9, H-24).
+   *
+   * Es OBLIGATORIO a propósito: cada recurso nuevo tiene que decidirlo. El CUSTOMER tiene
+   * permisos de lectura (`companies.view`, `buses.view`, `routes.view`, `promotions.view`)
+   * pensados para el catálogo público, y el CRUD genérico no le aplicaba ningún alcance: un
+   * pasajero listaba cupones con su código —también inactivos y de otras empresas—, RUC y
+   * correo de empresas, placas de buses y rutas inactivas.
+   *
+   *   · `none`: ni lectura ni escritura (403). Lo público que un pasajero necesita se sirve por
+   *     `publicChannel`, que devuelve solo registros activos y campos publicables; `null`
+   *     cuando no hay nada público que servir.
+   */
+  customerAccess: { mode: 'none'; publicChannel: string | null };
 }
 
 type Row = Record<string, unknown>;
+
+/** Aplica `customerAccess` antes que el permiso: el permiso del CUSTOMER no abre el CRUD genérico. */
+function enforceCustomerAccess(definition: ResourceDefinition) {
+  return (req: Request, _res: unknown, next: (error?: unknown) => void): void => {
+    if (req.user?.role !== 'CUSTOMER' || definition.customerAccess.mode !== 'none') return next();
+    next(ApiError.forbidden(`No tienes acceso a ${definition.entityName.toLowerCase()}`));
+  };
+}
 
 /** Middleware que exige rol ADMIN para las acciones marcadas como `adminOnlyActions`. */
 function requirePlatformAdmin(definition: ResourceDefinition, action: 'create' | 'update' | 'delete') {
@@ -85,7 +122,9 @@ function permissionFor(definition: ResourceDefinition, action: 'view' | 'create'
 function companyScope(req: Request, definition: ResourceDefinition): { sql: string; params: number[] } | null {
   const user = req.user;
   if (!user || user.role === 'ADMIN' || !definition.companyScopeExpression) return null;
-  if (user.role === 'CUSTOMER') return null;
+  // Falla cerrado (H-24): un CUSTOMER no pertenece a ninguna empresa. `enforceCustomerAccess`
+  // ya lo detiene antes; esto evita que un cambio futuro le devuelva "sin filtro".
+  if (user.role === 'CUSTOMER') return { sql: '1 = 0', params: [] };
 
   if (user.companyIds.length === 0) {
     return { sql: '1 = 0', params: [] };
@@ -162,6 +201,8 @@ async function findRowOrFail(req: Request, definition: ResourceDefinition, id: n
 export function createResourceRouter(definition: ResourceDefinition): Router {
   const router = Router();
   router.use(authenticate);
+  // H-24: antes de cualquier permiso, lectura o escritura.
+  router.use(enforceCustomerAccess(definition) as never);
 
   router.get(
     '/',
@@ -217,8 +258,14 @@ export function createResourceRouter(definition: ResourceDefinition): Router {
     }),
   );
 
+  /** Corta la escritura antes de validar nada: el recurso ya no se escribe por aquí. */
+  const assertWritable = () => {
+    if (definition.writesClosedReason) throw ApiError.badRequest(definition.writesClosedReason);
+  };
+
   router.post(
     '/',
+    (_req, _res, next) => { try { assertWritable(); next(); } catch (error) { next(error); } },
     requirePermission(permissionFor(definition, 'create')),
     requirePlatformAdmin(definition, 'create') as never,
     validate(definition.createSchema),
@@ -228,6 +275,7 @@ export function createResourceRouter(definition: ResourceDefinition): Router {
 
       const columns = Object.keys(data);
       if (columns.length === 0) throw ApiError.badRequest('No se enviaron datos para crear el registro');
+      await definition.beforeCreate?.(data);
 
       const result = await execute(
         `INSERT INTO ${definition.table} (${columns.join(', ')}) VALUES (${columns.map(() => '?').join(', ')})`,
@@ -243,6 +291,7 @@ export function createResourceRouter(definition: ResourceDefinition): Router {
         await execute(`DELETE FROM ${definition.table} WHERE id = ?`, [result.insertId]);
         throw ApiError.forbidden(`No puedes crear ${definition.entityName.toLowerCase()} fuera de tu empresa`);
       }
+      await definition.afterCreate?.(result.insertId, data);
 
       await recordAudit(req, {
         action: 'CREATE',
@@ -257,6 +306,7 @@ export function createResourceRouter(definition: ResourceDefinition): Router {
 
   router.put(
     '/:id',
+    (_req, _res, next) => { try { assertWritable(); next(); } catch (error) { next(error); } },
     requirePermission(permissionFor(definition, 'update')),
     requirePlatformAdmin(definition, 'update') as never,
     validate(definition.updateSchema),
@@ -272,6 +322,7 @@ export function createResourceRouter(definition: ResourceDefinition): Router {
 
       const columns = Object.keys(data);
       if (columns.length === 0) throw ApiError.badRequest('No se enviaron cambios');
+      await definition.beforeUpdate?.(id, previous, data);
 
       await execute(
         `UPDATE ${definition.table} SET ${columns.map((column) => `${column} = ?`).join(', ')} WHERE id = ?`,
@@ -296,6 +347,7 @@ export function createResourceRouter(definition: ResourceDefinition): Router {
   if (definition.allowDelete !== false) {
     router.delete(
       '/:id',
+      (_req, _res, next) => { try { assertWritable(); next(); } catch (error) { next(error); } },
       requirePermission(permissionFor(definition, 'delete')),
       requirePlatformAdmin(definition, 'delete') as never,
       asyncHandler(async (req, res) => {

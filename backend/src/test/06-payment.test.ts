@@ -24,7 +24,7 @@ describe('Pagos, reembolsos y cupones', () => {
       payment_method: 'YAPE',
     }, ctx.sessions.customer.token);
     assert.equal(reserva.status, 201);
-    const pago = await post(`/bookings/${reserva.body.data.id}/pay`, { method: 'YAPE' }, ctx.sessions.customer.token);
+    const pago = await post(`/bookings/${reserva.body.data.id}/pay`, { method: 'YAPE' }, ctx.sessions.admin.token);
     assert.equal(pago.status, 200);
     return pago.body.data;
   }
@@ -38,17 +38,21 @@ describe('Pagos, reembolsos y cupones', () => {
 
   it('genera las transacciones de pago y comisión del 10%', async () => {
     const booking = await reservaPagada();
-    const movimientos = await query<{ type: string; direction: string; amount: number }>(
-      'SELECT type, direction, amount FROM financial_transactions WHERE booking_id = ?',
+    const movimientos = await query<{ type: string; direction: string; amount: number; company_id: number | null }>(
+      'SELECT type, direction, amount, company_id FROM financial_transactions WHERE booking_id = ?',
       [booking.id],
     );
-    const pago = movimientos.find((m) => m.type === 'PAYMENT');
+    const pago = movimientos.find((m) => m.type === 'PAYMENT' && m.company_id !== null);
     const comision = movimientos.find((m) => m.type === 'COMMISSION');
     assert.ok(pago, 'falta la transacción PAYMENT');
     assert.equal(pago!.direction, 'CREDIT');
     assert.ok(comision, 'falta la transacción COMMISSION');
     assert.equal(comision!.direction, 'DEBIT');
-    assert.ok(Math.abs(Number(comision!.amount) - Number(booking.total_amount) * 0.1) < 0.02);
+    // H-45: la comisión es el 10 % de la base de la empresa (el subtotal), no del cobro con service fee.
+    assert.equal(Number(pago!.amount), Number(booking.subtotal));
+    assert.equal(Number(comision!.amount), Number((Number(booking.subtotal) * 0.1).toFixed(2)));
+    const fee = movimientos.filter((m) => m.company_id === null);
+    assert.deepEqual(fee.map((m) => [m.type, m.direction, Number(m.amount)]), [['PAYMENT', 'CREDIT', Number(booking.service_fee)]]);
   });
 
   it('pagar varias veces es idempotente y no duplica pagos', async () => {
@@ -112,7 +116,7 @@ describe('Pagos, reembolsos y cupones', () => {
     assert.equal((await post(`/refunds/${refund.id}/process`, { status: 'COMPLETED' }, ctx.sessions.admin.token)).status, 200);
     assert.equal((await post(`/refunds/${refund.id}/process`, { status: 'COMPLETED' }, ctx.sessions.admin.token)).status, 400);
 
-    const movimientos = await query('SELECT id FROM financial_transactions WHERE booking_id = ? AND type = ?', [booking.id, 'REFUND']);
+    const movimientos = await query('SELECT id FROM financial_transactions WHERE booking_id = ? AND type = ? AND company_id IS NOT NULL', [booking.id, 'REFUND']);
     assert.equal(movimientos.length, 1, 'no debe duplicarse el movimiento de reembolso');
   });
 
@@ -218,7 +222,7 @@ describe('Pagos, reembolsos y cupones', () => {
         ctx.sessions.customer.token,
       );
       assert.equal(reserva.status, 201);
-      assert.equal((await post(`/bookings/${reserva.body.data.id}/pay`, { method: 'YAPE' }, ctx.sessions.customer.token)).status, 200);
+      assert.equal((await post(`/bookings/${reserva.body.data.id}/pay`, { method: 'YAPE' }, ctx.sessions.admin.token)).status, 200);
 
       const pago = await queryOne<{ id: number; amount: number }>(
         "SELECT id, amount FROM payments WHERE booking_id = ? AND status = 'PAID' ORDER BY id DESC LIMIT 1",

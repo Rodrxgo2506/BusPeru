@@ -1,5 +1,6 @@
 import type { Request } from 'express';
 import { execute } from '../config/database';
+import { logError } from '../utils/logger';
 
 /**
  * Claves que nunca se guardan en `audit_logs`. Los datos bancarios se añaden aquí: el
@@ -56,6 +57,7 @@ export async function recordAudit(req: Request, input: AuditInput): Promise<void
       ],
     );
   } catch (error) {
-    console.error('No se pudo registrar la auditoría:', error);
+    // H-31: por el registrador saneado; el objeto de error de mysql2 lleva la sentencia con valores.
+    logError('No se pudo registrar la auditoría', error);
   }
 }

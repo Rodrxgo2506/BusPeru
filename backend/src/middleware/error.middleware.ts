@@ -1,5 +1,6 @@
 import type { NextFunction, Request, Response } from 'express';
 import { ApiError } from '../utils/ApiError';
+import { sanitizeUrl } from '../utils/log-sanitizer';
 import { logError } from '../utils/logger';
 
 interface MysqlError extends Error {
@@ -46,7 +47,8 @@ export function errorHandler(error: unknown, req: Request, res: Response, _next:
     logError('Error no controlado al atender una petición', error, {
       requestId: req.id,
       method: req.method,
-      path: req.originalUrl,
+      // H-31: sin el secreto del webhook ni códigos, tickets o tokens de la query.
+      path: sanitizeUrl(req.originalUrl),
       status: mapped.statusCode,
       ...(req.user ? { userId: req.user.id, role: req.user.role } : {}),
       ...(req.apiKey ? { apiKeyId: req.apiKey.id, companyId: req.apiKey.companyId } : {}),
