@@ -377,7 +377,7 @@
                 "HTTPPort": 80,
                 "OriginProtocolPolicy": "http-only",
                 "OriginReadTimeout": 30,
-                "OriginKeepaliveTimeout": 5
+                "OriginKeepaliveTimeout": 55
               },
               "OriginCustomHeaders": [
                 {

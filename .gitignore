@@ -16,3 +16,5 @@ coverage/
 # F16A: caché incremental de `tsc -b` (se regenera en cada build del frontend). Ya versionado en 1d6cb2a:
 # esta regla no lo saca del índice; hay que retirarlo con `git rm --cached` al preparar el commit.
 *.tsbuildinfo
+# F18-11B: paquetes que genera infra/aws/scripts/make-release.sh (se suben a S3; nunca se versionan).
+infra/aws/.releases/

@@ -82,6 +82,9 @@ if (api.Origins.length !== 1 || !api.Origins[0].CustomOriginConfig) fallo('api: 
 const cabecera = api.Origins[0].OriginCustomHeaders ?? [];
 if (cabecera.length !== 1 || cabecera[0].HeaderName !== ORIGIN_HEADER || JSON.stringify(cabecera[0].HeaderValue) !== '{"Ref":"OriginVerifySecret"}') fallo('api: la cabecera de origen debe salir del parámetro secreto');
 if (JSON.stringify(api.DefaultCacheBehavior.CachePolicyId) !== '{"Ref":"ApiCachePolicy"}') fallo('api: debe usar la política sin caché');
+// F18-11B: CloudFront reutiliza la conexión con el ALB, pero la cierra ANTES que el ALB (idle_timeout 60 s).
+const keepalive = api.Origins[0].CustomOriginConfig?.OriginKeepaliveTimeout;
+if (!(keepalive >= 30 && keepalive < 60)) fallo(`api: OriginKeepaliveTimeout debe estar entre 30 y 59 s (hay ${keepalive})`);
 const cp = R.ApiCachePolicy.Properties.CachePolicyConfig;
 if (cp.DefaultTTL !== 0 || cp.MinTTL !== 0 || cp.MaxTTL > 1) fallo('api: la política de caché no es «sin caché»');
 if (!cp.ParametersInCacheKeyAndForwardedToOrigin.HeadersConfig.Headers.includes('Authorization')) fallo('api: Authorization no llegaría al origen');

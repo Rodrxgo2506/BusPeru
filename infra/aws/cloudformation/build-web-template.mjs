@@ -208,7 +208,9 @@ const template = {
           Origins: [{
             Id: 'api-alb',
             DomainName: ref('AlbDnsName'),
-            CustomOriginConfig: { HTTPPort: 80, OriginProtocolPolicy: 'http-only', OriginReadTimeout: 30, OriginKeepaliveTimeout: 5 },
+            // F18-11B: 55 s (antes 5 s). Reutiliza la conexión Lima → São Paulo en vez de abrir otra (~80 ms);
+            // por debajo del idle_timeout del ALB (60 s) para que sea CloudFront quien cierre primero.
+            CustomOriginConfig: { HTTPPort: 80, OriginProtocolPolicy: 'http-only', OriginReadTimeout: 30, OriginKeepaliveTimeout: 55 },
             OriginCustomHeaders: [{ HeaderName: ORIGIN_HEADER, HeaderValue: ref('OriginVerifySecret') }],
           }],
           DefaultCacheBehavior: {
