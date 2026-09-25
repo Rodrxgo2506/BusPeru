@@ -1,5 +1,5 @@
 import { CheckCircle2, ChevronDown, HelpCircle, LogOut, Menu, Search, X } from 'lucide-react';
-import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
+import { useCallback, useEffect, useRef, useState, useSyncExternalStore, type ReactNode } from 'react';
 import { Link, NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom';
 import { NotificationBell } from '@/layouts/PublicLayout';
 import { RouteSuspense } from '@/components/common/RouteSuspense';
@@ -7,6 +7,7 @@ import { Avatar, Button, Logo } from '@/components/ui';
 import { visibleNav, type NavItem } from '@/constants/navigation';
 import { useAuth } from '@/context/AuthContext';
 import { notificationService } from '@/services';
+import { getRefreshSnapshot, subscribeRefresh } from '@/services/refresh-status';
 import { ROLE_LABELS } from '@/constants/labels';
 import { cn } from '@/utils/cn';
 
@@ -15,13 +16,18 @@ interface PortalLayoutProps {
   theme: 'light' | 'dark';
   brandSubtitle?: string;
   searchPlaceholder?: string;
+  /**
+   * F18-16 · se llama cuando el puntero, el foco o el dedo llegan a un enlace del menú, antes del
+   * clic: el panel ADMIN lo usa para precargar el chunk y los datos de esa sección.
+   */
+  onNavIntent?: (to: string) => void;
 }
 
 /**
  * Shared shell for the company (light sidebar) and admin (navy sidebar) portals.
  * The sidebar is built from the user's permissions, not from a static list.
  */
-export function PortalLayout({ items, theme, brandSubtitle, searchPlaceholder }: PortalLayoutProps) {
+export function PortalLayout({ items, theme, brandSubtitle, searchPlaceholder, onNavIntent }: PortalLayoutProps) {
   const { user, logout, hasPermission } = useAuth();
   const navigate = useNavigate();
   const location = useLocation();
@@ -108,6 +114,9 @@ export function PortalLayout({ items, theme, brandSubtitle, searchPlaceholder }:
                 <li key={item.to}>
                   <NavLink
                     to={item.to}
+                    onMouseEnter={onNavIntent ? () => onNavIntent(item.to) : undefined}
+                    onFocus={onNavIntent ? () => onNavIntent(item.to) : undefined}
+                    onTouchStart={onNavIntent ? () => onNavIntent(item.to) : undefined}
                     className={({ isActive }) =>
                       cn(
                         'flex items-center gap-3 rounded-control px-3 py-2.5 text-sm font-medium transition',
@@ -182,6 +191,7 @@ export function PortalLayout({ items, theme, brandSubtitle, searchPlaceholder }:
           )}
 
           <div className="ml-auto flex items-center gap-2">
+            <RefreshNotice />
             <Link
               to={isDark ? '/admin/notifications' : '/company/notifications'}
               className="relative rounded-lg p-2 text-slate-500 transition hover:bg-slate-100 hover:text-slate-700"
@@ -257,4 +267,27 @@ function MenuLink({ to, label }: { to: string; label: string }) {
 
 export function PortalPage({ children }: { children: ReactNode }) {
   return <div className="mx-auto w-full max-w-[1400px]">{children}</div>;
+}
+
+/**
+ * F18-16 · aviso discreto de actualización en segundo plano. Con stale-while-revalidate la pantalla
+ * puede estar mostrando datos guardados mientras se confirman: no se presentan como confirmados.
+ * Si la actualización falla, el contenido se conserva y se avisa (sin bloquear ni borrar nada).
+ */
+function RefreshNotice() {
+  const { refreshing, failed } = useSyncExternalStore(subscribeRefresh, getRefreshSnapshot, getRefreshSnapshot);
+  if (failed) {
+    return (
+      <span data-refresh-state="failed" aria-live="polite" className="hidden items-center gap-1.5 rounded-full bg-warning-50 px-2.5 py-1 text-xs font-medium text-warning-700 sm:inline-flex">
+        No se pudo actualizar · se muestran los últimos datos
+      </span>
+    );
+  }
+  if (!refreshing) return null;
+  return (
+    <span data-refresh-state="refreshing" aria-live="polite" className="hidden items-center gap-2 text-xs text-muted sm:inline-flex">
+      <span className="inline-block h-1.5 w-1.5 rounded-full bg-brand-500 animate-ping" aria-hidden />
+      Actualizando…
+    </span>
+  );
 }

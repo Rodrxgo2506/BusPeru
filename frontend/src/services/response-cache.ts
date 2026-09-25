@@ -24,6 +24,12 @@ export interface CachedResponse {
   pagination?: unknown;
 }
 
+/** Resultado de `peek`: el dato guardado y si todavía está dentro de su ventana de frescura. */
+export interface CacheLookup {
+  value: CachedResponse;
+  fresh: boolean;
+}
+
 export class ResponseCache {
   private readonly entries = new Map<string, { at: number; value: CachedResponse }>();
   /**
@@ -38,11 +44,19 @@ export class ResponseCache {
   }
 
   private readonly ttlMs: number;
+  private readonly maxAgeMs: number;
   private readonly now: () => number;
 
+  /**
+   * F18-16 · stale-while-revalidate. `ttlMs` es la ventana de FRESCURA: dentro de ella el dato se
+   * usa sin preguntar a la API. Entre `ttlMs` y `maxAgeMs` el dato está VIEJO: se puede mostrar al
+   * instante (`peek`) mientras la pantalla lo revalida en segundo plano, pero `get` ya no lo
+   * devuelve. Pasado `maxAgeMs` se descarta. Por omisión `maxAgeMs = ttlMs` (sin datos viejos).
+   */
   // Sin «parameter properties»: `node --test` ejecuta este archivo sin transpilar (strip-only).
-  constructor(ttlMs: number, now: () => number = () => Date.now()) {
+  constructor(ttlMs: number, now: () => number = () => Date.now(), maxAgeMs: number = ttlMs) {
     this.ttlMs = ttlMs;
+    this.maxAgeMs = Math.max(maxAgeMs, ttlMs);
     this.now = now;
   }
 
@@ -50,14 +64,22 @@ export class ResponseCache {
     return `${token}\n${url}`;
   }
 
+  /** Solo datos frescos. */
   get(key: string): CachedResponse | null {
+    const hit = this.peek(key);
+    return hit && hit.fresh ? hit.value : null;
+  }
+
+  /** Datos frescos o viejos (hasta `maxAgeMs`), indicando cuál de los dos es. */
+  peek(key: string): CacheLookup | null {
     const hit = this.entries.get(key);
     if (!hit) return null;
-    if (this.now() - hit.at >= this.ttlMs) {
+    const age = this.now() - hit.at;
+    if (age >= this.maxAgeMs) {
       this.entries.delete(key);
       return null;
     }
-    return structuredClone(hit.value);
+    return { value: structuredClone(hit.value), fresh: age < this.ttlMs };
   }
 
   /** Guarda solo si no hubo ninguna invalidación desde `startedAt` (la generación al empezar). */

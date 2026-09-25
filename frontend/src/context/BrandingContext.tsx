@@ -48,13 +48,17 @@ function setMetaProperty(property: string, content: string) {
 
 export function BrandingProvider({ children }: { children: ReactNode }) {
   const [references, setReferences] = useState<BrandingReferences>(EMPTY);
+  /** La API ya contestó (con o sin favicon configurado). */
+  const [loaded, setLoaded] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
     publicService
       .branding()
       .then((data) => {
-        if (!cancelled) setReferences({ ...EMPTY, ...data });
+        if (cancelled) return;
+        setReferences({ ...EMPTY, ...data });
+        setLoaded(true);
       })
       .catch(() => undefined);
     return () => {
@@ -75,10 +79,13 @@ export function BrandingProvider({ children }: { children: ReactNode }) {
 
   const applyHead = useCallback(() => {
     if (value.faviconUrl) setHeadLink('icon', value.faviconUrl);
+    // F18-16 · sin favicon configurado, `/public/branding/favicon` responde 204 y Chrome lo volvía a
+    // pedir en CADA navegación del panel. Un icono vacío en línea no genera ninguna petición.
+    else if (loaded) setHeadLink('icon', 'data:,');
     // Útil para quien comparte desde la app; los rastreadores que no ejecutan JavaScript no lo ven
     // (limitación de una SPA, documentada).
     if (value.ogImageUrl) setMetaProperty('og:image', value.ogImageUrl);
-  }, [value.faviconUrl, value.ogImageUrl]);
+  }, [value.faviconUrl, value.ogImageUrl, loaded]);
 
   useEffect(applyHead, [applyHead]);
 

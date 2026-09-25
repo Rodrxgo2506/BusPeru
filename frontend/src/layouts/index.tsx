@@ -5,8 +5,8 @@ import { RouteSuspense } from '@/components/common/RouteSuspense';
 import { Avatar } from '@/components/ui';
 import { CUSTOMER_NAV, ADMIN_NAV, COMPANY_NAV } from '@/constants/navigation';
 import { useAuth } from '@/context/AuthContext';
-import { prefetchAdminSections } from '@/routes/admin-chunks';
-import { setResponseCacheEnabled } from '@/services/api';
+import { prefetchAdminRoute, scheduleAdminPrefetch } from '@/routes/admin-prefetch';
+import { isResponseCacheEnabled, setResponseCacheEnabled } from '@/services/api';
 import { cn } from '@/utils/cn';
 import { PortalLayout } from './PortalLayout';
 
@@ -18,30 +18,30 @@ export function CompanyLayout() {
 }
 
 export function AdminLayout() {
-  // F18-11B · caché de lecturas SOLO dentro del panel ADMIN. `useLayoutEffect` la activa antes de
-  // que las páginas hijas lancen sus peticiones (sus `useEffect` corren después); al salir del
-  // panel se desactiva y se vacía. Los portales CUSTOMER y COMPANY no la usan.
+  // F18-11B · caché de lecturas SOLO dentro del panel ADMIN; al salir del panel se desactiva y se
+  // vacía. Los portales CUSTOMER y COMPANY no la usan.
+  // F18-16 · se activa ya durante el render (idempotente): los hooks de las páginas leen la caché en
+  // su `useLayoutEffect`, y React ejecuta los efectos de los hijos ANTES que los del padre. Este
+  // componente solo se renderiza para el rol ADMIN (lo protege `RoleRoute`).
+  if (!isResponseCacheEnabled()) setResponseCacheEnabled(true);
   useLayoutEffect(() => {
     setResponseCacheEnabled(true);
     return () => setResponseCacheEnabled(false);
   }, []);
 
-  // F18-11B · precarga de los módulos de las secciones principales cuando el panel ya está pintado
-  // y el navegador está ocioso (mínimo 2 s tras montar), para no competir con el Dashboard.
-  useEffect(() => {
-    let idleId: number | undefined;
-    const timer = window.setTimeout(() => {
-      const start = () => void prefetchAdminSections();
-      if ('requestIdleCallback' in window) idleId = window.requestIdleCallback(start, { timeout: 3000 });
-      else start();
-    }, 2000);
-    return () => {
-      window.clearTimeout(timer);
-      if (idleId !== undefined && 'cancelIdleCallback' in window) window.cancelIdleCallback(idleId);
-    };
-  }, []);
+  // F18-16 · precarga (chunks y datos) de las secciones principales cuando el panel ya está pintado
+  // y el navegador está ocioso; y de cada sección en cuanto el puntero o el foco pasan por su enlace.
+  useEffect(() => scheduleAdminPrefetch(), []);
 
-  return <PortalLayout items={ADMIN_NAV} theme="dark" brandSubtitle="Administrador" searchPlaceholder="Buscar empresas, usuarios, viajes, reservas..." />;
+  return (
+    <PortalLayout
+      items={ADMIN_NAV}
+      theme="dark"
+      brandSubtitle="Administrador"
+      searchPlaceholder="Buscar empresas, usuarios, viajes, reservas..."
+      onNavIntent={prefetchAdminRoute}
+    />
+  );
 }
 
 /** The customer area lives inside the public shell, with its own side navigation. */

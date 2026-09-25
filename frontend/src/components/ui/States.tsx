@@ -80,7 +80,8 @@ export function ErrorState({ error, onRetry, className }: { error: ApiError | Er
   if (apiError?.isNetworkError) {
     icon = <WifiOff className="h-7 w-7" />;
     title = 'Sin conexión con el servidor';
-    description = 'Verifica que el backend esté ejecutándose y que tu conexión funcione.';
+    // F18-16: texto para quien usa el panel, no para quien desarrolla el backend.
+    description = 'No pudimos comunicarnos con el servidor. Revisa tu conexión a Internet e inténtalo de nuevo.';
   } else if (apiError?.isForbidden) {
     icon = <Lock className="h-7 w-7" />;
     title = 'No tienes permisos';

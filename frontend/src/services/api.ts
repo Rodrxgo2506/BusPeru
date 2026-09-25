@@ -51,33 +51,103 @@ export class ApiError extends Error {
  * cualquier escritura o cambio de sesión). Solo se activa mientras el panel ADMIN está montado
  * (`setResponseCacheEnabled`), así que el resto de portales se comporta exactamente como antes.
  *
- * Cancelación: `useAsync`/`useList` ejecutan su cargador dentro de `withRequestSignal`; las GET
+ * Cancelación: `useAsync`/`useList` ejecutan su cargador dentro de `withRequestScope`; las GET
  * que ese cargador lanza de forma síncrona heredan la señal y se cancelan si la página se desmonta
  * o vuelve a cargar. Nunca se cancelan escrituras.
+ *
+ * F18-16 · stale-while-revalidate. Un dato es FRESCO 30 s (se usa sin preguntar a la API) y se
+ * puede MOSTRAR hasta 10 min mientras la pantalla lo revalida en segundo plano. Antes la caché era
+ * «fresco o nada»: pasados 30 s cada sección volvía a vaciarse, enseñaba el esqueleto y esperaba a
+ * la red, que es justo lo que se percibía como lentitud. Las reglas de seguridad no cambian: clave
+ * con el token, solo lecturas permitidas, y cualquier escritura, login, logout o 401 lo vacía todo.
  * ---------------------------------------------------------------------------------------------- */
-const READ_CACHE_TTL_MS = 30_000;
-const readCache = new ResponseCache(READ_CACHE_TTL_MS);
+const READ_CACHE_FRESH_MS = 30_000;
+const READ_CACHE_MAX_AGE_MS = 10 * 60_000;
+const readCache = new ResponseCache(READ_CACHE_FRESH_MS, () => Date.now(), READ_CACHE_MAX_AGE_MS);
 let readCacheEnabled = false;
-let scopedSignal: AbortSignal | undefined;
+
+/**
+ * Cómo usa la caché una lectura:
+ *   · `default`: dato fresco si lo hay; si no, a la API (y se guarda la respuesta).
+ *   · `cache-only`: dato fresco O viejo, y si no hay ninguno falla con `CacheMissError` SIN ir a la
+ *     red. Lo usan los hooks para pintar al instante lo que ya se conoce.
+ *   · `network`: siempre a la API (revalidación o recarga explícita), y se guarda la respuesta.
+ */
+export type CachePolicy = 'default' | 'cache-only' | 'network';
+
+interface RequestScope {
+  signal?: AbortSignal;
+  policy?: CachePolicy;
+  /** Se llama por cada lectura servida desde la caché, indicando si el dato era fresco. */
+  onCacheRead?: (fresh: boolean) => void;
+}
+
+let currentScope: RequestScope | undefined;
+
+/** Peticiones en curso compartibles (precargas): una pantalla que pide lo mismo se une a ellas. */
+const inflight = new Map<string, Promise<{ data: unknown; pagination?: Pagination }>>();
+/**
+ * Lecturas en curso de las PANTALLAS (tienen dueño que las cancela). Solo una precarga se une a
+ * ellas: una pantalla nunca espera a la petición de otra, porque si esa se cancela se quedaría sin datos.
+ */
+const inflightForeground = new Map<string, Promise<{ data: unknown; pagination?: Pagination }>>();
+/** Momento de la última lectura lanzada por una pantalla: la precarga cede el paso mientras se navega. */
+let lastForegroundAt = 0;
+
+export function msSinceForegroundRequest(): number {
+  return Date.now() - lastForegroundAt;
+}
+
+/** Lecturas de pantallas todavía en vuelo (la precarga no arranca mientras haya alguna). */
+export function foregroundRequestsInFlight(): number {
+  return inflightForeground.size;
+}
+
+/** Invalida TODO lo leído: la caché y las precargas en curso (su resultado ya no es de fiar). */
+function invalidateReads(): void {
+  readCache.clear();
+  inflight.clear();
+  inflightForeground.clear();
+}
+
+export class CacheMissError extends Error {
+  constructor() {
+    super('Sin datos en caché.');
+    this.name = 'CacheMissError';
+  }
+}
+
+export function isCacheMiss(error: unknown): boolean {
+  return error instanceof CacheMissError;
+}
 
 export function setResponseCacheEnabled(enabled: boolean): void {
   readCacheEnabled = enabled;
-  if (!enabled) readCache.clear();
+  if (!enabled) invalidateReads();
+}
+
+export function isResponseCacheEnabled(): boolean {
+  return readCacheEnabled;
 }
 
 export function clearResponseCache(): void {
-  readCache.clear();
+  invalidateReads();
+}
+
+/** Ejecuta `run` de forma que las GET que lance síncronamente usen el ámbito indicado. */
+export function withRequestScope<T>(scope: RequestScope, run: () => T): T {
+  const previous = currentScope;
+  currentScope = scope;
+  try {
+    return run();
+  } finally {
+    currentScope = previous;
+  }
 }
 
 /** Ejecuta `run` de forma que las GET que lance síncronamente usen `signal`. */
 export function withRequestSignal<T>(signal: AbortSignal, run: () => T): T {
-  const previous = scopedSignal;
-  scopedSignal = signal;
-  try {
-    return run();
-  } finally {
-    scopedSignal = previous;
-  }
+  return withRequestScope({ signal }, run);
 }
 
 export function isAbortError(error: unknown): boolean {
@@ -86,14 +156,34 @@ export function isAbortError(error: unknown): boolean {
 
 const abortedError = () => new ApiError(0, 'Petición cancelada.', undefined, true);
 
+/** Espera `promise`, pero se rinde en cuanto `signal` se cancela (la petición compartida sigue). */
+function untilAborted<T>(promise: Promise<T>, signal: AbortSignal | undefined): Promise<T> {
+  if (!signal) return promise;
+  if (signal.aborted) return Promise.reject(abortedError());
+  return new Promise<T>((resolve, reject) => {
+    const onAbort = () => reject(abortedError());
+    signal.addEventListener('abort', onAbort, { once: true });
+    promise.then(
+      (value) => {
+        signal.removeEventListener('abort', onAbort);
+        resolve(value);
+      },
+      (error: unknown) => {
+        signal.removeEventListener('abort', onAbort);
+        reject(error);
+      },
+    );
+  });
+}
+
 export const tokenStorage = {
   get: () => localStorage.getItem(TOKEN_KEY),
   set: (token: string) => {
-    readCache.clear();
+    invalidateReads();
     localStorage.setItem(TOKEN_KEY, token);
   },
   clear: () => {
-    readCache.clear();
+    invalidateReads();
     localStorage.removeItem(TOKEN_KEY);
   },
 };
@@ -132,14 +222,15 @@ interface RequestOptions {
  */
 async function request<T>(path: string, options: RequestOptions = {}): Promise<{ data: T; pagination?: Pagination }> {
   const method = options.method ?? 'GET';
-  // Leído de forma síncrona, antes del primer `await`: así se hereda el ámbito de `withRequestSignal`.
-  const signal = options.signal ?? (method === 'GET' ? scopedSignal : undefined);
-  if (method !== 'GET') readCache.clear();
+  // Leído de forma síncrona, antes del primer `await`: así se hereda el ámbito de `withRequestScope`.
+  const scope = method === 'GET' ? currentScope : undefined;
+  const signal = options.signal ?? scope?.signal;
+  if (method !== 'GET') invalidateReads();
   try {
-    return await send<T>(path, options, method, signal);
+    return await send<T>(path, options, method, signal, scope);
   } finally {
     // Una escritura (haya salido bien o mal) invalida también lo que se leyó mientras viajaba.
-    if (method !== 'GET') readCache.clear();
+    if (method !== 'GET') invalidateReads();
   }
 }
 
@@ -148,15 +239,60 @@ async function send<T>(
   options: RequestOptions,
   method: NonNullable<RequestOptions['method']>,
   signal: AbortSignal | undefined,
+  scope: RequestScope | undefined,
 ): Promise<{ data: T; pagination?: Pagination }> {
+  const policy = scope?.policy ?? 'default';
   const token = tokenStorage.get();
   const url = buildUrl(path, options.params);
   const cacheKey = method === 'GET' && readCacheEnabled && token && isCacheablePath(path) ? ResponseCache.key(token, url) : null;
   const generation = readCache.generation;
-  if (cacheKey) {
-    const hit = readCache.get(cacheKey);
-    if (hit) return hit as { data: T; pagination?: Pagination };
+  if (cacheKey && policy !== 'network') {
+    const hit = readCache.peek(cacheKey);
+    if (hit && (hit.fresh || policy === 'cache-only')) {
+      scope?.onCacheRead?.(hit.fresh);
+      return hit.value as { data: T; pagination?: Pagination };
+    }
+    // Una precarga de esta misma lectura ya está en camino: se espera a ella en lugar de repetirla.
+    // Y una precarga (sin dueño) también se une a la lectura que ya esté haciendo una pantalla.
+    const shared = inflight.get(cacheKey) ?? (signal ? undefined : inflightForeground.get(cacheKey));
+    if (shared && policy !== 'cache-only') {
+      const result = await untilAborted(shared, signal);
+      return structuredClone(result) as { data: T; pagination?: Pagination };
+    }
   }
+  if (policy === 'cache-only') throw new CacheMissError();
+  if (cacheKey && signal) {
+    lastForegroundAt = Date.now();
+    const own = fetchAndStore<T>(url, options, method, signal, token, cacheKey, generation);
+    inflightForeground.set(cacheKey, own as Promise<{ data: unknown; pagination?: Pagination }>);
+    try {
+      return await own;
+    } finally {
+      if (inflightForeground.get(cacheKey) === (own as Promise<unknown>)) inflightForeground.delete(cacheKey);
+    }
+  }
+  if (cacheKey && !signal) {
+    // Lectura sin dueño que la cancele (precarga): otras pantallas pueden unirse a ella.
+    const own = fetchAndStore<T>(url, options, method, signal, token, cacheKey, generation);
+    inflight.set(cacheKey, own as Promise<{ data: unknown; pagination?: Pagination }>);
+    try {
+      return await own;
+    } finally {
+      if (inflight.get(cacheKey) === (own as Promise<unknown>)) inflight.delete(cacheKey);
+    }
+  }
+  return fetchAndStore<T>(url, options, method, signal, token, cacheKey, generation);
+}
+
+async function fetchAndStore<T>(
+  url: string,
+  options: RequestOptions,
+  method: NonNullable<RequestOptions['method']>,
+  signal: AbortSignal | undefined,
+  token: string | null,
+  cacheKey: string | null,
+  generation: number,
+): Promise<{ data: T; pagination?: Pagination }> {
 
   const isForm = options.body instanceof FormData;
   const headers: Record<string, string> = { Accept: 'application/json' };

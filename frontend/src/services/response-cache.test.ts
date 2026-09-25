@@ -52,6 +52,43 @@ describe('ResponseCache (F18-11B)', () => {
     assert.equal(cache.size, 0);
   });
 
+  it('F18-16 · pasado el TTL el dato queda VIEJO: peek lo entrega marcado, get ya no', () => {
+    let t = 0;
+    const cache = new ResponseCache(30_000, () => t, 600_000);
+    const key = ResponseCache.key('t', 'https://api.example/api/companies?page=1&limit=10');
+    cache.set(key, { data: ['A'] });
+    assert.deepEqual(cache.peek(key), { value: { data: ['A'] }, fresh: true });
+    t = 30_000;
+    assert.equal(cache.get(key), null, 'get solo sirve datos frescos');
+    assert.deepEqual(cache.peek(key), { value: { data: ['A'] }, fresh: false });
+    t = 599_999;
+    assert.equal(cache.peek(key)?.fresh, false);
+    t = 600_000;
+    assert.equal(cache.peek(key), null, 'pasado maxAge se descarta del todo');
+    assert.equal(cache.size, 0);
+  });
+
+  it('F18-16 · un dato viejo de otra sesión tampoco se ve, y clear() también lo borra', () => {
+    let t = 0;
+    const cache = new ResponseCache(30_000, () => t, 600_000);
+    const url = 'https://api.example/api/users?page=1&limit=10';
+    cache.set(ResponseCache.key('token-admin', url), { data: ['admin-ve-todo'] });
+    t = 60_000;
+    assert.equal(cache.peek(ResponseCache.key('token-customer', url)), null);
+    assert.ok(cache.peek(ResponseCache.key('token-admin', url)));
+    cache.clear(); // logout, 401, cambio de usuario o cualquier escritura
+    assert.equal(cache.peek(ResponseCache.key('token-admin', url)), null);
+  });
+
+  it('F18-16 · sin maxAge explícito no hay datos viejos (comportamiento de F18-11B)', () => {
+    let t = 0;
+    const cache = new ResponseCache(30_000, () => t);
+    const key = ResponseCache.key('t', 'u');
+    cache.set(key, { data: 1 });
+    t = 30_000;
+    assert.equal(cache.peek(key), null);
+  });
+
   it('solo permite rutas de listados y catálogos del panel', () => {
     for (const ok of ['/companies', '/companies/5', '/users', '/users/stats', '/roles', '/trips', '/routes', '/buses', '/bookings', '/payments/summary', '/destinations', '/locations', '/system-settings', '/dashboard/admin', '/bus-types', '/seat-types']) {
       assert.ok(isCacheablePath(ok), ok);
