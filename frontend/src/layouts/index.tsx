@@ -1,9 +1,12 @@
 import { LogOut } from 'lucide-react';
+import { useEffect, useLayoutEffect } from 'react';
 import { NavLink, Outlet, useNavigate } from 'react-router-dom';
 import { RouteSuspense } from '@/components/common/RouteSuspense';
 import { Avatar } from '@/components/ui';
 import { CUSTOMER_NAV, ADMIN_NAV, COMPANY_NAV } from '@/constants/navigation';
 import { useAuth } from '@/context/AuthContext';
+import { prefetchAdminSections } from '@/routes/admin-chunks';
+import { setResponseCacheEnabled } from '@/services/api';
 import { cn } from '@/utils/cn';
 import { PortalLayout } from './PortalLayout';
 
@@ -15,6 +18,29 @@ export function CompanyLayout() {
 }
 
 export function AdminLayout() {
+  // F18-11B · caché de lecturas SOLO dentro del panel ADMIN. `useLayoutEffect` la activa antes de
+  // que las páginas hijas lancen sus peticiones (sus `useEffect` corren después); al salir del
+  // panel se desactiva y se vacía. Los portales CUSTOMER y COMPANY no la usan.
+  useLayoutEffect(() => {
+    setResponseCacheEnabled(true);
+    return () => setResponseCacheEnabled(false);
+  }, []);
+
+  // F18-11B · precarga de los módulos de las secciones principales cuando el panel ya está pintado
+  // y el navegador está ocioso (mínimo 2 s tras montar), para no competir con el Dashboard.
+  useEffect(() => {
+    let idleId: number | undefined;
+    const timer = window.setTimeout(() => {
+      const start = () => void prefetchAdminSections();
+      if ('requestIdleCallback' in window) idleId = window.requestIdleCallback(start, { timeout: 3000 });
+      else start();
+    }, 2000);
+    return () => {
+      window.clearTimeout(timer);
+      if (idleId !== undefined && 'cancelIdleCallback' in window) window.cancelIdleCallback(idleId);
+    };
+  }, []);
+
   return <PortalLayout items={ADMIN_NAV} theme="dark" brandSubtitle="Administrador" searchPlaceholder="Buscar empresas, usuarios, viajes, reservas..." />;
 }
 

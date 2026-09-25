@@ -1,4 +1,5 @@
 import { resolveApiUrl } from '@/config/api-url';
+import { isCacheablePath, ResponseCache } from '@/services/response-cache';
 import type { Pagination } from '@/types';
 
 // F15-02: el backend local solo es el fallback EN DESARROLLO. Vite sustituye `import.meta.env.DEV`
@@ -22,15 +23,18 @@ const TOKEN_KEY = 'busperu.token';
 export class ApiError extends Error {
   readonly status: number;
   readonly fields?: Record<string, string>;
+  /** F18-11B: la petición la canceló la app (la página que la pidió ya no está). No es un error. */
+  readonly aborted: boolean;
 
-  constructor(status: number, message: string, fields?: Record<string, string>) {
+  constructor(status: number, message: string, fields?: Record<string, string>, aborted = false) {
     super(message);
     this.status = status;
     this.fields = fields;
+    this.aborted = aborted;
   }
 
   get isNetworkError() {
-    return this.status === 0;
+    return this.status === 0 && !this.aborted;
   }
   get isUnauthorized() {
     return this.status === 401;
@@ -40,10 +44,58 @@ export class ApiError extends Error {
   }
 }
 
+/* ------------------------------------------------------------------------------------------------
+ * F18-11B · caché de lecturas y cancelación de peticiones abandonadas.
+ *
+ * Caché: ver `response-cache.ts` (memoria, clave con el token, TTL corto, invalidación total ante
+ * cualquier escritura o cambio de sesión). Solo se activa mientras el panel ADMIN está montado
+ * (`setResponseCacheEnabled`), así que el resto de portales se comporta exactamente como antes.
+ *
+ * Cancelación: `useAsync`/`useList` ejecutan su cargador dentro de `withRequestSignal`; las GET
+ * que ese cargador lanza de forma síncrona heredan la señal y se cancelan si la página se desmonta
+ * o vuelve a cargar. Nunca se cancelan escrituras.
+ * ---------------------------------------------------------------------------------------------- */
+const READ_CACHE_TTL_MS = 30_000;
+const readCache = new ResponseCache(READ_CACHE_TTL_MS);
+let readCacheEnabled = false;
+let scopedSignal: AbortSignal | undefined;
+
+export function setResponseCacheEnabled(enabled: boolean): void {
+  readCacheEnabled = enabled;
+  if (!enabled) readCache.clear();
+}
+
+export function clearResponseCache(): void {
+  readCache.clear();
+}
+
+/** Ejecuta `run` de forma que las GET que lance síncronamente usen `signal`. */
+export function withRequestSignal<T>(signal: AbortSignal, run: () => T): T {
+  const previous = scopedSignal;
+  scopedSignal = signal;
+  try {
+    return run();
+  } finally {
+    scopedSignal = previous;
+  }
+}
+
+export function isAbortError(error: unknown): boolean {
+  return error instanceof ApiError && error.aborted;
+}
+
+const abortedError = () => new ApiError(0, 'Petición cancelada.', undefined, true);
+
 export const tokenStorage = {
   get: () => localStorage.getItem(TOKEN_KEY),
-  set: (token: string) => localStorage.setItem(TOKEN_KEY, token),
-  clear: () => localStorage.removeItem(TOKEN_KEY),
+  set: (token: string) => {
+    readCache.clear();
+    localStorage.setItem(TOKEN_KEY, token);
+  },
+  clear: () => {
+    readCache.clear();
+    localStorage.removeItem(TOKEN_KEY);
+  },
 };
 
 type SessionExpiredHandler = () => void;
@@ -79,7 +131,33 @@ interface RequestOptions {
  * { success, data } envelope and turns any failure into an ApiError.
  */
 async function request<T>(path: string, options: RequestOptions = {}): Promise<{ data: T; pagination?: Pagination }> {
+  const method = options.method ?? 'GET';
+  // Leído de forma síncrona, antes del primer `await`: así se hereda el ámbito de `withRequestSignal`.
+  const signal = options.signal ?? (method === 'GET' ? scopedSignal : undefined);
+  if (method !== 'GET') readCache.clear();
+  try {
+    return await send<T>(path, options, method, signal);
+  } finally {
+    // Una escritura (haya salido bien o mal) invalida también lo que se leyó mientras viajaba.
+    if (method !== 'GET') readCache.clear();
+  }
+}
+
+async function send<T>(
+  path: string,
+  options: RequestOptions,
+  method: NonNullable<RequestOptions['method']>,
+  signal: AbortSignal | undefined,
+): Promise<{ data: T; pagination?: Pagination }> {
   const token = tokenStorage.get();
+  const url = buildUrl(path, options.params);
+  const cacheKey = method === 'GET' && readCacheEnabled && token && isCacheablePath(path) ? ResponseCache.key(token, url) : null;
+  const generation = readCache.generation;
+  if (cacheKey) {
+    const hit = readCache.get(cacheKey);
+    if (hit) return hit as { data: T; pagination?: Pagination };
+  }
+
   const isForm = options.body instanceof FormData;
   const headers: Record<string, string> = { Accept: 'application/json' };
   // Con `FormData` el navegador escribe el Content-Type con su boundary: fijarlo lo rompería.
@@ -88,13 +166,14 @@ async function request<T>(path: string, options: RequestOptions = {}): Promise<{
 
   let response: Response;
   try {
-    response = await fetch(buildUrl(path, options.params), {
-      method: options.method ?? 'GET',
+    response = await fetch(url, {
+      method,
       headers,
       body: options.body === undefined ? undefined : isForm ? (options.body as FormData) : JSON.stringify(options.body),
-      signal: options.signal,
+      signal,
     });
   } catch {
+    if (signal?.aborted) throw abortedError();
     throw new ApiError(0, 'No pudimos conectarnos con el servidor. Revisa tu conexión e inténtalo de nuevo.');
   }
 
@@ -104,6 +183,8 @@ async function request<T>(path: string, options: RequestOptions = {}): Promise<{
   try {
     payload = await response.json();
   } catch {
+    // Cancelada a mitad del cuerpo: no es una respuesta vacía, es una petición abandonada.
+    if (signal?.aborted) throw abortedError();
     payload = null;
   }
 
@@ -123,7 +204,10 @@ async function request<T>(path: string, options: RequestOptions = {}): Promise<{
     throw new ApiError(response.status, body.message ?? 'Ocurrió un error inesperado.', body.errors);
   }
 
-  return { data: body.data as T, pagination: body.pagination };
+  const result = { data: body.data as T, pagination: body.pagination };
+  // Solo respuestas correctas, de la misma sesión y sin escrituras ni cambios de sesión por medio.
+  if (cacheKey && tokenStorage.get() === token) readCache.set(cacheKey, result, generation);
+  return result;
 }
 
 export const api = {

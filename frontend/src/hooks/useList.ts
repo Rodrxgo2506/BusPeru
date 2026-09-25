@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { ApiError, type QueryParams } from '@/services/api';
+import { ApiError, isAbortError, withRequestSignal, type QueryParams } from '@/services/api';
 import type { Pagination } from '@/types';
 
 interface ListLoader<T> {
@@ -53,17 +53,29 @@ export function useList<T>(loader: ListLoader<T>, options: UseListOptions = {}) 
     [page, limit, debouncedSearch, sort, filters],
   );
 
+  // F18-11B: cada carga tiene su `AbortController`. Una carga nueva (otra página, filtro, orden…)
+  // cancela la anterior y desmontar la página cancela la que esté en curso, así una respuesta
+  // vieja nunca pisa a una nueva y la navegación rápida no deja peticiones colgando.
+  const controllerRef = useRef<AbortController | null>(null);
+  useEffect(() => () => controllerRef.current?.abort(), []);
+
   const load = useCallback(async () => {
+    controllerRef.current?.abort();
+    const controller = new AbortController();
+    controllerRef.current = controller;
     setLoading(true);
     setError(null);
     try {
-      const result = await loaderRef.current(params);
+      const result = await withRequestSignal(controller.signal, () => loaderRef.current(params));
+      if (controller.signal.aborted) return;
       setRows(result.data ?? []);
       setPagination(result.pagination ?? { page, limit, total: result.data?.length ?? 0, totalPages: 1 });
+      setLoading(false);
     } catch (caught) {
+      // Cancelada: la carga que la sustituyó (o el desmontaje) decide el estado, no esta.
+      if (controller.signal.aborted || isAbortError(caught)) return;
       setError(caught instanceof ApiError ? caught : new ApiError(500, 'Error inesperado'));
       setRows([]);
-    } finally {
       setLoading(false);
     }
   }, [params, page, limit]);

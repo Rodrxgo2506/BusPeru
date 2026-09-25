@@ -5,6 +5,7 @@ import helmet from 'helmet';
 import morgan from 'morgan';
 import { sanitizeUrl } from './utils/log-sanitizer';
 import { env } from './config/env';
+import { CORS_PREFLIGHT_MAX_AGE_SECONDS } from './config/http-server';
 import { accessLog } from './middleware/access-log.middleware';
 import { errorHandler, notFoundHandler } from './middleware/error.middleware';
 import { attachRequestId } from './middleware/request-id.middleware';
@@ -29,6 +30,9 @@ export function createApp() {
     cors({
       origin: env.corsOrigin,
       credentials: true,
+      // F18-11B: el navegador guarda el preflight 2 h (máximo que respeta Chromium) en lugar de
+      // repetirlo en cada petición autenticada. No cambia qué origen, métodos ni cabeceras se admiten.
+      maxAge: CORS_PREFLIGHT_MAX_AGE_SECONDS,
     }),
   );
   app.use(express.json({ limit: '1mb' }));

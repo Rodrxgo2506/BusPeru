@@ -8,7 +8,7 @@ import { useToast } from '@/context/ToastContext';
 import { useAsync } from '@/hooks/useAsync';
 import { ApiError } from '@/services/api';
 import { busService, driverService, routeService, tripService } from '@/services';
-import type { Trip } from '@/types';
+import type { Driver, Trip } from '@/types';
 import { formatCurrency, formatDate, formatDateTime, formatNumber, formatTime } from '@/utils/format';
 
 const TRIP_STATUS_OPTIONS = [
@@ -28,7 +28,10 @@ export function TripsPage({ scope }: { scope: 'company' | 'admin' }) {
   const buses = useAsync(() => busService.list({ limit: 200 }), []);
   // Solo personal ACTIVO de la propia empresa: el backend acota la consulta por la sesión
   // y vuelve a validarlo al guardar, así que el selector nunca ofrece gente de otra empresa.
-  const drivers = useAsync(() => driverService.list({ status: 'ACTIVE' }), []);
+  // F18-11B: el ADMIN no tiene empresa propia y el endpoint exige `company_id`, así que la
+  // llamada respondía siempre 400 y el selector quedaba vacío. No se pide: mismo resultado en
+  // pantalla, sin una petición fallida (y su preflight) en cada visita a Viajes.
+  const drivers = useAsync(() => (scope === 'admin' ? Promise.resolve([] as Driver[]) : driverService.list({ status: 'ACTIVE' })), [scope]);
   const toast = useToast();
   // Cancelar un viaje cancela sus reservas y abre reembolsos: es decisión de ADMIN o
   // COMPANY_ADMIN. OPERATOR opera el viaje, pero no lo cancela. El backend aplica la misma

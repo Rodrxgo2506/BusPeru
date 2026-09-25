@@ -1,5 +1,5 @@
 import { CheckCircle2, ChevronDown, HelpCircle, LogOut, Menu, Search, X } from 'lucide-react';
-import { useEffect, useState, type ReactNode } from 'react';
+import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
 import { Link, NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom';
 import { NotificationBell } from '@/layouts/PublicLayout';
 import { RouteSuspense } from '@/components/common/RouteSuspense';
@@ -37,12 +37,44 @@ export function PortalLayout({ items, theme, brandSubtitle, searchPlaceholder }:
     setMenuOpen(false);
   }, [location.pathname]);
 
-  useEffect(() => {
+  // F18-11B · contador de no leídas. Antes se pedía en CADA cambio de ruta. Ahora: al montar el
+  // panel, cada 60 s con la pestaña visible, al volver a la pestaña (como mucho cada 15 s) y al
+  // navegar solo si el dato tiene más de 30 s o si se entra o se sale de Notificaciones (donde se
+  // marcan como leídas). Nunca bloquea la navegación: la página no espera a esta petición.
+  const lastUnreadAt = useRef(0);
+  const previousPath = useRef(location.pathname);
+  const refreshUnread = useCallback(() => {
+    lastUnreadAt.current = Date.now();
     notificationService
       .unreadCount()
       .then((result) => setUnread(result.unread))
       .catch(() => setUnread(0));
-  }, [location.pathname]);
+  }, []);
+
+  useEffect(() => {
+    refreshUnread();
+    const interval = window.setInterval(() => {
+      if (document.visibilityState === 'visible') refreshUnread();
+    }, 60_000);
+    const onVisible = () => {
+      if (document.visibilityState === 'visible' && Date.now() - lastUnreadAt.current > 15_000) refreshUnread();
+    };
+    window.addEventListener('focus', onVisible);
+    document.addEventListener('visibilitychange', onVisible);
+    return () => {
+      window.clearInterval(interval);
+      window.removeEventListener('focus', onVisible);
+      document.removeEventListener('visibilitychange', onVisible);
+    };
+  }, [refreshUnread]);
+
+  useEffect(() => {
+    const previous = previousPath.current;
+    previousPath.current = location.pathname;
+    if (previous === location.pathname) return;
+    const touchesNotifications = previous.includes('/notifications') || location.pathname.includes('/notifications');
+    if (touchesNotifications || Date.now() - lastUnreadAt.current > 30_000) refreshUnread();
+  }, [location.pathname, refreshUnread]);
 
   const sections = navItems.reduce<Array<{ title: string | null; items: NavItem[] }>>((accumulator, item) => {
     const title = item.section ?? null;

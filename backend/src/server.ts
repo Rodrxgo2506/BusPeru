@@ -1,6 +1,7 @@
 import { createApp } from './app';
 import { pool, verifyConnection } from './config/database';
 import { env } from './config/env';
+import { applyKeepAlive } from './config/http-server';
 import { startBookingExpiryScheduler, stopBookingExpiryScheduler } from './services/booking-expiry.service';
 import { ensureSystemTemplates } from './services/notification.service';
 import { installFatalHandlers } from './utils/process-guards';
@@ -29,6 +30,8 @@ async function bootstrap(): Promise<void> {
   const server = createApp().listen(env.port, () => {
     console.log(`✔ API BusPerú escuchando en http://localhost:${env.port}/api`);
   });
+  // F18-11B: mantener las conexiones del ALB más que su idle_timeout (ver config/http-server).
+  applyKeepAlive(server);
 
   const shutdown = async (signal: string, code = 0) => {
     console.log(`\n${signal} recibido, cerrando servidor...`);

@@ -160,6 +160,16 @@ describe('SEC-07 · CORS y cabeceras de seguridad', () => {
       });
     }
 
+    it('F18-11B · el preflight se puede cachear 2 h sin abrir CORS', async () => {
+      const bueno = await preflight('/companies', LEGITIMO, 'GET');
+      assert.equal(bueno.head('access-control-max-age'), '7200');
+      assert.equal(bueno.head('access-control-allow-origin'), LEGITIMO);
+      assert.equal(bueno.head('access-control-allow-credentials'), 'true');
+      const ajeno = await preflight('/companies', 'https://attacker.example', 'GET');
+      assert.notEqual(ajeno.head('access-control-allow-origin'), 'https://attacker.example');
+      assert.notEqual(ajeno.head('access-control-allow-origin'), '*');
+    });
+
     it('solo se anuncian métodos que la API usa de verdad', async () => {
       const metodos = String((await preflight('/bookings', LEGITIMO)).head('access-control-allow-methods'))
         .split(',')
