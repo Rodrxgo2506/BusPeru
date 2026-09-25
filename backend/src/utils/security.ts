@@ -30,6 +30,13 @@ export interface TokenPayload {
   jti?: string;
   /** Caducidad (segundos desde epoch), la añade `jsonwebtoken` al firmar. */
   exp?: number;
+  /**
+   * F17C-SEC-10 · momento de emisión (segundos desde epoch), que también pone `jsonwebtoken`.
+   * Es lo que se compara con `users.sessions_valid_from` para saber si esta sesión nació antes
+   * de una suspensión. Un token anterior a la marca no vuelve a valer aunque la cuenta se
+   * reactive. Va en SEGUNDOS, de ahí que la comparación sea estricta.
+   */
+  iat?: number;
 }
 
 /**
@@ -80,6 +87,27 @@ export function verifyToken(token: string): TokenPayload {
     if (error instanceof jwt.TokenExpiredError) throw ApiError.unauthorized('La sesión ha expirado');
     throw ApiError.unauthorized('Token inválido');
   }
+}
+
+/**
+ * Vida maxima de un token de sesion, en segundos, tal y como la aplica la libreria.
+ *
+ * No se interpreta `JWT_EXPIRES_IN` con una expresion regular: se firma un token de usar y
+ * tirar y se lee `exp - iat`. Asi el valor es EXACTAMENTE el que usa `jsonwebtoken`, sea
+ * cual sea el formato configurado (`8h`, `480m`, un numero de segundos...), y no hay un
+ * segundo analizador que pueda discrepar del primero.
+ *
+ * Se calcula una vez: la configuracion no cambia mientras el proceso vive.
+ */
+let vidaToken: number | null = null;
+
+export function tokenLifetimeSeconds(): number {
+  if (vidaToken === null) {
+    const muestra = jwt.sign({ sub: 0 }, env.jwt.secret, { expiresIn: env.jwt.expiresIn } as jwt.SignOptions);
+    const { exp, iat } = jwt.decode(muestra) as { exp: number; iat: number };
+    vidaToken = Math.max(0, exp - iat);
+  }
+  return vidaToken;
 }
 
 export function randomCode(prefix: string, length = 6): string {

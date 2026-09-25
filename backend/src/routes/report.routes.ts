@@ -146,6 +146,21 @@ const REPORTS = {
 
 type ReportKey = keyof typeof REPORTS;
 
+/**
+ * F17C-SEC-01 H-03 · la clave del reporte llega de la URL, así que se comprueba que el objeto la
+ * tenga COMO PROPIA y no heredada.
+ *
+ * `REPORTS[key]` a secas resuelve por la cadena de prototipos: `constructor`, `toString`,
+ * `valueOf`, `hasOwnProperty` y `__proto__` no devuelven `undefined` sino la propiedad de
+ * `Object.prototype`. Eso superaba el `if (!template)`, y el `template.replace(...)` de después
+ * reventaba con un `TypeError` —500 y una entrada de error en el diario— donde correspondía un
+ * 404. Nunca fue inyección: lo que se recuperaba era una función, no una cadena que llegara al
+ * SQL. Es el mismo patrón que ya usa `isBrandingAsset` en el almacén de archivos.
+ */
+function ownKey<T extends object>(source: T, key: string): key is Extract<keyof T, string> {
+  return Object.prototype.hasOwnProperty.call(source, key);
+}
+
 router.get(
   '/',
   asyncHandler(async (_req, res) => {
@@ -156,12 +171,16 @@ router.get(
 router.get(
   '/:report',
   asyncHandler(async (req, res) => {
-    const key = req.params.report as ReportKey;
+    const solicitado = String(req.params.report ?? '');
+    if (!ownKey(REPORTS, solicitado)) throw ApiError.notFound('El reporte solicitado no existe');
+    const key: ReportKey = solicitado;
     const template = REPORTS[key];
-    if (!template) throw ApiError.notFound('El reporte solicitado no existe');
 
     const scope = companyScope(req);
-    const range = dateRange(req, RANGE_COLUMN[key] ?? 'bk.created_at');
+    // La clave ya está validada contra `REPORTS`; el `hasOwnProperty` se repite aquí porque este
+    // mapa no cubre todos los reportes y su respaldo no puede salir del prototipo.
+    const columna = ownKey(RANGE_COLUMN, key) ? RANGE_COLUMN[key] : undefined;
+    const range = dateRange(req, columna ?? 'bk.created_at');
     const sql = template.replace('{scope}', scope.sql).replace('{range}', range.sql);
 
     const rows = await query(sql, [...scope.params, ...range.params]);

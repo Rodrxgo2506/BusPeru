@@ -4,6 +4,7 @@ import { execute, pool, query, queryOne, withTransaction } from '../config/datab
 import type { AuthenticatedUser, PaymentMethod } from '../types/entities';
 import { ApiError } from '../utils/ApiError';
 import { logError } from '../utils/logger';
+import { recordSystemAudit } from './audit.service';
 import { centsToDecimal, proportionalCents, toCentsExact } from '../utils/money';
 import { loadCompanyCommission } from './company-commission.service';
 import { assertCompanyCanSell } from './company-status.service';
@@ -231,6 +232,30 @@ async function reserveIntent(
   });
 }
 
+/**
+ * ¿El cargo que devuelve Culqi es el que BusPerú pidió?
+ *
+ * Una sola definición de la regla para las DOS vías que cierran un cobro con tarjeta: el
+ * cobro síncrono (`settle`) y la reconciliación del webhook (`reconcileApprovedCharge`).
+ * Antes cada una compraba lo suyo y no coincidían: la síncrona miraba importe Y moneda, la
+ * del webhook solo el importe, de modo que un cargo declarado en otra divisa con el mismo
+ * número de céntimos confirmaba la reserva (observación de F17C-SEC-03B).
+ *
+ * NO se convierte nada: una moneda distinta es un desacuerdo, no un tipo de cambio. Que el
+ * importe cuadre no compensa que la divisa no lo haga. La comparación es exacta, igual que
+ * la que ya hacía el cobro síncrono.
+ *
+ * Devuelve QUÉ no cuadra para que cada vía pueda decirlo con su propio vocabulario; `null`
+ * significa que el cargo es el esperado.
+ */
+export type DesacuerdoCargo = 'amount' | 'currency' | null;
+
+export function compararCargo(charge: CulqiCharge, amountCents: number, currency: string): DesacuerdoCargo {
+  if (charge.amount !== amountCents) return 'amount';
+  if (charge.currency_code !== currency) return 'currency';
+  return null;
+}
+
 /** Fase C. Asienta lo que respondió Culqi. */
 async function settle(
   bookingId: number,
@@ -256,8 +281,9 @@ async function settle(
 
   // El importe y la moneda que devuelve Culqi tienen que ser los que BusPerú pidió. Si no
   // coinciden, no se confirma nada: es preferible un pago sin confirmar que una reserva
-  // confirmada por un importe que no es el suyo.
-  if (charge.amount !== intent.amountCents || charge.currency_code !== intent.currency) {
+  // confirmada por un importe que no es el suyo. La regla vive en `compararCargo`, compartida
+  // con la reconciliación del webhook; aquí el trato es el mismo para las dos discrepancias.
+  if (compararCargo(charge, intent.amountCents, intent.currency) !== null) {
     await markFailed(
       intent.paymentId,
       'INVALID',
@@ -406,6 +432,34 @@ async function openCompensatingRefundOnConnection(
        SELECT 1 FROM refunds WHERE payment_id = ? AND status NOT IN ('FAILED', 'CANCELLED')
      )`,
     [paymentId, bookingId, fromCents(charge.amount), reason, paymentId],
+  );
+
+  // F18-07 · rastro en `audit_logs` DENTRO de la misma transacción: o queda el pago cobrado, su
+  // movimiento compensatorio, el reembolso abierto y su registro, o no queda nada. Actor de
+  // sistema (`user_id` NULL); ningún dato del medio de pago, solo identificadores públicos.
+  const [reembolsos] = await connection.query(
+    "SELECT id FROM refunds WHERE payment_id = ? AND status NOT IN ('FAILED', 'CANCELLED') ORDER BY id DESC LIMIT 1",
+    [paymentId],
+  );
+  await recordSystemAudit(
+    {
+      action: 'COMPENSATE',
+      entityType: 'payments',
+      entityId: paymentId,
+      actor: 'system:payments',
+      description: `Cobro sin reserva confirmable: pago cobrado y reembolso compensatorio abierto (reserva #${bookingId}, cargo ${charge.id})`,
+      oldValues: { status: estado },
+      newValues: {
+        status: 'PAID',
+        booking_id: bookingId,
+        charge_id: charge.id,
+        amount: fromCents(charge.amount),
+        refund_id: (reembolsos as Array<{ id: number }>)[0]?.id ?? null,
+        refund_status: 'PENDING',
+        reason,
+      },
+    },
+    connection,
   );
 
   // H-29 · caso C: el pasajero pudo haber leído antes que no hubo cobro o que el resultado era
@@ -602,7 +656,7 @@ export async function recordCompletedRefund(
 export type ChargeReconciliation =
   | { outcome: 'confirmed' | 'already_reconciled'; paymentId: number; bookingId: number }
   | { outcome: 'compensated'; paymentId: number; bookingId: number; bookingConfirmed: boolean; opened: boolean }
-  | { outcome: 'amount_mismatch' | 'charge_mismatch'; paymentId: number; bookingId: number }
+  | { outcome: 'amount_mismatch' | 'currency_mismatch' | 'charge_mismatch'; paymentId: number; bookingId: number }
   | { outcome: 'not_found'; paymentId: number };
 
 /**
@@ -636,6 +690,11 @@ export async function reconcileApprovedCharge(
   paymentId: number,
   charge: CulqiCharge,
   compensationReason: string,
+  /**
+   * F18-07 · quién concilia, para `audit_logs` (p. ej. `system:culqi-webhook`). El cobro síncrono
+   * no lo pasa: esa vía ya audita la acción de la persona en la ruta y no debe duplicarse.
+   */
+  origen?: string,
 ): Promise<ChargeReconciliation> {
   const ref = await queryOne<{ booking_id: number }>('SELECT booking_id FROM payments WHERE id = ? LIMIT 1', [paymentId]);
   if (!ref) return { outcome: 'not_found', paymentId };
@@ -650,20 +709,38 @@ export async function reconcileApprovedCharge(
         const [bookingRows] = await connection.query('SELECT status FROM bookings WHERE id = ? LIMIT 1 FOR UPDATE', [bookingId]);
         const bookingStatus = (bookingRows as Array<{ status: string }>)[0]?.status;
         const [paymentRows] = await connection.query(
-          'SELECT status, amount, provider_transaction_id FROM payments WHERE id = ? LIMIT 1 FOR UPDATE',
+          'SELECT status, amount, currency, provider_transaction_id FROM payments WHERE id = ? LIMIT 1 FOR UPDATE',
           [paymentId],
         );
-        const payment = (paymentRows as Array<{ status: string; amount: string; provider_transaction_id: string | null }>)[0]!;
+        const payment = (paymentRows as Array<{ status: string; amount: string; currency: string; provider_transaction_id: string | null }>)[0]!;
 
         if (payment.status === 'PAID' || payment.status === 'REFUNDED') {
           if (payment.provider_transaction_id === charge.id) return { outcome: 'already_reconciled', paymentId, bookingId };
           logError('Un cargo aprobado de Culqi apunta a un pago ya cerrado con otro cargo', new Error(`cargo ${charge.id}`), {});
+          await auditarRechazo(connection, origen, paymentId, bookingId, charge.id, 'charge_mismatch', 'el pago ya estaba cerrado con otro cargo');
           return { outcome: 'charge_mismatch', paymentId, bookingId };
         }
 
-        if (toCents(payment.amount) !== charge.amount) {
+        /**
+         * El orden importa y es deliberado: PRIMERO se resuelve si el pago ya estaba cerrado
+         * —eso es la idempotencia del replay y va antes que nada— y solo después se comprueba
+         * que el cargo sea el esperado, importe y moneda, con la misma regla que el cobro
+         * síncrono. Ninguna de las dos discrepancias escribe nada.
+         */
+        const desacuerdo = compararCargo(charge, toCents(payment.amount), payment.currency || 'PEN');
+        if (desacuerdo === 'amount') {
           logError('Un cargo de Culqi trajo un importe distinto al del pago', new Error(`cargo ${charge.amount} vs pago ${payment.amount}`), {});
+          await auditarRechazo(connection, origen, paymentId, bookingId, charge.id, 'amount_mismatch', 'importe distinto al del pago');
           return { outcome: 'amount_mismatch', paymentId, bookingId };
+        }
+        if (desacuerdo === 'currency') {
+          logError(
+            'Un cargo de Culqi trajo una moneda distinta a la del pago',
+            new Error(`cargo ${String(charge.currency_code)} vs pago ${payment.currency}`),
+            {},
+          );
+          await auditarRechazo(connection, origen, paymentId, bookingId, charge.id, 'currency_mismatch', 'moneda distinta a la del pago');
+          return { outcome: 'currency_mismatch', paymentId, bookingId };
         }
 
         if (bookingStatus === 'CONFIRMED' || bookingStatus === 'COMPLETED') {
@@ -684,6 +761,22 @@ export async function reconcileApprovedCharge(
         );
         await confirmBookingPaymentOnConnection(connection, bookingId, 'CARD', charge.id, paymentId);
         await recordChargeData(connection, paymentId, charge);
+        if (origen) {
+          // F18-07 · la confirmación por webhook no tiene persona detrás: se audita aquí, en la
+          // misma transacción que confirma la reserva y escribe sus movimientos.
+          await recordSystemAudit(
+            {
+              action: 'CONFIRM',
+              entityType: 'bookings',
+              entityId: bookingId,
+              actor: origen,
+              description: `Confirmó la reserva #${bookingId} al conciliar el cargo ${charge.id} (pago #${paymentId})`,
+              oldValues: { status: bookingStatus, payment_status: payment.status },
+              newValues: { status: 'CONFIRMED', payment_id: paymentId, payment_status: 'PAID', charge_id: charge.id },
+            },
+            connection,
+          );
+        }
         return { outcome: 'confirmed', paymentId, bookingId };
       }),
     );
@@ -710,6 +803,33 @@ export async function reconcileApprovedCharge(
  * transferencia o datos anteriores a esta integración), en cuyo caso el reembolso se cierra
  * como siempre porque el dinero se devuelve por fuera.
  */
+/**
+ * F18-07 · un cargo que NO se concilia (importe, moneda u otro cargo) no cambia nada, pero es un
+ * suceso de seguridad: queda en `audit_logs` cuando hay un origen de sistema que lo atribuya.
+ */
+async function auditarRechazo(
+  connection: PoolConnection,
+  origen: string | undefined,
+  paymentId: number,
+  bookingId: number,
+  chargeId: string,
+  outcome: 'amount_mismatch' | 'currency_mismatch' | 'charge_mismatch',
+  motivo: string,
+): Promise<void> {
+  if (!origen) return;
+  await recordSystemAudit(
+    {
+      action: 'REJECT',
+      entityType: 'payments',
+      entityId: paymentId,
+      actor: origen,
+      description: `No concilió el cargo ${chargeId}: ${motivo}`,
+      newValues: { outcome, booking_id: bookingId, charge_id: chargeId },
+    },
+    connection,
+  );
+}
+
 export async function refundThroughCulqi(refundId: number): Promise<string | null> {
   const fila = await queryOne<{
     amount: string;

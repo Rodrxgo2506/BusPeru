@@ -23,16 +23,29 @@ export function CompanyDashboard() {
   const { user } = useAuth();
   const dashboard = useAsync(() => dashboardService.company() as Promise<unknown>, []);
 
-  if (dashboard.loading) return <LoadingState label="Cargando tu panel..." />;
-  if (dashboard.error || !dashboard.data) {
-    return (
-      <Card padded={false}>
-        <ErrorState error={dashboard.error} onRetry={dashboard.reload} />
-      </Card>
-    );
-  }
+  /* El encabezado se pinta siempre (F17C-NAV-02): el nombre ya lo da la sesión, así que mientras
+     llega el resumen el indicador ocupa solo la zona de los datos. Igual que «Identidad visual». */
+  return (
+    <>
+      <PageHeader
+        title={`¡Bienvenido de nuevo, ${user?.first_name}!`}
+        description="Aquí tienes un resumen general de tu empresa."
+      />
+      {dashboard.loading ? (
+        <LoadingState label="Cargando tu panel..." className="min-h-[60vh]" />
+      ) : dashboard.error || !dashboard.data ? (
+        <Card padded={false}>
+          <ErrorState error={dashboard.error} onRetry={dashboard.reload} />
+        </Card>
+      ) : (
+        <DashboardBody data={dashboard.data as CompanyDashboardData} />
+      )}
+    </>
+  );
+}
 
-  const data = dashboard.data as CompanyDashboardData;
+/** Cuerpo del panel: solo se monta cuando el resumen ya está disponible. */
+function DashboardBody({ data }: { data: CompanyDashboardData }) {
   const totals = data.totals ?? {};
   const alerts = data.alerts ?? {};
 
@@ -60,11 +73,6 @@ export function CompanyDashboard() {
 
   return (
     <>
-      <PageHeader
-        title={`¡Bienvenido de nuevo, ${user?.first_name}!`}
-        description="Aquí tienes un resumen general de tu empresa."
-      />
-
       <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
         <StatCard
           label="Ventas de hoy"
@@ -86,6 +94,7 @@ export function CompanyDashboard() {
       <div className="mt-6 grid gap-6 lg:grid-cols-3">
         <Card className="lg:col-span-2">
           <CardHeader
+            as="h2"
             title="Ventas"
             description={`${formatCurrency(weekTotal)} en los últimos 7 días`}
             action={<span className="rounded-control border border-border px-3 py-1.5 text-sm text-slate-600">Esta semana</span>}
@@ -100,7 +109,7 @@ export function CompanyDashboard() {
         </Card>
 
         <Card>
-          <CardHeader title="Próximos viajes" action={<Link to="/company/trips" className="text-sm font-medium text-brand-600">Ver todos</Link>} />
+          <CardHeader as="h2" title="Próximos viajes" action={<Link to="/company/trips" className="text-sm font-medium text-brand-600">Ver todos</Link>} />
           {data.upcomingTrips.length === 0 ? (
             <p className="py-10 text-center text-sm text-muted">No hay viajes programados.</p>
           ) : (
@@ -132,7 +141,7 @@ export function CompanyDashboard() {
 
       <div className="mt-6 grid gap-6 lg:grid-cols-3">
         <Card>
-          <CardHeader title="Ventas por método de pago" />
+          <CardHeader as="h2" title="Ventas por método de pago" />
           {methods.length === 0 ? (
             <p className="py-16 text-center text-sm text-muted">Sin pagos registrados todavía.</p>
           ) : (
@@ -141,7 +150,7 @@ export function CompanyDashboard() {
         </Card>
 
         <Card>
-          <CardHeader title="Top rutas" action={<Link to="/company/reports" className="text-sm font-medium text-brand-600">Ver reporte</Link>} />
+          <CardHeader as="h2" title="Top rutas" action={<Link to="/company/reports" className="text-sm font-medium text-brand-600">Ver reporte</Link>} />
           {data.topRoutes.length === 0 ? (
             <p className="py-16 text-center text-sm text-muted">Sin ventas por ruta todavía.</p>
           ) : (
@@ -165,7 +174,7 @@ export function CompanyDashboard() {
         </Card>
 
         <Card>
-          <CardHeader title="Alertas importantes" />
+          <CardHeader as="h2" title="Alertas importantes" />
           {alertItems.length === 0 ? (
             <div className="flex items-center gap-3 rounded-card bg-success-50 p-4">
               <CheckCircle2 className="h-5 w-5 shrink-0 text-success-600" />

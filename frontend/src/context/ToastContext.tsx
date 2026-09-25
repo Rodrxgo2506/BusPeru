@@ -58,7 +58,12 @@ export function ToastProvider({ children }: { children: ReactNode }) {
   return (
     <ToastContext.Provider value={value}>
       {children}
-      <div className="pointer-events-none fixed bottom-4 right-4 z-[100] flex w-full max-w-sm flex-col gap-3 px-4 sm:px-0" role="region" aria-live="polite">
+      {/* Por debajo de `lg` el armazón público ocupa la parte baja de la pantalla con la barra de
+          navegación inferior (60 px) y el botón flotante de WhatsApp (hasta 144 px desde el borde).
+          Un aviso anclado a `bottom-4` quedaba TAPADO por ellos justo cuando más importa: al fallar
+          un formulario. Por eso arranca por encima de ambos y solo vuelve a la esquina en `lg`,
+          donde ni la barra ni el botón están en esa posición. */}
+      <div className="pointer-events-none fixed inset-x-4 bottom-[9.5rem] z-[100] flex flex-col gap-3 lg:inset-x-auto lg:bottom-4 lg:right-4 lg:w-full lg:max-w-sm" role="region" aria-live="polite">
         {toasts.map((toast) => {
           const style = VARIANT_STYLES[toast.variant];
           const Icon = style.icon;

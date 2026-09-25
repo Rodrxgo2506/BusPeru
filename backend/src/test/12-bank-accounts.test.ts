@@ -1,7 +1,10 @@
 import '../test/helpers/testEnv';
 import assert from 'node:assert/strict';
+import crypto from 'node:crypto';
 import { after, before, beforeEach, describe, it } from 'node:test';
 import { execute, query, queryOne } from '../config/database';
+import { env } from '../config/env';
+import { encryptBankField } from '../services/bank-account.service';
 import { del, get, post, put } from './helpers/api';
 import { prepareSuite, teardownSuite, type SuiteContext } from './helpers/suite';
 
@@ -26,26 +29,44 @@ describe('Datos bancarios de la empresa', () => {
     holder_document: '20111111111',
   };
 
+  // F18-07 · los datos bancarios se guardan cifrados: la suite necesita una clave, que vive solo
+  // en la memoria de este proceso (mismo criterio que 18-company-integrations). `.env` no se toca.
+  let claveOriginal = '';
+
   before(async () => {
     ctx = await prepareSuite();
+    claveOriginal = env.integrations.encryptionKey;
+    (env.integrations as { encryptionKey: string }).encryptionKey = crypto.randomBytes(32).toString('base64');
   });
-  after(teardownSuite);
+  after(async () => {
+    (env.integrations as { encryptionKey: string }).encryptionKey = claveOriginal;
+    await teardownSuite();
+  });
 
   beforeEach(async () => {
     await execute('DELETE FROM company_bank_accounts');
     await execute("DELETE FROM audit_logs WHERE entity_type = 'company_bank_accounts'");
   });
 
-  /** Crea una cuenta para la empresa indicada saltándose la API. */
+  /**
+   * Crea una cuenta para la empresa indicada saltándose la API. F18-07: la guarda como la guarda
+   * la aplicación —número y CCI cifrados, sus 4 últimos caracteres y las columnas en claro a NULL—.
+   */
   async function sembrarCuenta(companyId: number, overrides: Record<string, unknown> = {}): Promise<number> {
     const data = { ...CUENTA_VALIDA, is_primary: 1, ...overrides };
+    const cifrar = (campo: 'account_number' | 'interbank_code', valor: unknown) =>
+      valor === null || valor === undefined ? null : encryptBankField(campo, companyId, String(valor));
+    const ultimos = (valor: unknown) => (valor === null || valor === undefined ? null : String(valor).slice(-4));
     const result = await execute(
       `INSERT INTO company_bank_accounts
-       (company_id, bank_name, account_type, currency, account_number, interbank_code, holder_name, holder_document, is_primary)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+       (company_id, bank_name, account_type, currency, account_number_encrypted, account_number_last4,
+        interbank_code_encrypted, interbank_code_last4, holder_name, holder_document, is_primary)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [
-        companyId, data.bank_name, data.account_type, data.currency, data.account_number,
-        data.interbank_code, data.holder_name, data.holder_document, data.is_primary,
+        companyId, data.bank_name, data.account_type, data.currency,
+        cifrar('account_number', data.account_number), ultimos(data.account_number),
+        cifrar('interbank_code', data.interbank_code), ultimos(data.interbank_code),
+        data.holder_name, data.holder_document, data.is_primary,
       ],
     );
     return result.insertId;

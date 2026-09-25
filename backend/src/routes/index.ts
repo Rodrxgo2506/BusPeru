@@ -3,6 +3,7 @@ import { apiKeyRouter } from './apikey.routes';
 import { auditRouter } from './audit.routes';
 import bankAccountRoutes from './bank-account.routes';
 import companyDocumentRoutes from './company-document.routes';
+import companyLogoRoutes from './company-logo.routes';
 import driverRoutes from './driver.routes';
 import authRoutes from './auth.routes';
 import oauthRoutes from './oauth.routes';
@@ -10,6 +11,12 @@ import { companyIntegrationRouter, platformIntegrationRouter } from './company-i
 import { culqiConfigRouter, culqiWebhookRouter } from './culqi.routes';
 import bookingRoutes from './booking.routes';
 import dashboardRoutes from './dashboard.routes';
+import {
+  attractionExtrasRouter,
+  brandingAdminRouter,
+  destinationExtrasRouter,
+  festivityExtrasRouter,
+} from './destination-content.routes';
 import { settlementRouter, transactionRouter } from './finance.routes';
 import integrationRoutes from './integration.routes';
 import notificationRoutes from './notification.routes';
@@ -40,6 +47,7 @@ router.use('/auth/oauth', oauthRoutes);
 router.use('/auth', authRoutes);
 router.use('/company/bank-accounts', bankAccountRoutes);
 router.use('/company/documents', companyDocumentRoutes);
+router.use('/company/logo', companyLogoRoutes);
 router.use('/company/drivers', driverRoutes);
 router.use('/company/integrations', companyIntegrationRouter);
 router.use('/admin/integrations', platformIntegrationRouter);
@@ -72,6 +80,12 @@ router.use('/audit-logs', auditRouter);
 router.use('/api-keys', apiKeyRouter);
 router.use('/reports', reportRoutes);
 router.use('/dashboard', dashboardRoutes);
+// FASE 17 · imágenes, orden e identidad visual. Van antes del CRUD genérico de las mismas
+// tablas: lo que no case aquí (`/:id/image`, `/reorder`) sigue hacia el recurso de siempre.
+router.use('/destinations', destinationExtrasRouter);
+router.use('/destination-attractions', attractionExtrasRouter);
+router.use('/destination-festivities', festivityExtrasRouter);
+router.use('/admin/branding', brandingAdminRouter);
 
 for (const { path, router: resourceRouter } of resourceRouters) {
   router.use(path, resourceRouter);

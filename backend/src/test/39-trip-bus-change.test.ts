@@ -43,7 +43,7 @@ describe('H-01 · el bus de un viaje con ventas no se cambia', () => {
     // `available_seats` se note.
     for (let indice = 1; indice <= 6; indice += 1) {
       await execute(
-        `INSERT INTO seats (bus_id, layout_id, deck_id, seat_type_id, seat_number, row_number, column_number, is_window, is_aisle, status)
+        `INSERT INTO seats (bus_id, layout_id, deck_id, seat_type_id, seat_number, \`row_number\`, column_number, is_window, is_aisle, status)
          VALUES (?, ?, ?, NULL, ?, ?, ?, 0, 0, 'AVAILABLE')`,
         [busA2, layoutA2, at(layout.deckIds, 0), String(indice).padStart(2, '0'), Math.ceil(indice / 3), ((indice - 1) % 3) + 1],
       );

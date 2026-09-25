@@ -19,6 +19,31 @@ function trustProxy(): TrustProxySetting {
   return parsed;
 }
 
+/**
+ * ORIGEN del frontend, en la forma EXACTA que exige CORS (F17C-SEC-07, hallazgo SEC07-01).
+ *
+ * `Access-Control-Allow-Origin` se compara carácter a carácter contra el `Origin` que envía el
+ * navegador, y ese `Origin` es siempre `esquema://host[:puerto]`: sin barra final y sin ruta.
+ * `FRONTEND_URL`, en cambio, es una URL que también sirve de base para el redirect de OAuth, así
+ * que escribirla como `https://dominio.pe/` es natural —y la guarda de producción la acepta, con
+ * razón—. Pero pasada tal cual a `cors()` produce `ACAO: https://dominio.pe/`, que NO coincide con
+ * `Origin: https://dominio.pe` y el navegador rechaza TODAS las respuestas: la aplicación entera
+ * deja de funcionar en producción por una barra.
+ *
+ * Aquí se normaliza una sola vez. No afecta a la seguridad —el origen sigue siendo uno explícito,
+ * nunca `*` ni un reflejo del `Origin` recibido—, solo evita que un detalle de escritura de la
+ * variable tumbe el sitio. Si el valor no es una URL interpretable se devuelve tal cual: en
+ * producción `assertProductionConfig` ya lo habría rechazado, y en desarrollo vale más arrancar
+ * con un origen raro que no arrancar.
+ */
+function corsOrigin(frontendUrl: string): string {
+  try {
+    return new URL(frontendUrl).origin;
+  } catch {
+    return frontendUrl;
+  }
+}
+
 function required(key: string, fallback?: string): string {
   const value = process.env[key] ?? fallback;
   if (value === undefined) {
@@ -44,6 +69,8 @@ export const env = {
     expiresIn: process.env.JWT_EXPIRES_IN ?? '8h',
   },
   frontendUrl: process.env.FRONTEND_URL ?? 'http://localhost:5173',
+  /** Mismo sitio que `frontendUrl`, pero como ORIGEN puro: es lo único que CORS puede comparar. */
+  corsOrigin: corsOrigin(process.env.FRONTEND_URL ?? 'http://localhost:5173'),
   /**
    * `trust proxy` de Express (F15-05). Por defecto `false`: no se confía en `X-Forwarded-For`,
    * así que ningún cliente puede fijarse la IP con la que se aplica el rate limit. Detrás de un
@@ -177,6 +204,13 @@ export const env = {
    */
   integrations: {
     encryptionKey: process.env.INTEGRATIONS_ENCRYPTION_KEY ?? '',
+    /**
+     * Clave ANTERIOR, opcional y solo para descifrar (F17C-SEC-08). Existe únicamente durante una
+     * rotación: mientras esté puesta, lo cifrado con la clave vieja se sigue leyendo, y todo lo
+     * que se escriba usa ya la nueva. Se retira cuando no queda nada pendiente de re-cifrar.
+     * Vacía por defecto, y entonces el comportamiento es el de una sola clave.
+     */
+    previousEncryptionKey: process.env.INTEGRATIONS_ENCRYPTION_KEY_PREVIOUS ?? '',
   },
   get isProduction() {
     return this.nodeEnv === 'production';
@@ -188,4 +222,9 @@ export const env = {
 assertDatabaseAllowedForEnvironment(env.nodeEnv, env.db.name);
 
 // F12-08: en producción, secretos con la fortaleza y el formato que exige su uso. No imprime valores.
-assertProductionSecrets({ nodeEnv: env.nodeEnv, jwtSecret: env.jwt.secret, encryptionKey: env.integrations.encryptionKey });
+assertProductionSecrets({
+  nodeEnv: env.nodeEnv,
+  jwtSecret: env.jwt.secret,
+  encryptionKey: env.integrations.encryptionKey,
+  previousEncryptionKey: env.integrations.previousEncryptionKey,
+});

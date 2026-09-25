@@ -1,6 +1,8 @@
 import { Bell, Gift, Home, Menu, Search, Ticket, User, X } from 'lucide-react';
 import { useState } from 'react';
 import { Link, NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom';
+import { RouteSuspense } from '@/components/common/RouteSuspense';
+import { WhatsAppButton } from '@/components/common/WhatsAppButton';
 import { Button, Logo } from '@/components/ui';
 import { PUBLIC_NAV_LINKS as NAV_LINKS } from '@/constants/navigation';
 import { useAuth } from '@/context/AuthContext';
@@ -167,10 +169,16 @@ export function PublicLayout() {
       </header>
 
       <main className="flex-1 pb-16 lg:pb-0">
-        <Outlet />
+        {/* El límite de carga vive aquí y no sobre `<Routes>`: la cabecera y el pie no se despintan. */}
+        <RouteSuspense>
+          <Outlet />
+        </RouteSuspense>
       </main>
 
       <PublicFooter />
+
+      {/* F17C-UI-05 · contacto flotante. Solo en el armazón público: el panel ADMIN no lo muestra. */}
+      <WhatsAppButton />
 
       <nav className="fixed inset-x-0 bottom-0 z-40 flex border-t border-border bg-white lg:hidden" aria-label="Navegación inferior">
         {MOBILE_TABS.map((tab) => {
@@ -270,7 +278,9 @@ function AndesSilhouette() {
 function FooterColumn({ title, links }: { title: string; links: Array<{ label: string; to: string }> }) {
   return (
     <div>
-      <h3 className="text-xs font-bold uppercase tracking-wider text-ink">{title}</h3>
+      {/* `h2` y no `h3`: en páginas cuyo contenido no usa `h2` —/ayuda, /ofertas— el pie saltaba de
+          `h1` a `h3` y un lector de pantalla anunciaba un nivel inexistente. */}
+      <h2 className="text-xs font-bold uppercase tracking-wider text-ink">{title}</h2>
       <ul className="mt-3 space-y-2">
         {links.map((link) => (
           <li key={link.to}>

@@ -169,12 +169,12 @@ describe('Versionado de la distribución del bus (migración 010)', () => {
       assert.equal(reserva.status, 201);
 
       const antes = await query('SELECT id, booking_id, trip_id, seat_id, price FROM booking_seats ORDER BY id');
-      const asientosAntes = await query('SELECT id, seat_number, row_number, column_number, deck_id FROM seats WHERE layout_id = ? ORDER BY id', [ctx.fixtures.layoutA]);
+      const asientosAntes = await query('SELECT id, seat_number, `row_number`, column_number, deck_id FROM seats WHERE layout_id = ? ORDER BY id', [ctx.fixtures.layoutA]);
 
       await layouts.cloneForEdit(ctx.fixtures.layoutA);
 
       const despues = await query('SELECT id, booking_id, trip_id, seat_id, price FROM booking_seats ORDER BY id');
-      const asientosDespues = await query('SELECT id, seat_number, row_number, column_number, deck_id FROM seats WHERE layout_id = ? ORDER BY id', [ctx.fixtures.layoutA]);
+      const asientosDespues = await query('SELECT id, seat_number, `row_number`, column_number, deck_id FROM seats WHERE layout_id = ? ORDER BY id', [ctx.fixtures.layoutA]);
 
       assert.deepEqual(despues, antes, 'las ventas no pueden moverse');
       assert.deepEqual(asientosDespues, asientosAntes, 'los asientos del original no pueden moverse');

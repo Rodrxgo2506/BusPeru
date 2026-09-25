@@ -1,10 +1,13 @@
-import { Armchair, BedDouble, CalendarDays, CheckCircle2, Download, Gift, Mail, Search, Smartphone, Ticket, User } from 'lucide-react';
+import { AlertCircle, Armchair, BadgeCheck, BedDouble, CalendarDays, CheckCircle2, Download, Gift, Mail, Search, Smartphone, Ticket, User } from 'lucide-react';
 import QRCode from 'qrcode';
 import { useEffect, useRef, useState } from 'react';
 import { useParams } from 'react-router-dom';
-import { Button, Card, ErrorState, LoadingState } from '@/components/ui';
+import { Button, Card, ErrorState, LoadingState, StatusBadge } from '@/components/ui';
 import { useAsync } from '@/hooks/useAsync';
+import { cn } from '@/utils/cn';
+import { CompanyIdentity } from '@/components/companies/CompanyCard';
 import { bookingService } from '@/services';
+import type { BookingStatus } from '@/types';
 import { durationBetween, formatCurrency, formatDate, formatTime } from '@/utils/format';
 import { CheckoutStepper } from './CheckoutStepper';
 import { useCheckout } from './CheckoutContext';
@@ -15,6 +18,21 @@ const NEXT_STEPS = [
   { icon: BedDouble, title: '3. Aborda tu bus', description: 'Muestra tu código QR o código de reserva.', tone: 'bg-brand-100 text-brand-600' },
   { icon: Armchair, title: '4. ¡Disfruta tu viaje!', description: 'Que tengas un excelente viaje.', tone: 'bg-purple-100 text-purple-600' },
 ];
+
+/**
+ * Esta pantalla es tambien la ficha permanente del pasaje: `/reserva/confirmacion/:id` sigue
+ * abriendose mucho despues de la compra, desde el correo o desde «Mis viajes». Por eso el titular
+ * NO puede estar escrito en duro. Anunciaba «¡Tu pasaje ha sido confirmado!», «Estado: Confirmado»
+ * y «Muestra este codigo al abordar» incluso sobre una reserva CANCELLED, que es justo el caso en
+ * que un pasajero podria presentarse a abordar con un pasaje que ya no vale.
+ */
+const TITULOS: Record<BookingStatus, string> = {
+  CONFIRMED: '¡Tu pasaje ha sido confirmado!',
+  COMPLETED: 'Este viaje ya se realizó',
+  PENDING: 'Tu reserva está pendiente de confirmación',
+  CANCELLED: 'Esta reserva fue cancelada',
+  EXPIRED: 'Esta reserva expiró',
+};
 
 export function ConfirmationPage() {
   const { bookingId } = useParams();
@@ -59,6 +77,9 @@ export function ConfirmationPage() {
   }
 
   const data = booking.data;
+  // Solo una reserva CONFIRMED da derecho a subir al bus: de ella dependen el QR, la instruccion de
+  // abordaje y los pasos siguientes. COMPLETED ya viajo; CANCELLED y EXPIRED no valen.
+  const abordable = data.status === 'CONFIRMED';
 
   const downloadTicket = () => {
     if (!qr) return;
@@ -74,23 +95,40 @@ export function ConfirmationPage() {
 
       <Card className="mb-5">
         <div className="flex items-start gap-4">
-          <span className="flex h-12 w-12 shrink-0 items-center justify-center rounded-full bg-success-100 text-success-600">
-            <CheckCircle2 className="h-7 w-7" />
+          <span
+            className={cn(
+              'flex h-12 w-12 shrink-0 items-center justify-center rounded-full',
+              abordable ? 'bg-success-100 text-success-600' : 'bg-slate-100 text-slate-500',
+            )}
+          >
+            {abordable ? <CheckCircle2 className="h-7 w-7" /> : <AlertCircle className="h-7 w-7" />}
           </span>
           <div>
-            <h1 className="text-2xl font-bold text-ink">¡Tu pasaje ha sido confirmado!</h1>
-            <p className="mt-1 text-sm text-muted">Hemos enviado los detalles de tu viaje a {data.passenger_email ?? data.user_email}</p>
+            <h1 className="text-2xl font-bold text-ink">{TITULOS[data.status]}</h1>
+            <p className="mt-1 text-sm text-muted">
+              {abordable
+                ? `Hemos enviado los detalles de tu viaje a ${data.passenger_email ?? data.user_email}`
+                : 'Este es el detalle de la reserva. El código ya no sirve para abordar.'}
+            </p>
           </div>
         </div>
 
         <div className="mt-6 grid gap-6 border-t border-border pt-6 lg:grid-cols-[1fr_auto]">
           <div className="flex flex-wrap items-center gap-6">
-            <div>
-              <p className="text-lg font-extrabold uppercase leading-tight text-ink">{data.company_name}</p>
-              <p className="mt-1 flex items-center gap-1.5 text-sm text-muted">
-                <BedDouble className="h-4 w-4" />
-                {data.bus_type_name ?? 'Bus'}
-              </p>
+            {/* F17C-UI-13 · identidad real de la empresa; `company_logo` llega ya en la reserva. */}
+            <div className="flex items-center gap-3">
+              <CompanyIdentity name={data.company_name ?? 'Empresa'} logoUrl={data.company_logo ?? null} size="sm" />
+              <div className="min-w-0">
+                <p className="truncate text-lg font-extrabold uppercase leading-tight text-ink">{data.company_name}</p>
+                <span className="mt-1 inline-flex items-center gap-1.5 whitespace-nowrap rounded-full bg-success-50 px-2.5 py-0.5 text-xs font-medium text-success-700">
+                  <BadgeCheck className="h-3.5 w-3.5 shrink-0" aria-hidden />
+                  Empresa verificada
+                </span>
+                <p className="mt-1 flex items-center gap-1.5 text-sm text-muted">
+                  <BedDouble className="h-4 w-4" />
+                  {data.bus_type_name ?? 'Bus'}
+                </p>
+              </div>
             </div>
             <div>
               <p className="text-2xl font-bold text-ink">{formatTime(data.departure_datetime)}</p>
@@ -119,20 +157,21 @@ export function ConfirmationPage() {
       </Card>
 
       <div className="grid gap-5 lg:grid-cols-[1.15fr_1fr]">
-        <Card className="border-success-200 bg-success-50/40">
+        <Card className={abordable ? 'border-success-200 bg-success-50/40' : 'border-border bg-slate-50/60'}>
           <div className="flex flex-wrap items-start justify-between gap-3">
             <div>
               <p className="text-sm text-muted">Código de reserva</p>
-              <p className="text-2xl font-extrabold tracking-wide text-success-700">{data.booking_code}</p>
+              <p className={cn('text-2xl font-extrabold tracking-wide', abordable ? 'text-success-700' : 'text-slate-500 line-through')}>{data.booking_code}</p>
             </div>
             <div className="text-right">
               <p className="text-sm text-muted">Estado</p>
-              <p className="flex items-center gap-1.5 font-semibold text-success-700">
-                Confirmado <CheckCircle2 className="h-4 w-4" />
-              </p>
+              {/* El mismo distintivo que usan «Mis viajes» y el detalle de la reserva, para que las
+                  tres pantallas no puedan contradecirse. */}
+              <StatusBadge status={data.status} className="mt-1" />
             </div>
           </div>
 
+          {abordable ? (
           <div className="mt-5 flex flex-wrap items-center gap-5 border-t border-success-200/70 pt-5">
             {qr ? (
               <img src={qr} alt={`Código QR de la reserva ${data.booking_code}`} className="h-28 w-28 rounded-lg border border-border bg-white p-1" />
@@ -147,6 +186,12 @@ export function ConfirmationPage() {
               </Button>
             </div>
           </div>
+          ) : (
+            <p className="mt-5 border-t border-border pt-5 text-sm text-muted">
+              No se emite código de abordaje para una reserva en este estado. Conserva el código como
+              referencia si necesitas contactar con soporte.
+            </p>
+          )}
         </Card>
 
         <Card>
@@ -182,6 +227,7 @@ export function ConfirmationPage() {
         </Card>
       </div>
 
+      {abordable && (
       <Card className="mt-5">
         <h2 className="font-semibold text-ink">¿Qué sigue?</h2>
         <ol className="mt-5 grid gap-6 sm:grid-cols-2 lg:grid-cols-4">
@@ -199,6 +245,7 @@ export function ConfirmationPage() {
           })}
         </ol>
       </Card>
+      )}
 
       <div className="mt-5 flex flex-col gap-3 sm:flex-row">
         <Button variant="outline" fullWidth to="/customer/trips" icon={<Gift className="h-4 w-4" />}>

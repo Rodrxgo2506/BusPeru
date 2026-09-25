@@ -34,6 +34,16 @@ export const pool = mysql.createPool({
   timezone: PERU_OFFSET,
   charset: 'utf8mb4_unicode_ci',
   decimalNumbers: true,
+  /**
+   * Las columnas JSON llegan como texto, igual que en MariaDB 10.4 (F18-02B).
+   *
+   * MariaDB 10.5+ marca esas columnas con el formato extendido `json` y mysql2 las entregaba ya
+   * convertidas en objeto. En 10.4 esa marca no existe y llegan como texto, que es lo que espera
+   * todo el código: `JSON.parse` del sobre cifrado de las integraciones, de los permisos de las
+   * llaves de API, la fusión de `payments.payment_data` y lo que la API devuelve al frontend. Sin
+   * esta opción, en 10.11 las llaves se quedaban sin permisos y la fusión perdía datos del pago.
+   */
+  jsonStrings: true,
 });
 
 /**

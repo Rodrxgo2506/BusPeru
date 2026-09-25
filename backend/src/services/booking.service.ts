@@ -115,6 +115,23 @@ async function resolveCoupon(
   if (coupon.usage_limit !== null && Number(coupon.usage_count) >= Number(coupon.usage_limit)) {
     throw ApiError.badRequest('El cupón alcanzó su límite de usos');
   }
+  /**
+   * F17C-SEC-01 H-01 · el tope de la CAMPAÑA, no el del código.
+   *
+   * `promotion_limit` y `promotion_usage` se leían aquí desde el principio y no se comprobaban:
+   * solo se miraba `coupons.usage_limit`. Como el canje SÍ incrementa `promotions.usage_count`,
+   * una promoción con «máximo N canjes» seguía descontando indefinidamente a través de sus
+   * cupones; el contador subía y el tope no frenaba nada.
+   *
+   * SOBRE LA CONCURRENCIA. No hace falta bloqueo nuevo: el `SELECT ... FOR UPDATE` de arriba es
+   * un JOIN de `coupons` con `promotions`, de modo que InnoDB bloquea también la fila de la
+   * promoción. Dos canjes simultáneos —incluso de CUPONES DISTINTOS de la misma campaña— se
+   * serializan en esa fila: el segundo espera al COMMIT del primero y lee ya su contador
+   * incrementado. Comprobar aquí, y no en una consulta aparte, es lo que cierra la ventana.
+   */
+  if (coupon.promotion_limit !== null && Number(coupon.promotion_usage) >= Number(coupon.promotion_limit)) {
+    throw ApiError.badRequest('La promoción alcanzó su límite de usos');
+  }
   if (coupon.minimum_amount !== null && subtotal < Number(coupon.minimum_amount)) {
     throw ApiError.badRequest(`El cupón requiere una compra mínima de S/ ${Number(coupon.minimum_amount).toFixed(2)}`);
   }
@@ -177,6 +194,34 @@ export async function createBookingOnConnection(
     );
     const trip = (tripRows as Record<string, unknown>[])[0];
     if (!trip) throw ApiError.notFound('El viaje no existe');
+
+    /**
+     * F17C-SEC-11C · EL PERSONAL DE UNA EMPRESA SOLO VENDE LOS VIAJES DE SU EMPRESA.
+     *
+     * Aquí no se comprobaba a quién pertenece quien compra. Un COMPANY_ADMIN o un OPERATOR de la
+     * empresa B podía crear una reserva sobre un viaje de la empresa A: la transacción se
+     * confirmaba —asiento retenido 15 minutos, `available_seats` descontado— y a continuación la
+     * ruta intentaba devolverla con el alcance de lectura (`visibilityScope`), que para el personal
+     * es la empresa del viaje. La reserva recién creada le resultaba invisible y la API respondía
+     * `404 "Reserva no encontrada"` a una operación que SÍ había surtido efecto. Demostrado de forma
+     * determinista en F17C-SEC-11B, y responsable del fallo intermitente del caso 16 de la suite 25.
+     *
+     * Ahora se rechaza AQUÍ: con el viaje ya bloqueado y antes de tocar un solo asiento, así que
+     * el ROLLBACK de `withTransaction` no tiene nada que deshacer. Es la misma frontera que ya
+     * aplica la lectura, trasladada a la escritura.
+     *
+     * Se responde exactamente lo mismo que si el viaje no existiera, y antes de mirar su estado:
+     * a quien no puede vender el viaje no se le cuenta nada de él. La empresa sale de la sesión
+     * (`companyIds`, releída de la base en cada petición), nunca del cuerpo de la petición.
+     *
+     * CUSTOMER y ADMIN no cambian: el cliente compra cualquier viaje, y el administrador de la
+     * plataforma ya podía operar sobre todas las empresas.
+     */
+    const esPersonalDeEmpresa = user.role === 'COMPANY_ADMIN' || user.role === 'OPERATOR';
+    if (esPersonalDeEmpresa && !user.companyIds.includes(Number(trip.company_id))) {
+      throw ApiError.notFound('El viaje no existe');
+    }
+
     if (trip.company_status !== 'ACTIVE' || trip.route_status !== 'ACTIVE') {
       throw ApiError.badRequest('El viaje ya no admite reservas');
     }

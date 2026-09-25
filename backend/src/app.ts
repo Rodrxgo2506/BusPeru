@@ -8,6 +8,7 @@ import { env } from './config/env';
 import { accessLog } from './middleware/access-log.middleware';
 import { errorHandler, notFoundHandler } from './middleware/error.middleware';
 import { attachRequestId } from './middleware/request-id.middleware';
+import { checkReadiness } from './services/readiness.service';
 import routes from './routes';
 
 export function createApp() {
@@ -19,9 +20,14 @@ export function createApp() {
   // Lo primero de todo: cualquier cosa que falle después ya tiene identificador.
   app.use(attachRequestId);
   app.use(helmet());
+  // Un ÚNICO origen explícito, nunca `*` y nunca el `Origin` que llegue en la petición: `cors`
+  // con un origen de tipo cadena emite siempre el mismo `Access-Control-Allow-Origin`, así que
+  // una página atacante recibe el del frontend legítimo y su navegador descarta la respuesta.
+  // `env.corsOrigin` está normalizado a `esquema://host[:puerto]` (SEC07-01): una barra final en
+  // FRONTEND_URL produciría una cabecera que ningún navegador puede aceptar.
   app.use(
     cors({
-      origin: env.frontendUrl,
+      origin: env.corsOrigin,
       credentials: true,
     }),
   );
@@ -51,8 +57,25 @@ export function createApp() {
     }),
   );
 
+  // LIVENESS: el proceso responde. No toca la base ni el disco, a propósito: sirve para saber si
+  // hay que reiniciar el proceso, no si puede atender tráfico.
   app.get('/api/health', (_req, res) => {
+    // F18-07A · igual que /ready: un proxy o el navegador no deben servir un estado viejo.
+    res.setHeader('Cache-Control', 'no-store');
     res.json({ success: true, data: { status: 'ok', timestamp: new Date().toISOString() } });
+  });
+
+  // READINESS (F18-02): ¿puede esta instancia atender tráfico? Comprueba la base y el almacenamiento
+  // (ver `readiness.service.ts`). Respuesta mínima a propósito: el detalle solo va al registro.
+  app.get('/api/ready', async (_req, res) => {
+    let ready = false;
+    try {
+      ready = (await checkReadiness()).ready;
+    } catch {
+      ready = false;
+    }
+    res.setHeader('Cache-Control', 'no-store');
+    res.status(ready ? 200 : 503).json({ status: ready ? 'ready' : 'not_ready' });
   });
 
   app.use('/api', routes);

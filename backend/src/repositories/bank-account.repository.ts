@@ -16,8 +16,18 @@ export interface BankAccount {
   bank_name: string;
   account_type: 'CHECKING' | 'SAVINGS';
   currency: string;
-  account_number: string;
+  /**
+   * F18-07 · columnas EN CLARO heredadas. La aplicación ya no las escribe (van a NULL); solo
+   * conservan valor las filas anteriores a la migración 019 hasta que `bank:encrypt` las cifre.
+   */
+  account_number: string | null;
   interbank_code: string | null;
+  /** Sobre AES-256-GCM (encryption.service). Nunca sale de la API. */
+  account_number_encrypted: string | null;
+  interbank_code_encrypted: string | null;
+  /** Lo único que necesita el enmascarado; no es sensible por sí solo. */
+  account_number_last4: string | null;
+  interbank_code_last4: string | null;
   holder_name: string;
   holder_document: string | null;
   is_primary: 0 | 1;
@@ -39,6 +49,28 @@ export const WRITABLE_COLUMNS = [
 ] as const;
 
 export type WritableColumn = (typeof WRITABLE_COLUMNS)[number];
+
+/**
+ * F18-07 · columnas que se ESCRIBEN en la tabla. No son las de la petición: el servicio
+ * convierte `account_number`/`interbank_code` en su sobre cifrado y sus 4 últimos caracteres,
+ * y deja las columnas en claro a NULL. `company_id` tampoco está aquí.
+ */
+export const STORAGE_COLUMNS = [
+  'bank_name',
+  'account_type',
+  'currency',
+  'account_number',
+  'account_number_encrypted',
+  'account_number_last4',
+  'interbank_code',
+  'interbank_code_encrypted',
+  'interbank_code_last4',
+  'holder_name',
+  'holder_document',
+  'is_primary',
+] as const;
+
+export type StorageColumn = (typeof STORAGE_COLUMNS)[number];
 
 const SELECT = 'SELECT * FROM company_bank_accounts';
 
@@ -62,17 +94,6 @@ export async function countByCompany(companyId: number): Promise<number> {
   return Number(row?.total ?? 0);
 }
 
-/** Detecta un duplicado del mismo número de cuenta dentro de la misma empresa. */
-export async function findDuplicate(companyId: number, accountNumber: string, excludeId?: number): Promise<BankAccount | null> {
-  const params: unknown[] = [companyId, accountNumber];
-  let sql = `${SELECT} WHERE company_id = ? AND account_number = ?`;
-  if (excludeId !== undefined) {
-    sql += ' AND id <> ?';
-    params.push(excludeId);
-  }
-  return queryOne<BankAccount>(`${sql} LIMIT 1`, params);
-}
-
 /** Solo puede haber una cuenta principal por empresa. */
 async function clearPrimary(connection: PoolConnection, companyId: number, exceptId?: number): Promise<void> {
   const params: unknown[] = [companyId];
@@ -84,11 +105,11 @@ async function clearPrimary(connection: PoolConnection, companyId: number, excep
   await connection.query(sql, params);
 }
 
-export async function create(companyId: number, data: Partial<Record<WritableColumn, unknown>>): Promise<number> {
+export async function create(companyId: number, data: Partial<Record<StorageColumn, unknown>>): Promise<number> {
   return withTransaction(async (connection) => {
     if (data.is_primary === 1) await clearPrimary(connection, companyId);
 
-    const columns = WRITABLE_COLUMNS.filter((column) => data[column] !== undefined);
+    const columns = STORAGE_COLUMNS.filter((column) => data[column] !== undefined);
     const [result] = await connection.query(
       `INSERT INTO company_bank_accounts (company_id${columns.length ? ', ' + columns.join(', ') : ''})
        VALUES (?${columns.map(() => ', ?').join('')})`,
@@ -98,11 +119,11 @@ export async function create(companyId: number, data: Partial<Record<WritableCol
   });
 }
 
-export async function update(id: number, companyId: number, data: Partial<Record<WritableColumn, unknown>>): Promise<void> {
+export async function update(id: number, companyId: number, data: Partial<Record<StorageColumn, unknown>>): Promise<void> {
   await withTransaction(async (connection) => {
     if (data.is_primary === 1) await clearPrimary(connection, companyId, id);
 
-    const columns = WRITABLE_COLUMNS.filter((column) => data[column] !== undefined);
+    const columns = STORAGE_COLUMNS.filter((column) => data[column] !== undefined);
     if (columns.length === 0) return;
 
     // El WHERE incluye company_id: aunque llegara un id de otra empresa, no se actualiza nada.

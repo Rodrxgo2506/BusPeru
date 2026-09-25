@@ -371,6 +371,19 @@ export interface PublicTrip extends Omit<Trip, 'available_seats'> {
   amenities: string | null;
 }
 
+/**
+ * Un tramo de la búsqueda de itinerarios. Sus viajes son `PublicTrip`: el backend resuelve cada
+ * tramo con la misma `searchTrips` que la búsqueda de ida, así que la forma es idéntica.
+ */
+export interface ItinerarySegmentResults {
+  segment_order: number;
+  origin: string;
+  destination: string;
+  date: string;
+  trips: PublicTrip[];
+  total: number;
+}
+
 export interface Booking {
   id: number;
   booking_code: string;
@@ -403,6 +416,8 @@ export interface Booking {
   destination_city?: string;
   destination_terminal?: string;
   company_name?: string;
+  /** Referencia del logotipo de la empresa en el almacén público (F17C-UI-13). */
+  company_logo?: string | null;
   bus_code?: string;
   bus_type_name?: string | null;
   seat_numbers?: string | null;
@@ -655,3 +670,82 @@ export interface ApiKey {
   company_name?: string | null;
   plain_key?: string;
 }
+
+/* ------------------------------------------------------------------ FASE 17 · contenido de destinos */
+
+export type ContentStatus = 'ACTIVE' | 'INACTIVE';
+
+export interface Destination {
+  id: number;
+  name: string;
+  slug: string;
+  subtitle: string | null;
+  description: string | null;
+  price_from: string | number | null;
+  hero_image: string | null;
+  /** FASE 17B · imagen de la sección «Calendario festivo». */
+  festivities_image: string | null;
+  address: string | null;
+  ticket_schedule: string | null;
+  package_schedule: string | null;
+  travel_duration: string | null;
+  temperature: string | null;
+  altitude_masl: number | null;
+  time_from_lima: string | null;
+  /** Ciudad real de `locations`; el nombre llega resuelto por la API. */
+  location_id: number | null;
+  origin_location_id: number | null;
+  location_city?: string | null;
+  origin_city?: string | null;
+  status: ContentStatus;
+  display_order: number;
+  attractions_count?: number;
+  festivities_count?: number;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface DestinationAttraction {
+  id: number;
+  destination_id: number;
+  name: string;
+  description: string | null;
+  image: string | null;
+  display_order: number;
+  status: ContentStatus;
+}
+
+export interface DestinationFestivity {
+  id: number;
+  destination_id: number;
+  name: string;
+  date_label: string;
+  description: string | null;
+  display_order: number;
+  status: ContentStatus;
+}
+
+/** Tarjeta de «Descubre más destinos». */
+/** Logotipo de una empresa. `logo_url` es una referencia del almacén público, no una URL. */
+export interface CompanyLogo {
+  company_id: number;
+  logo_url: string | null;
+}
+
+export type PublicDestinationCard = Pick<Destination, 'id' | 'name' | 'slug' | 'subtitle' | 'price_from' | 'hero_image' | 'display_order'>;
+
+export interface PublicDestinationDetail
+  extends Pick<
+    Destination,
+    | 'id' | 'name' | 'slug' | 'subtitle' | 'description' | 'price_from' | 'hero_image' | 'festivities_image'
+    | 'address' | 'ticket_schedule' | 'package_schedule' | 'travel_duration' | 'temperature' | 'altitude_masl' | 'time_from_lima'
+  > {
+  /** Ciudad del destino y ciudad de origen sugerida, ya resueltas (o `null` si no hay). */
+  city: string | null;
+  origin_city: string | null;
+  attractions: Array<Pick<DestinationAttraction, 'id' | 'name' | 'description' | 'image'>>;
+  festivities: Array<Pick<DestinationFestivity, 'id' | 'name' | 'date_label' | 'description'>>;
+}
+
+export type BrandingAsset = 'logo' | 'favicon' | 'logo_mobile' | 'og_image';
+export type BrandingReferences = Record<BrandingAsset, string | null>;

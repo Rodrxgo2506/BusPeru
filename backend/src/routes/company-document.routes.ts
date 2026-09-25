@@ -1,7 +1,7 @@
 import { Router } from 'express';
-import multer from 'multer';
 import { authenticate } from '../middleware/auth.middleware';
 import { requirePermission } from '../middleware/permission.middleware';
+import { receiveSingleFile } from '../middleware/upload.middleware';
 import { validate } from '../middleware/validate.middleware';
 import { recordAudit } from '../services/audit.service';
 import * as documents from '../services/company-document.service';
@@ -29,26 +29,8 @@ import { reviewDocumentSchema, uploadDocumentSchema } from '../validators/compan
 const router = Router();
 router.use(authenticate);
 
-/**
- * El archivo se recibe en memoria y solo llega a disco si pasa las validaciones de
- * `file-storage.service`. El límite de multer es la primera barrera; el servicio vuelve
- * a comprobar tamaño, extensión, MIME y bytes mágicos.
- */
-const upload = multer({
-  storage: multer.memoryStorage(),
-  limits: { fileSize: MAX_FILE_BYTES, files: 1 },
-});
-
-/** Convierte el error de límite de multer en un 400 legible en vez de un 500. */
-const receiveFile = (req: never, res: never, next: (error?: unknown) => void): void => {
-  upload.single('file')(req, res, (error: unknown) => {
-    if (error && (error as { code?: string }).code === 'LIMIT_FILE_SIZE') {
-      return next(ApiError.badRequest(`El archivo supera el máximo de ${Math.round(MAX_FILE_BYTES / 1024 / 1024)} MB`));
-    }
-    if (error) return next(ApiError.badRequest('No se pudo procesar el archivo enviado'));
-    next();
-  });
-};
+/** Primera barrera del archivo: ver `upload.middleware.ts`. El servicio vuelve a validarlo. */
+const receiveFile = receiveSingleFile(MAX_FILE_BYTES);
 
 router.get(
   '/',

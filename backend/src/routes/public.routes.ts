@@ -1,9 +1,11 @@
-import { Router } from 'express';
+import { Router, type Response } from 'express';
 import { validate } from '../middleware/validate.middleware';
 import { searchItinerarySchema } from '../validators/itinerary.validators';
 import { query, queryOne } from '../config/database';
 import { optionalAuthenticate } from '../middleware/auth.middleware';
 import { searchItinerary } from '../services/itinerary.service';
+import { findPublicDestination, listPublicDestinations, readBranding } from '../services/destination-content.service';
+import { readPublicFile } from '../services/file-storage.service';
 import { readPublicSettings } from '../services/settings.service';
 import { findPublicTrip, getTripLayout, searchTrips, seatMap } from '../services/trip.service';
 import { ApiError } from '../utils/ApiError';
@@ -174,6 +176,83 @@ router.get(
       companyId ? [companyId] : [],
     );
     sendSuccess(res, reviews);
+  }),
+);
+
+/**
+ * FASE 17 · «Descubre más destinos»: fichas editoriales ACTIVE, en el orden que fija el ADMIN.
+ * Distinto de `/destinations`, que sigue calculando los destinos con viajes programados.
+ */
+router.get(
+  '/featured-destinations',
+  asyncHandler(async (_req, res) => {
+    sendSuccess(res, await listPublicDestinations());
+  }),
+);
+
+/** Ficha pública de un destino por slug, con sus atractivos y festividades ACTIVE. */
+router.get(
+  '/destinations/:slug',
+  asyncHandler(async (req, res) => {
+    sendSuccess(res, await findPublicDestination(String(req.params.slug)));
+  }),
+);
+
+/** Referencias de identidad visual. Solo referencias públicas; nunca otra configuración. */
+router.get(
+  '/branding',
+  asyncHandler(async (_req, res) => {
+    sendSuccess(res, await readBranding());
+  }),
+);
+
+/**
+ * Entrega una imagen pública del almacén. Solo referencias con la forma exacta de `public/...`
+ * (ver `readPublicFile`): cualquier otra cosa —incluidos los documentos privados— es un 404.
+ *
+ * `Cross-Origin-Resource-Policy: cross-origin` porque el frontend puede vivir en otro origen que
+ * la API; helmet pone `same-origin` por defecto y el navegador bloquearía las imágenes.
+ */
+function sendPublicImage(res: Response, reference: string, cacheControl: string): void {
+  const file = readPublicFile(reference);
+  res.setHeader('Content-Type', file.mime);
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+  res.setHeader('Cross-Origin-Resource-Policy', 'cross-origin');
+  res.setHeader('Content-Security-Policy', "default-src 'none'; img-src 'self'; style-src 'unsafe-inline'; sandbox");
+  res.setHeader('Cache-Control', cacheControl);
+  res.end(file.buffer);
+}
+
+router.get(
+  /^\/media\/(.+)$/,
+  asyncHandler(async (req, res) => {
+    // El nombre es aleatorio y no se reutiliza: el contenido de una URL no cambia nunca.
+    sendPublicImage(res, String((req.params as Record<string, string>)[0] ?? ''), 'public, max-age=31536000, immutable');
+  }),
+);
+
+/**
+ * Favicon vigente en una URL estable, para `index.html`: cambiarlo desde el panel no obliga a
+ * reconstruir el frontend. Caché corta, precisamente porque la URL no cambia.
+ *
+ * SIN FAVICON CONFIGURADO devuelve 204, no 404 (F17C-BRAND-01). Antes el 404 salía por el manejador
+ * de errores, que responde JSON y no pone `Cross-Origin-Resource-Policy`, así que se aplicaba el
+ * `same-origin` que Helmet fija por defecto y el navegador bloqueaba la respuesta con
+ * `ERR_BLOCKED_BY_RESPONSE.NotSameOrigin` en CADA carga de página. Un 204 dice «aquí no hay icono»
+ * sin ser un fallo, y la cabecera se fija SOLO en esta respuesta: nada global cambia.
+ */
+router.get(
+  '/branding/favicon',
+  asyncHandler(async (_req, res) => {
+    const { favicon } = await readBranding();
+    if (!favicon) {
+      res.setHeader('Cross-Origin-Resource-Policy', 'cross-origin');
+      // Sin caducidad larga: en cuanto el ADMIN suba un favicon, la misma URL debe servirlo.
+      res.setHeader('Cache-Control', 'public, max-age=60');
+      res.status(204).end();
+      return;
+    }
+    sendPublicImage(res, favicon, 'public, max-age=300');
   }),
 );
 

@@ -38,6 +38,51 @@ function redact(values: Record<string, unknown> | null | undefined): string | nu
   return JSON.stringify(safe);
 }
 
+/** Algo que sabe ejecutar una consulta: el pool, o la conexión de una transacción en curso. */
+interface Ejecutor {
+  query(sql: string, values: unknown[]): Promise<unknown>;
+}
+
+const INSERTAR_AUDITORIA = `INSERT INTO audit_logs (user_id, action, entity_type, entity_id, description, old_values, new_values, ip_address, user_agent)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`;
+
+/**
+ * Auditoría de una acción AUTOMÁTICA, sin usuario detrás (F17C-SEC-10).
+ *
+ * `user_id` queda en NULL, que es exactamente lo que la columna ya significa: nadie. No se
+ * inventa un identificador ni se atribuye la acción a un ADMIN que no hizo nada, porque una
+ * auditoría que miente sobre quién actuó es peor que no tenerla. Para que «automático» se pueda
+ * distinguir de «humano sin sesión», el origen del proceso va siempre en `new_values.actor`.
+ * Tampoco hay `ip_address` ni `user_agent`: no existe petición.
+ *
+ * ATOMICIDAD. Si se pasa la `connection` de una transacción, la fila se escribe DENTRO de ella:
+ * o queda el cambio y su registro, o no queda ninguno de los dos. Y a diferencia de
+ * `recordAudit`, aquí el error NO se traga: debe tumbar la transacción, porque un cambio de
+ * estado sin rastro es justo lo que esta fase viene a evitar. Sin `connection` se usa el pool y
+ * la garantía es la de siempre, la de una escritura suelta.
+ */
+export async function recordSystemAudit(
+  input: AuditInput & { actor: string },
+  connection?: Ejecutor,
+): Promise<void> {
+  const valores = [
+    null,
+    input.action,
+    input.entityType,
+    input.entityId ?? null,
+    input.description?.slice(0, 500) ?? null,
+    redact(input.oldValues),
+    redact({ ...(input.newValues ?? {}), actor: input.actor }),
+    null,
+    null,
+  ];
+  if (connection) {
+    await connection.query(INSERTAR_AUDITORIA, valores);
+    return;
+  }
+  await execute(INSERTAR_AUDITORIA, valores);
+}
+
 /** Audit failures must never break the operation being audited. */
 export async function recordAudit(req: Request, input: AuditInput): Promise<void> {
   try {

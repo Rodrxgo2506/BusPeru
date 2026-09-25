@@ -1,4 +1,4 @@
-import { ArrowLeft, Banknote, Building2, CalendarDays, Check, CreditCard, Lock, ShieldCheck, Smartphone, Ticket, User, Wallet } from 'lucide-react';
+import { ArrowLeft, BadgeCheck, Banknote, Building2, CalendarDays, Check, CreditCard, Lock, ShieldCheck, Smartphone, Ticket, User, Wallet } from 'lucide-react';
 import { useState, type FormEvent } from 'react';
 import { Navigate, useLocation, useNavigate } from 'react-router-dom';
 import { Button, Card, Input } from '@/components/ui';
@@ -6,6 +6,7 @@ import { useAuth } from '@/context/AuthContext';
 import { useToast } from '@/context/ToastContext';
 import { useAsync } from '@/hooks/useAsync';
 import { ApiError } from '@/services/api';
+import { CompanyIdentity } from '@/components/companies/CompanyCard';
 import { bookingService, culqiService, itineraryService, publicService } from '@/services';
 import { CheckoutCancelled, openCulqiCheckout } from '@/services/culqi';
 import type { Booking, PaymentMethod } from '@/types';
@@ -259,7 +260,19 @@ export function PaymentPage() {
               </ol>
             ) : (
               <>
-            <p className="mt-4 text-lg font-extrabold uppercase leading-tight text-ink">{data?.company_name}</p>
+<div className="mt-4">
+              {/* F17C-UI-12 · identidad real de la empresa, con el mismo componente que `/buscar`. */}
+            <div className="flex items-center gap-3">
+              <CompanyIdentity name={data?.company_name ?? 'Empresa'} logoUrl={data?.company_logo ?? null} size="sm" />
+              <div className="min-w-0">
+                <p className="truncate text-lg font-extrabold uppercase leading-tight text-ink">{data?.company_name}</p>
+                <span className="mt-1 inline-flex items-center gap-1.5 whitespace-nowrap rounded-full bg-success-50 px-2.5 py-0.5 text-xs font-medium text-success-700">
+                  <BadgeCheck className="h-3.5 w-3.5 shrink-0" aria-hidden />
+                  Empresa verificada
+                </span>
+              </div>
+            </div>
+            </div>
             <span className="mt-2 inline-flex items-center gap-1.5 rounded-full bg-slate-100 px-2.5 py-1 text-xs font-medium text-slate-600">
               {data?.bus_type_name ?? 'Bus'}
             </span>
@@ -373,13 +386,13 @@ export function PaymentPage() {
 
                   {culqi.data?.card_enabled ? (
                     <p className="rounded-control border border-border bg-slate-50 p-3 text-xs text-slate-600">
-                      Al continuar se abrira la ventana segura de <strong className="text-ink">Culqi</strong> para introducir
-                      los datos de tu tarjeta. BusPeru no ve, no guarda ni transmite el numero de tu tarjeta: solo recibe un
+                      Al continuar se abrirá la ventana segura de <strong className="text-ink">Culqi</strong> para introducir
+                      los datos de tu tarjeta. BusPerú no ve, no guarda ni transmite el número de tu tarjeta: solo recibe un
                       identificador de pago.
                     </p>
                   ) : (
                     <p className="rounded-control border border-warning-200 bg-warning-50 p-3 text-xs text-warning-700">
-                      El pago con tarjeta no esta disponible en este momento. Elige otro metodo para completar tu compra.
+                      El pago con tarjeta no está disponible en este momento. Elige otro método para completar tu compra.
                     </p>
                   )}
                 </>

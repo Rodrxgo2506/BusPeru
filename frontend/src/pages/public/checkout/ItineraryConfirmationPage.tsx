@@ -1,5 +1,6 @@
-import { ArrowRightLeft, CalendarDays, CheckCircle2, Download, Route as RouteIcon, Ticket, User } from 'lucide-react';
+import { ArrowRightLeft, BadgeCheck, CalendarDays, CheckCircle2, Download, Route as RouteIcon, Ticket, User } from 'lucide-react';
 import QRCode from 'qrcode';
+import { CompanyIdentity } from '@/components/companies/CompanyCard';
 import { useEffect, useRef, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import { Badge, Button, Card, ErrorState, LoadingState, StatusBadge } from '@/components/ui';
@@ -110,14 +111,24 @@ export function ItineraryConfirmationPage() {
             <Card key={code}>
               <div className="mb-4 flex flex-wrap items-center justify-between gap-3 border-b border-border pb-4">
                 <div className="flex items-center gap-3">
-                  <span className="flex h-8 w-8 items-center justify-center rounded-full bg-brand-500 text-sm font-bold text-white">
+                  <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-brand-500 text-sm font-bold text-white">
                     {order}
                   </span>
-                  <div>
+                  {/* F17C-UI-13 · identidad de la empresa de cada tramo. */}
+                  <CompanyIdentity
+                    name={String(segment.company_name ?? 'Empresa')}
+                    logoUrl={(segment.company_logo as string | null) ?? null}
+                    size="sm"
+                  />
+                  <div className="min-w-0">
                     <p className="font-bold text-ink">
                       {esIdaVuelta ? (order === 1 ? 'Viaje de ida' : 'Viaje de vuelta') : `Tramo ${order}`}
                     </p>
-                    <p className="text-xs text-muted">{String(segment.company_name ?? '')}</p>
+                    <p className="truncate text-xs text-muted">{String(segment.company_name ?? '')}</p>
+                    <span className="mt-1 inline-flex items-center gap-1.5 whitespace-nowrap rounded-full bg-success-50 px-2.5 py-0.5 text-xs font-medium text-success-700">
+                      <BadgeCheck className="h-3.5 w-3.5 shrink-0" aria-hidden />
+                      Empresa verificada
+                    </span>
                   </div>
                 </div>
                 <div className="flex items-center gap-2">

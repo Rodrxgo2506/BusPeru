@@ -1,6 +1,7 @@
-import { ArrowLeft, ArrowRight, Armchair, BedDouble, Bus, CalendarDays, Headphones, Lock, Snowflake, Star, Trash2, Tv, Usb, User, Wifi, X } from 'lucide-react';
+import { ArrowLeft, ArrowRight, Armchair, BadgeCheck, BedDouble, CalendarDays, Headphones, Lock, Snowflake, Star, Trash2, Tv, Usb, User, Wifi, X } from 'lucide-react';
 import { useEffect, useMemo, useState } from 'react';
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom';
+import { CompanyIdentity } from '@/components/companies/CompanyCard';
 import { DeckSelector, SeatLegend, SeatMap } from '@/components/common/SeatMap';
 import { Button, Card, ErrorState, LoadingState } from '@/components/ui';
 import { TARJETA_FLOTANTE as FLOTANTE, TravelBackdrop } from '@/components/common/TravelBackdrop';
@@ -165,7 +166,17 @@ export function SeatSelectionPage() {
       {/* Resumen del viaje en móvil: tarjeta naranja compacta (mockup 3, versión phone). */}
       <div className="mb-5 rounded-card bg-gradient-to-br from-brand-500 via-brand-500 to-brand-600 p-4 text-white shadow-panel lg:hidden">
         <div className="flex items-center justify-between gap-3">
-          <p className="text-sm font-bold uppercase tracking-tight">{data.company_name}</p>
+          {/* F17C-UI-12 · identidad real de la empresa; `company_logo` ya viene en `PublicTrip`. */}
+          <span className="flex min-w-0 items-center gap-2.5">
+            <CompanyIdentity name={data.company_name ?? 'Empresa'} logoUrl={data.company_logo} size="sm" />
+            <span className="min-w-0">
+              <span className="block truncate text-sm font-bold uppercase tracking-tight">{data.company_name}</span>
+              <span className="mt-1 inline-flex items-center gap-1 whitespace-nowrap rounded-full bg-white/20 px-2 py-0.5 text-[11px] font-medium text-white">
+                <BadgeCheck className="h-3 w-3 shrink-0" aria-hidden />
+                Empresa verificada
+              </span>
+            </span>
+          </span>
           {data.company_rating !== null && (
             <span className="flex items-center gap-1 text-sm font-semibold">
               <Star className="h-3.5 w-3.5 fill-white text-white" />
@@ -211,11 +222,16 @@ export function SeatSelectionPage() {
         {/* Separadores verticales entre bloques, como en la referencia: `divide-x` sobre la
             propia rejilla, sin filetes sueltos que haya que mantener a mano. */}
         <div className="grid gap-5 divide-x divide-border/70 lg:grid-cols-[190px_1fr_auto_268px] lg:items-center">
-          <div className="flex items-center gap-3">
-            <span className="flex h-12 w-12 shrink-0 items-center justify-center rounded-control bg-brand-50 text-brand-500 ring-1 ring-brand-100" aria-hidden>
-              <Bus className="h-6 w-6" />
-            </span>
-            <p className="min-w-0 text-[15px] font-extrabold uppercase leading-tight tracking-tight text-ink">{data.company_name}</p>
+          {/* El icono genérico de bus deja paso al logotipo real de la empresa (F17C-UI-12). */}
+          <div className="flex flex-col gap-2">
+            <CompanyIdentity name={data.company_name ?? 'Empresa'} logoUrl={data.company_logo} size="sm" />
+            <div className="min-w-0">
+              <p className="text-[15px] font-extrabold uppercase leading-tight tracking-tight text-ink">{data.company_name}</p>
+              <span className="mt-1 inline-flex items-center gap-1.5 whitespace-nowrap rounded-full bg-success-50 px-2.5 py-0.5 text-xs font-medium text-success-700">
+                <BadgeCheck className="h-3.5 w-3.5 shrink-0" aria-hidden />
+                Empresa verificada
+              </span>
+            </div>
           </div>
 
           <div className="flex flex-wrap items-center gap-5 lg:pl-5">

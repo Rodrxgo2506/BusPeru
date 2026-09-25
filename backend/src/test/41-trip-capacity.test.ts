@@ -71,7 +71,7 @@ describe('Capacidad efectiva del viaje (H-03, H-04, H-14)', () => {
     const nueva = await createBusLayout(ctx.fixtures.busA, { version: 9, status: 'DRAFT', rows: 9, columns: 4 });
     for (let indice = 1; indice <= asientos; indice += 1) {
       await execute(
-        `INSERT INTO seats (bus_id, layout_id, deck_id, seat_type_id, seat_number, row_number, column_number, is_window, is_aisle, status)
+        `INSERT INTO seats (bus_id, layout_id, deck_id, seat_type_id, seat_number, \`row_number\`, column_number, is_window, is_aisle, status)
          VALUES (?, ?, ?, NULL, ?, ?, ?, 0, 0, 'AVAILABLE')`,
         [ctx.fixtures.busA, nueva.layoutId, at(nueva.deckIds, 0), `N${indice}`, Math.ceil(indice / 4), ((indice - 1) % 4) + 1],
       );

@@ -2,6 +2,7 @@ import { Armchair, BadgeCheck, BedDouble, Bus, ChevronLeft, ChevronRight, Heart,
 import { useEffect, useMemo, useState } from 'react';
 import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { Button, Card, EmptyState, ErrorState } from '@/components/ui';
+import { CompanyIdentity } from '@/components/companies/CompanyCard';
 import { TARJETA_FLOTANTE as FLOTANTE, TravelBackdrop } from '@/components/common/TravelBackdrop';
 import { useAsync } from '@/hooks/useAsync';
 import { ItineraryResultsPage } from './ItineraryResultsPage';
@@ -408,10 +409,14 @@ function OneWayResultsPage() {
           ) : results.loading ? (
             <div className="space-y-4">
               {Array.from({ length: 3 }).map((_, index) => (
-                <div key={index} className={`card space-y-3 p-5 ${FLOTANTE}`}>
-                  <div className="skeleton h-5 w-1/3" />
-                  <div className="skeleton h-4 w-2/3" />
-                  <div className="skeleton h-10 w-full" />
+                <div key={index} className={`card p-5 ${FLOTANTE}`}>
+                  {/* Reserva el hueco del logotipo para que al llegar los datos la tarjeta no salte. */}
+                  <div className="skeleton h-14 w-20 rounded-control" />
+                  <div className="mt-3 space-y-3">
+                    <div className="skeleton h-5 w-1/3" />
+                    <div className="skeleton h-4 w-2/3" />
+                    <div className="skeleton h-10 w-full" />
+                  </div>
                 </div>
               ))}
             </div>
@@ -559,7 +564,10 @@ function TripResultCard({ trip, favourite, onToggleFavourite }: { trip: PublicTr
 
       <div className="grid gap-5 lg:grid-cols-[164px_1fr_204px] lg:gap-6">
         <div>
-          <p className="pr-8 text-base font-extrabold uppercase leading-tight tracking-tight text-ink">{trip.company_name}</p>
+          {/* F17C-UI-09 · `company_logo` ya viajaba en cada resultado y no se usaba. Mismo componente
+              y mismo respaldo de iniciales que el catálogo de `/empresas`. */}
+          <CompanyIdentity name={trip.company_name ?? 'Empresa'} logoUrl={trip.company_logo} size="sm" />
+          <p className="mt-2.5 pr-8 text-base font-extrabold uppercase leading-tight tracking-tight text-ink">{trip.company_name}</p>
           {trip.company_rating !== null ? (
             <p className="mt-2 flex items-center gap-1 text-sm">
               <Star className="h-4 w-4 fill-warning-500 text-warning-500" />

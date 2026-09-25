@@ -3,6 +3,13 @@ import { execute, queryOne } from '../config/database';
 import { ApiError } from '../utils/ApiError';
 import { createResourceRouter, type ResourceDefinition } from '../core/resource';
 import { assertCommissionCanBeInitialized, ensureCompanyCommission } from '../services/company-commission.service';
+import {
+  assertSlugAvailable,
+  cleanupAttractionImage,
+  cleanupDeletedFiles,
+  prepareDestinationDelete,
+} from '../services/destination-content.service';
+import * as d from '../validators/destination.validators';
 import * as v from '../validators/resource.validators';
 
 /**
@@ -54,7 +61,15 @@ const definitions: ResourceDefinition[] = [
     filters: { status: 'c.status' },
     sortColumns: ['c.name', 'c.created_at', 'c.status'],
     defaultSort: 'c.created_at',
-    writableColumns: ['name', 'legal_name', 'tax_id', 'email', 'phone', 'logo_url', 'description', 'status'],
+    /**
+     * `logo_url` NO es escribible por aquí (F17C-COMPANY-LOGO-01-A). Lo escribe únicamente
+     * `POST/DELETE /company/logo`, que resuelve la empresa desde la sesión y guarda una referencia
+     * recién creada en el almacén. Si siguiera aquí, un rol de empresa podría escribir a mano la
+     * referencia del logotipo de OTRA empresa y presentarlo como propio, o apuntar a un archivo
+     * arbitrario del almacén: el CRUD genérico comprueba de quién es la FILA, no de quién es el
+     * ARCHIVO al que apunta el texto.
+     */
+    writableColumns: ['name', 'legal_name', 'tax_id', 'email', 'phone', 'description', 'status'],
     createSchema: v.createCompanySchema,
     updateSchema: v.updateCompanySchema,
     companyScopeExpression: 'c.id',
@@ -310,6 +325,17 @@ const definitions: ResourceDefinition[] = [
     writableColumns: ['name', 'type', 'subject', 'title', 'body', 'variables', 'status'],
     createSchema: v.createNotificationTemplateSchema,
     updateSchema: v.updateNotificationTemplateSchema,
+    /**
+     * F17C-SEC-01 H-02 · segunda barrera, además del permiso.
+     *
+     * Estos tres recursos dependían SÓLO de `settings.update`, que hoy tiene nada más el ADMIN.
+     * Pero los permisos se reasignan en caliente desde `PUT /roles/:id/permissions`, así que
+     * conceder ese permiso a un rol de empresa —por ejemplo para que gestione sus plantillas—
+     * abría de golpe la configuración global de la plataforma y su propia comisión. Es el mismo
+     * razonamiento que ya se había aplicado al contenido de destinos, más abajo, y que a estos
+     * tres se les había quedado sin aplicar. El ADMIN no nota ningún cambio.
+     */
+    adminOnlyActions: ['create', 'update', 'delete'],
   },
   {
     table: 'system_settings',
@@ -328,6 +354,17 @@ const definitions: ResourceDefinition[] = [
     writableColumns: ['setting_key', 'setting_value', 'setting_type', 'description', 'is_public'],
     createSchema: v.createSystemSettingSchema,
     updateSchema: v.updateSystemSettingSchema,
+    /**
+     * F17C-SEC-01 H-02 · segunda barrera, además del permiso.
+     *
+     * Estos tres recursos dependían SÓLO de `settings.update`, que hoy tiene nada más el ADMIN.
+     * Pero los permisos se reasignan en caliente desde `PUT /roles/:id/permissions`, así que
+     * conceder ese permiso a un rol de empresa —por ejemplo para que gestione sus plantillas—
+     * abría de golpe la configuración global de la plataforma y su propia comisión. Es el mismo
+     * razonamiento que ya se había aplicado al contenido de destinos, más abajo, y que a estos
+     * tres se les había quedado sin aplicar. El ADMIN no nota ningún cambio.
+     */
+    adminOnlyActions: ['create', 'update', 'delete'],
   },
   {
     table: 'company_commission_settings',
@@ -349,6 +386,95 @@ const definitions: ResourceDefinition[] = [
     updateSchema: v.updateCommissionSchema,
     companyScopeExpression: 'cs.company_id',
     companyScopeColumn: 'company_id',
+    /**
+     * F17C-SEC-01 H-02 · segunda barrera, además del permiso.
+     *
+     * Estos tres recursos dependían SÓLO de `settings.update`, que hoy tiene nada más el ADMIN.
+     * Pero los permisos se reasignan en caliente desde `PUT /roles/:id/permissions`, así que
+     * conceder ese permiso a un rol de empresa —por ejemplo para que gestione sus plantillas—
+     * abría de golpe la configuración global de la plataforma y su propia comisión. Es el mismo
+     * razonamiento que ya se había aplicado al contenido de destinos, más abajo, y que a estos
+     * tres se les había quedado sin aplicar. El ADMIN no nota ningún cambio.
+     */
+    adminOnlyActions: ['create', 'update', 'delete'],
+  },
+  /**
+   * FASE 17 · contenido público de destinos. Contenido GLOBAL de la plataforma (sin company_id):
+   * lo lee y lo escribe solo el ADMIN. Se reutilizan los permisos `settings.*` —hoy exclusivos del
+   * rol ADMIN— en lugar de crear permisos nuevos, y además `adminOnlyActions` exige el rol, de
+   * modo que conceder `settings.update` a otro rol en el futuro no abre la edición del contenido.
+   * Las imágenes y el orden en bloque van por `destination-content.routes.ts`.
+   */
+  {
+    table: 'destinations',
+    alias: 'd',
+    customerAccess: { mode: 'none', publicChannel: '/public/destinations/:slug' },
+    entityName: 'Destino',
+    permissionModule: 'settings',
+    permissionOverrides: { create: 'settings.update', delete: 'settings.update' },
+    // FASE 17B · la ciudad del destino y la de origen salen de `locations`: el panel muestra su
+    // nombre sin que el frontend tenga que resolver ids.
+    selectSql: `SELECT d.*, l.city AS location_city, ol.city AS origin_city,
+      (SELECT COUNT(*) FROM destination_attractions a WHERE a.destination_id = d.id) AS attractions_count,
+      (SELECT COUNT(*) FROM destination_festivities f WHERE f.destination_id = d.id) AS festivities_count
+      FROM destinations d
+      LEFT JOIN locations l ON l.id = d.location_id
+      LEFT JOIN locations ol ON ol.id = d.origin_location_id`,
+    searchColumns: ['d.name', 'd.slug', 'd.subtitle'],
+    filters: { status: 'd.status', location_id: 'd.location_id' },
+    sortColumns: ['d.display_order', 'd.name', 'd.price_from', 'd.created_at', 'd.status'],
+    defaultSort: 'd.display_order',
+    defaultOrder: 'ASC',
+    writableColumns: [
+      'name', 'slug', 'subtitle', 'description', 'price_from', 'address', 'ticket_schedule', 'package_schedule',
+      'travel_duration', 'temperature', 'altitude_masl', 'time_from_lima', 'location_id', 'origin_location_id',
+      'status', 'display_order',
+    ],
+    createSchema: d.createDestinationSchema,
+    updateSchema: d.updateDestinationSchema,
+    adminOnlyActions: ['create', 'update', 'delete'],
+    beforeCreate: async (data) => assertSlugAvailable(data.slug, null),
+    beforeUpdate: async (id, _previous, data) => assertSlugAvailable(data.slug, id),
+    prepareDelete: prepareDestinationDelete,
+    afterDelete: cleanupDeletedFiles,
+  },
+  {
+    table: 'destination_attractions',
+    alias: 'da',
+    customerAccess: { mode: 'none', publicChannel: '/public/destinations/:slug' },
+    entityName: 'Atractivo',
+    permissionModule: 'settings',
+    permissionOverrides: { create: 'settings.update', delete: 'settings.update' },
+    selectSql: 'SELECT da.* FROM destination_attractions da',
+    searchColumns: ['da.name'],
+    filters: { destination_id: 'da.destination_id', status: 'da.status' },
+    sortColumns: ['da.display_order', 'da.name', 'da.created_at'],
+    defaultSort: 'da.display_order',
+    defaultOrder: 'ASC',
+    // `destination_id` solo se acepta al crear: el esquema de edición no lo incluye.
+    writableColumns: ['destination_id', 'name', 'description', 'status', 'display_order'],
+    createSchema: d.createAttractionSchema,
+    updateSchema: d.updateAttractionSchema,
+    adminOnlyActions: ['create', 'update', 'delete'],
+    afterDelete: cleanupAttractionImage,
+  },
+  {
+    table: 'destination_festivities',
+    alias: 'df',
+    customerAccess: { mode: 'none', publicChannel: '/public/destinations/:slug' },
+    entityName: 'Festividad',
+    permissionModule: 'settings',
+    permissionOverrides: { create: 'settings.update', delete: 'settings.update' },
+    selectSql: 'SELECT df.* FROM destination_festivities df',
+    searchColumns: ['df.name', 'df.date_label'],
+    filters: { destination_id: 'df.destination_id', status: 'df.status' },
+    sortColumns: ['df.display_order', 'df.name', 'df.created_at'],
+    defaultSort: 'df.display_order',
+    defaultOrder: 'ASC',
+    writableColumns: ['destination_id', 'name', 'date_label', 'description', 'status', 'display_order'],
+    createSchema: d.createFestivitySchema,
+    updateSchema: d.updateFestivitySchema,
+    adminOnlyActions: ['create', 'update', 'delete'],
   },
 ];
 
@@ -365,4 +491,7 @@ export const resourceRouters: Array<{ path: string; router: Router }> = [
   { path: '/notification-templates', router: createResourceRouter(definitions[9]!) },
   { path: '/system-settings', router: createResourceRouter(definitions[10]!) },
   { path: '/commissions', router: createResourceRouter(definitions[11]!) },
+  { path: '/destinations', router: createResourceRouter(definitions[12]!) },
+  { path: '/destination-attractions', router: createResourceRouter(definitions[13]!) },
+  { path: '/destination-festivities', router: createResourceRouter(definitions[14]!) },
 ];

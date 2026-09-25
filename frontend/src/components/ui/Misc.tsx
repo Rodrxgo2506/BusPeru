@@ -1,6 +1,7 @@
 import { ChevronRight, Search } from 'lucide-react';
-import type { InputHTMLAttributes, ReactNode } from 'react';
+import { useEffect, useState, type InputHTMLAttributes, type ReactNode } from 'react';
 import { Link } from 'react-router-dom';
+import { useBranding } from '@/context/BrandingContext';
 import { initials } from '@/utils/format';
 import { cn } from '@/utils/cn';
 
@@ -22,7 +23,11 @@ export function PageHeader({
       {breadcrumbs && breadcrumbs.length > 0 && <Breadcrumbs items={breadcrumbs} className="mb-3" />}
       <div className="flex flex-wrap items-start justify-between gap-4">
         <div className="min-w-0">
-          <h1 className="text-2xl font-bold tracking-tight text-ink sm:text-[28px]">{title}</h1>
+          {/* Algunas pantallas reutilizan esta cabecera solo por sus acciones y pasan `title=""`
+              (p. ej. la tabla de ajustes, que ya tiene su propio título arriba). Antes eso dejaba un
+              `<h1>` VACÍO en el documento: invisible en pantalla, pero un segundo encabezado de
+              primer nivel sin texto para un lector de pantalla. */}
+          {title ? <h1 className="text-2xl font-bold tracking-tight text-ink sm:text-[28px]">{title}</h1> : null}
           {description && <p className="mt-1 text-sm text-muted">{description}</p>}
         </div>
         {actions && <div className="flex flex-wrap items-center gap-2">{actions}</div>}
@@ -152,7 +157,20 @@ export function Logo({
   /** On the mobile orange app bar the mark inverts so it stays legible. */
   onOrange?: boolean;
 }) {
-  return (
+  // FASE 17: si el ADMIN subió un logo, se usa; si falla la descarga, vuelve la marca de siempre.
+  // FASE 17A: cada imagen falla por separado. Antes un logo móvil roto anulaba también un logo
+  // principal válido. El móvil usa el principal si no hay (o si falla), y cada tamaño cae a la marca
+  // de siempre solo cuando no le queda ninguna imagen utilizable.
+  const { logoUrl, logoMobileUrl } = useBranding();
+  const [mainFailed, setMainFailed] = useState(false);
+  const [mobileFailed, setMobileFailed] = useState(false);
+  useEffect(() => setMainFailed(false), [logoUrl]);
+  useEffect(() => setMobileFailed(false), [logoMobileUrl]);
+
+  const main = logoUrl && !mainFailed ? logoUrl : null;
+  const mobile = logoMobileUrl && !mobileFailed ? logoMobileUrl : main;
+
+  const defaultMark = (
     <span className="flex items-center gap-2">
       <span className={cn('flex h-9 w-9 items-center justify-center rounded-xl', onOrange ? 'bg-white text-brand-500 lg:bg-brand-500 lg:text-white' : 'bg-brand-500 text-white')}>
         <BusGlyph />
@@ -169,6 +187,39 @@ export function Logo({
         {subtitle && <span className="mt-0.5 block text-[10px] font-semibold uppercase tracking-[0.2em] text-slate-400">{subtitle}</span>}
       </span>
     </span>
+  );
+
+  if (!main && !mobile) return defaultMark;
+
+  const brandedSubtitle = subtitle && <span className="mt-1 block text-[10px] font-semibold uppercase tracking-[0.2em] text-slate-400">{subtitle}</span>;
+  return (
+    <>
+      <span className="lg:hidden">
+        {mobile ? (
+          <span className="block leading-none">
+            <img
+              src={mobile}
+              alt="BusPerú"
+              onError={() => (mobile === logoMobileUrl ? setMobileFailed(true) : setMainFailed(true))}
+              className="h-9 w-auto max-w-[150px] object-contain"
+            />
+            {brandedSubtitle}
+          </span>
+        ) : (
+          defaultMark
+        )}
+      </span>
+      <span className="hidden lg:block">
+        {main ? (
+          <span className="block leading-none">
+            <img src={main} alt="BusPerú" onError={() => setMainFailed(true)} className="h-10 w-auto max-w-[190px] object-contain" />
+            {brandedSubtitle}
+          </span>
+        ) : (
+          defaultMark
+        )}
+      </span>
+    </>
   );
 }
 

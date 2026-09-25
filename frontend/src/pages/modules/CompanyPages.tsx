@@ -1,5 +1,6 @@
 import { Armchair, Bell, Building2, Bus, CheckCheck, Save, Trash2 } from 'lucide-react';
 import { useState } from 'react';
+import { CompanyLogoField } from '@/components/companies/CompanyLogoField';
 import { ResourcePage } from '@/components/common/ResourcePage';
 import {
   Badge,
@@ -133,7 +134,7 @@ const COMPANY_FIELDS: Array<{ name: keyof Company & string; label: string; type?
   { name: 'tax_id', label: 'RUC', adminOnly: true },
   { name: 'email', label: 'Correo de contacto', type: 'email' },
   { name: 'phone', label: 'Teléfono' },
-  { name: 'logo_url', label: 'URL del logotipo' },
+  // El logotipo ya no se escribe a mano: se sube en su propia tarjeta (F17C-COMPANY-LOGO-01).
 ];
 
 /**
@@ -212,12 +213,18 @@ export function CompanyProfilePage() {
         }
       />
 
+      {canEdit && (
+        <Card className="mb-6">
+          <CompanyLogoField description="Se muestra a los pasajeros junto al nombre de tu empresa. Si no hay logotipo, se usan sus iniciales." />
+        </Card>
+      )}
+
       {company.error ? (
         <Card padded={false}>
           <ErrorState error={company.error} onRetry={company.reload} />
         </Card>
       ) : company.loading || !values || !loaded ? (
-        <LoadingState />
+        <LoadingState className="min-h-[40vh]" />
       ) : (
         <Card>
           <div className="mb-6 flex items-center justify-between gap-4 border-b border-border pb-4">

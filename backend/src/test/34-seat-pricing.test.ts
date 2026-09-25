@@ -220,7 +220,7 @@ describe('Precio por tipo de asiento y capacidad por versión (migración 010)',
     it('10 · un asiento de otra versión no se puede reservar en este viaje', async () => {
       const otra = await createBusLayout(ctx.fixtures.busA, { version: 5, status: 'DRAFT', rows: 1, columns: 1 });
       const ajeno = await execute(
-        `INSERT INTO seats (bus_id, layout_id, deck_id, seat_type_id, seat_number, row_number, column_number, is_window, is_aisle, status)
+        `INSERT INTO seats (bus_id, layout_id, deck_id, seat_type_id, seat_number, \`row_number\`, column_number, is_window, is_aisle, status)
          VALUES (?, ?, ?, NULL, 'Z9', 1, 1, 0, 0, 'AVAILABLE')`,
         [ctx.fixtures.busA, otra.layoutId, at(otra.deckIds, 0)],
       );

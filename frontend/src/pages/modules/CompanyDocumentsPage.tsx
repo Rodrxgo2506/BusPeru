@@ -441,7 +441,7 @@ export function DocumentReviewPage() {
       <PageHeader
         title="Verificación de empresas"
         description="Revisa la documentación legal que envían las empresas antes de aprobarlas."
-        breadcrumbs={[{ label: 'Panel Admin' }, { label: 'Verificación de empresas' }]}
+        breadcrumbs={[{ label: 'Administración' }, { label: 'Verificación de empresas' }]}
       />
 
       {pending.error ? (

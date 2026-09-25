@@ -24,6 +24,44 @@ export async function findPasswordHash(userId: number): Promise<string | null> {
   return row?.password_hash ?? null;
 }
 
+/**
+ * Lo que el middleware necesita para decidir si una sesión sigue viva (F17C-SEC-10).
+ *
+ * Va en UNA consulta porque las dos comprobaciones —huella de la contraseña y marca de
+ * terminación— se hacen juntas en cada petición autenticada; pedirlas por separado doblaría
+ * el trabajo sin ganar nada.
+ *
+ * `sessions_valid_from` se devuelve como SEGUNDOS desde epoch, en la misma escala que el `iat`
+ * del JWT. La conversión se deja a `UNIX_TIMESTAMP`, que interpreta el DATETIME con la misma
+ * zona horaria con la que `NOW()` lo escribió: así no hay que reconstruir la fecha en Node ni
+ * arriesgar un desfase de zona. `NULL` significa que la cuenta nunca se suspendió.
+ */
+export interface SessionGuard {
+  passwordHash: string;
+  sessionsValidFrom: number | null;
+}
+
+export async function findSessionGuard(userId: number): Promise<SessionGuard | null> {
+  const row = await queryOne<{ password_hash: string; sessions_valid_from: number | string | null }>(
+    'SELECT password_hash, UNIX_TIMESTAMP(sessions_valid_from) AS sessions_valid_from FROM users WHERE id = ? LIMIT 1',
+    [userId],
+  );
+  if (!row) return null;
+  return {
+    passwordHash: row.password_hash,
+    sessionsValidFrom: row.sessions_valid_from === null ? null : Number(row.sessions_valid_from),
+  };
+}
+
+/**
+ * Avanza la marca de terminación: a partir de este instante, ninguna sesión emitida antes vale.
+ * Se llama al dejar la cuenta en un estado distinto de ACTIVE. Reactivar NO la retrocede, que es
+ * justamente lo que impide que un token anterior reviva.
+ */
+export async function terminateSessions(userId: number): Promise<void> {
+  await query('UPDATE users SET sessions_valid_from = NOW() WHERE id = ?', [userId]);
+}
+
 export async function findById(userId: number): Promise<(User & { role: RoleName }) | null> {
   return queryOne<User & { role: RoleName }>(
     `SELECT ${USER_COLUMNS}, r.name AS role

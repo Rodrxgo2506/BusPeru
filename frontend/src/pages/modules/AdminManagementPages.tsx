@@ -1,6 +1,7 @@
 import { Building2, CheckCircle2, ShieldCheck, UserX, Users } from 'lucide-react';
 import { useState } from 'react';
 import { ResourcePage } from '@/components/common/ResourcePage';
+import { CompanyLogoField } from '@/components/companies/CompanyLogoField';
 import { Avatar, Badge, Button, Card, CardHeader, Checkbox, ErrorState, LoadingState, Modal, PageHeader, StatCard, StatusBadge, type Column } from '@/components/ui';
 import { useAuth } from '@/context/AuthContext';
 import { useToast } from '@/context/ToastContext';
@@ -351,7 +352,7 @@ export function CompaniesPage() {
         { name: 'tax_id', label: 'RUC', placeholder: '20123456789' },
         { name: 'email', label: 'Correo', type: 'email' },
         { name: 'phone', label: 'Teléfono', type: 'tel' },
-        { name: 'logo_url', label: 'URL del logo' },
+        // El logotipo se sube desde el panel de la empresa; la API ya no admite escribirlo aquí.
         { name: 'description', label: 'Descripción', type: 'textarea' },
         {
           name: 'status',
@@ -366,6 +367,18 @@ export function CompaniesPage() {
           ],
         },
       ]}
+      /* El logotipo no es un campo del formulario: se guarda por su cuenta y necesita una empresa
+         ya creada, así que solo aparece al editar (F17C-COMPANY-LOGO-02). */
+      formExtra={(company) =>
+        company && hasPermission('companies.update') ? (
+          <div className="border-t border-border pt-4">
+            <CompanyLogoField
+              companyId={company.id}
+              description="Se muestra a los pasajeros en el portal público. Si no hay logotipo, se usan las iniciales de la empresa."
+            />
+          </div>
+        ) : null
+      }
       onCreate={(values) => companyService.create(values).then(() => undefined)}
       onUpdate={(id, values) => companyService.update(id, values).then(() => undefined)}
       onDelete={(id) => companyService.remove(id).then(() => undefined)}

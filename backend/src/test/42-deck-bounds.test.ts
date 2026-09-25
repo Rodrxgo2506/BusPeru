@@ -57,7 +57,7 @@ describe('H-05 · la rejilla de un piso no encoge por debajo de lo que contiene'
     colSpan = 1,
   ): Promise<number> {
     const creado = await execute(
-      `INSERT INTO bus_layout_elements (deck_id, element_type, row_number, column_number, row_span, col_span, label)
+      `INSERT INTO bus_layout_elements (deck_id, element_type, \`row_number\`, column_number, row_span, col_span, label)
        VALUES (?, ?, ?, ?, ?, ?, NULL)`,
       [deckId, tipo, fila, columna, rowSpan, colSpan],
     );
@@ -66,7 +66,7 @@ describe('H-05 · la rejilla de un piso no encoge por debajo de lo que contiene'
 
   async function colocarAsiento(numero: string, fila: number, columna: number): Promise<number> {
     const creado = await execute(
-      `INSERT INTO seats (bus_id, layout_id, deck_id, seat_type_id, seat_number, row_number, column_number, is_window, is_aisle, status)
+      `INSERT INTO seats (bus_id, layout_id, deck_id, seat_type_id, seat_number, \`row_number\`, column_number, is_window, is_aisle, status)
        VALUES (?, ?, ?, NULL, ?, ?, ?, 0, 0, 'AVAILABLE')`,
       [ctx.fixtures.busA, layoutId, deckId, numero, fila, columna],
     );
@@ -359,7 +359,7 @@ describe('H-05 · la rejilla de un piso no encoge por debajo de lo que contiene'
       assert.equal((await encoger({ name: 'Piso renombrado', deck_number: 4 })).status, 200);
 
       const elemento = await queryOne<{ id: number; row_number: number; row_span: number; col_span: number }>(
-        'SELECT id, row_number, row_span, col_span FROM bus_layout_elements WHERE id = ?',
+        'SELECT id, `row_number`, row_span, col_span FROM bus_layout_elements WHERE id = ?',
         [id],
       );
       assert.equal(Number(elemento?.id), id);

@@ -88,7 +88,7 @@ export async function createLayoutElement(
   label: string | null = null,
 ): Promise<number> {
   const result = await execute(
-    'INSERT INTO bus_layout_elements (deck_id, element_type, row_number, column_number, label) VALUES (?, ?, ?, ?, ?)',
+    'INSERT INTO bus_layout_elements (deck_id, element_type, `row_number`, column_number, label) VALUES (?, ?, ?, ?, ?)',
     [deckId, elementType, row, column, label],
   );
   return result.insertId;
@@ -121,7 +121,7 @@ async function createSeats(
   const ids: number[] = [];
   for (let index = 1; index <= count; index += 1) {
     const result = await execute(
-      `INSERT INTO seats (bus_id, layout_id, deck_id, seat_type_id, seat_number, row_number, column_number, is_window, is_aisle, status)
+      `INSERT INTO seats (bus_id, layout_id, deck_id, seat_type_id, seat_number, \`row_number\`, column_number, is_window, is_aisle, status)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'AVAILABLE')`,
       [
         busId,

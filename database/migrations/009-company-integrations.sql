@@ -25,6 +25,15 @@
 -- para satisfacer el CHECK que §5 prescribe:
 --   {"v":1,"alg":"AES-256-GCM","iv":"…","tag":"…","data":"…"}
 -- La clave de cifrado vive en `INTEGRATIONS_ENCRYPTION_KEY` (backend/.env), nunca en la base.
+--
+-- COMPATIBILIDAD CON MARIADB 10.11 (F18-02B)
+-- `fk_integrations_company` es `ON DELETE CASCADE ON UPDATE RESTRICT`. Hasta F18-02B era
+-- `ON UPDATE CASCADE`, y MariaDB 10.11 rechaza esa tabla (ERROR 1901): no admite una columna
+-- generada STORED (`company_scope`) cuya columna base (`company_id`) tenga una clave ajena con
+-- `ON UPDATE CASCADE` o `ON DELETE SET NULL`. MariaDB 10.4 no comprobaba esa regla. Nada cambia en
+-- la práctica: `companies.id` es AUTO_INCREMENT y ningún código actualiza una clave primaria. El
+-- borrado en cascada se conserva. Las bases creadas con la versión anterior se ajustan con la
+-- migración 018.
 -- ---------------------------------------------------------------------------
 
 CREATE TABLE IF NOT EXISTS `company_integrations` (
@@ -42,7 +51,7 @@ CREATE TABLE IF NOT EXISTS `company_integrations` (
   UNIQUE KEY `uq_integration_company_provider` (`company_id`, `provider`),
   UNIQUE KEY `uq_integration_scope_provider` (`company_scope`, `provider`),
   CONSTRAINT `fk_integrations_company` FOREIGN KEY (`company_id`) REFERENCES `companies` (`id`)
-    ON DELETE CASCADE ON UPDATE CASCADE
+    ON DELETE CASCADE ON UPDATE RESTRICT
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- Comprobación

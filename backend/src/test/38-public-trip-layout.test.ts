@@ -125,7 +125,7 @@ describe('Geometría pública de la distribución del viaje', () => {
       // Los asientos de los fixtures llegan a la fila 3; el piso declara 10.
       await execute('UPDATE bus_layout_decks SET row_count = 10, column_count = 6 WHERE id = ?', [ctx.fixtures.deckA]);
       const maximos = await queryOne<{ f: number; c: number }>(
-        'SELECT MAX(row_number) AS f, MAX(column_number) AS c FROM seats WHERE layout_id = ?',
+        'SELECT MAX(`row_number`) AS f, MAX(column_number) AS c FROM seats WHERE layout_id = ?',
         [ctx.fixtures.layoutA],
       );
       assert.ok(Number(maximos?.f) < 10 && Number(maximos?.c) < 6, 'los asientos no llegan al borde');
@@ -164,7 +164,7 @@ describe('Geometría pública de la distribución del viaje', () => {
 
     it('14 · cada elemento trae su posición, su extensión y su etiqueta', async () => {
       await execute(
-        `INSERT INTO bus_layout_elements (deck_id, element_type, row_number, column_number, row_span, col_span, label)
+        `INSERT INTO bus_layout_elements (deck_id, element_type, \`row_number\`, column_number, row_span, col_span, label)
          VALUES (?, 'BATHROOM', 2, 4, 2, 1, 'Baño')`,
         [ctx.fixtures.deckA],
       );
@@ -181,7 +181,7 @@ describe('Geometría pública de la distribución del viaje', () => {
 
     it('15 · un elemento 2×2 conserva sus dos extensiones', async () => {
       await execute(
-        `INSERT INTO bus_layout_elements (deck_id, element_type, row_number, column_number, row_span, col_span)
+        `INSERT INTO bus_layout_elements (deck_id, element_type, \`row_number\`, column_number, row_span, col_span)
          VALUES (?, 'STAIRS', 5, 2, 2, 2)`,
         [ctx.fixtures.deckA],
       );

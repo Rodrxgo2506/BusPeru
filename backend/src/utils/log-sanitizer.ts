@@ -100,6 +100,7 @@ function knownSecrets(): string[] {
     env.oauth.google.clientSecret,
     env.oauth.microsoft.clientSecret,
     env.integrations.encryptionKey,
+    env.integrations.previousEncryptionKey,
     env.resend.apiKey,
   ];
   // Un secreto de menos de 6 caracteres sustituiría trozos de texto normal; no se busca.

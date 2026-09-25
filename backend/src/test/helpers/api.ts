@@ -67,6 +67,7 @@ export const getWithKey = <T = any>(path: string, apiKey?: string, headers?: Rec
   api<T>(path, { apiKey, headers });
 export const post = <T = any>(path: string, body?: unknown, token?: string) => api<T>(path, { method: 'POST', body, token });
 export const put = <T = any>(path: string, body?: unknown, token?: string) => api<T>(path, { method: 'PUT', body, token });
+export const patch = <T = any>(path: string, body?: unknown, token?: string) => api<T>(path, { method: 'PATCH', body, token });
 export const del = <T = any>(path: string, token?: string) => api<T>(path, { method: 'DELETE', token });
 
 /** URL base del servidor de pruebas, para peticiones que no son JSON (multipart). */

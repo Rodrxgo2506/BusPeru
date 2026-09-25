@@ -4,7 +4,7 @@ import { requirePermission } from '../middleware/permission.middleware';
 import { validate } from '../middleware/validate.middleware';
 import { recordAudit } from '../services/audit.service';
 import * as bankAccounts from '../services/bank-account.service';
-import { maskAccountNumber } from '../services/bank-account.service';
+import { maskAccountNumber, maskedOf } from '../services/bank-account.service';
 import { asyncHandler, sendSuccess } from '../utils/http';
 import { parseId } from '../utils/query';
 import { createBankAccountSchema, updateBankAccountSchema } from '../validators/bank-account.validators';
@@ -76,7 +76,7 @@ router.put(
       action: 'UPDATE',
       entityType: 'company_bank_accounts',
       entityId: id,
-      description: `Actualizó la cuenta bancaria (empresa ${companyId}): ${auditDetail({ bank_name: previous?.bank_name, account_number: previous ? maskAccountNumber(previous.account_number) : null })}`,
+      description: `Actualizó la cuenta bancaria (empresa ${companyId}): ${auditDetail({ bank_name: previous?.bank_name, account_number: previous ? maskedOf(previous, 'account_number') : null })}`,
       // `account_number` e `interbank_code` están en la lista de claves sensibles del
       // servicio de auditoría, así que no se guardan aunque se pasen aquí.
       oldValues: previous ? { bank_name: previous.bank_name, account_type: previous.account_type, currency: previous.currency, holder_name: previous.holder_name, is_primary: previous.is_primary } : null,
@@ -98,7 +98,7 @@ router.delete(
       action: 'DELETE',
       entityType: 'company_bank_accounts',
       entityId: id,
-      description: `Eliminó una cuenta bancaria (empresa ${companyId}): ${auditDetail({ bank_name: previous.bank_name, account_number: maskAccountNumber(previous.account_number) })}`,
+      description: `Eliminó una cuenta bancaria (empresa ${companyId}): ${auditDetail({ bank_name: previous.bank_name, account_number: maskedOf(previous, 'account_number') })}`,
     });
 
     sendSuccess(res, { id });

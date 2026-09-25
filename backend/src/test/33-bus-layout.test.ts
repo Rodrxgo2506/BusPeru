@@ -178,7 +178,7 @@ describe('Distribución versionada del bus (migración 010)', () => {
       const otra = await createBusLayout(ctx.fixtures.busA, { version: 3, status: 'DRAFT', rows: 1, columns: 1 });
       const deckOtra = otra.deckIds[0]!;
       await execute(
-        `INSERT INTO seats (bus_id, layout_id, deck_id, seat_type_id, seat_number, row_number, column_number, is_window, is_aisle, status)
+        `INSERT INTO seats (bus_id, layout_id, deck_id, seat_type_id, seat_number, \`row_number\`, column_number, is_window, is_aisle, status)
          VALUES (?, ?, ?, NULL, 'X1', 1, 1, 0, 0, 'AVAILABLE')`,
         [ctx.fixtures.busA, otra.layoutId, deckOtra],
       );
@@ -297,7 +297,7 @@ describe('Distribución versionada del bus (migración 010)', () => {
       for (const [deckId, prefijo] of [[piso1!, 'P1'], [piso2!, 'P2']] as const) {
         for (let numero = 1; numero <= 2; numero += 1) {
           await execute(
-            `INSERT INTO seats (bus_id, layout_id, deck_id, seat_type_id, seat_number, row_number, column_number, is_window, is_aisle, status)
+            `INSERT INTO seats (bus_id, layout_id, deck_id, seat_type_id, seat_number, \`row_number\`, column_number, is_window, is_aisle, status)
              VALUES (?, ?, ?, NULL, ?, 1, ?, 0, 0, 'AVAILABLE')`,
             [ctx.fixtures.busA, dos.layoutId, deckId, `${prefijo}-${numero}`, numero],
           );

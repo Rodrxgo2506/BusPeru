@@ -6,6 +6,7 @@ import { TRIP_SEAT_CAPACITY_SQL, cancelOpenPayments, withDeadlockRetry } from '.
 import { purgeExpired as purgeExpiredOAuthFlows } from '../repositories/oauth-flow.repository';
 import { purgeExpiredRevocations } from './session-revocation.service';
 import { logError } from '../utils/logger';
+import { recordSystemAudit } from './audit.service';
 
 /**
  * Expiración de reservas PENDING cuyo `expires_at` ya venció.
@@ -27,6 +28,11 @@ export interface ExpiryResult {
   expired: number;
   bookingIds: number[];
   seatsReleased: number;
+  /**
+   * Reservas que no se pudieron procesar en esta pasada (F17C-SEC-06). Se cuentan para que
+   * quien llama sepa que el barrido no fue completo; el detalle va al registro de errores.
+   */
+  failed: number;
 }
 
 interface DueBooking {
@@ -105,78 +111,128 @@ export async function expireDueBookings(options: ExpiryOptions = {}): Promise<Ex
     [...scope.params, limit],
   );
 
-  const result: ExpiryResult = { expired: 0, bookingIds: [], seatsReleased: 0 };
+  const result: ExpiryResult = { expired: 0, bookingIds: [], seatsReleased: 0, failed: 0 };
 
   for (const candidate of due) {
-    // Una transacción por reserva: un fallo aislado no bloquea al resto. Si InnoDB la elige
-    // como víctima de un interbloqueo, se repite entera: ver `withDeadlockRetry`.
-    const processed = await withDeadlockRetry(() => withTransaction(async (connection) => {
-      // El viaje primero, igual que en la venta y en la confirmación (auditoría BP-19).
-      // Las tres rutas que cambian la ocupación de un asiento toman ahora los cerrojos en
-      // el mismo orden —viaje, luego reserva—, de modo que no pueden quedarse esperándose
-      // mutuamente. Esta transacción además actualiza `trips`, así que el cerrojo lo iba a
-      // necesitar de todos modos; solo se adelanta.
-      await connection.query('SELECT id FROM trips WHERE id = ? LIMIT 1 FOR UPDATE', [candidate.trip_id]);
+    /**
+     * F17C-SEC-06 · CADA RESERVA VA EN SU PROPIO `try`.
+     *
+     * Ya tenía una transacción por reserva, pero si esa transacción lanzaba, el error subía y
+     * abortaba el bucle: la auditoría lo comprobó rompiendo la PRIMERA candidata, y el barrido
+     * terminó con cero expiradas dejando en PENDING a las otras dos, que estaban sanas. Y como
+     * las candidatas se ordenan por `expires_at ASC`, la que falla es siempre la primera de la
+     * lista: una sola reserva atascada bloqueaba la expiración de TODAS las demás, para siempre.
+     * Los asientos no se liberaban y las reservas se acumulaban.
+     *
+     * Ahora el fallo se registra y el barrido sigue con la siguiente. El siguiente ciclo del
+     * planificador volverá a intentar la que falló, que es el comportamiento deseado: reintento
+     * sin bloqueo. `withDeadlockRetry` se conserva tal cual para el caso del interbloqueo.
+     */
+    let processed: { id: number; seats: number } | null = null;
+    try {
+      processed = await withDeadlockRetry(() => withTransaction(async (connection) => {
+        // El viaje primero, igual que en la venta y en la confirmación (auditoría BP-19).
+        // Las tres rutas que cambian la ocupación de un asiento toman ahora los cerrojos en
+        // el mismo orden —viaje, luego reserva—, de modo que no pueden quedarse esperándose
+        // mutuamente. Esta transacción además actualiza `trips`, así que el cerrojo lo iba a
+        // necesitar de todos modos; solo se adelanta.
+        await connection.query('SELECT id FROM trips WHERE id = ? LIMIT 1 FOR UPDATE', [candidate.trip_id]);
 
-      const [rows] = await connection.query(
-        `SELECT id, user_id, trip_id, booking_code, passenger_count, total_amount, status
-         FROM bookings
-         WHERE id = ? AND status = 'PENDING' AND expires_at IS NOT NULL AND expires_at <= NOW()
-         LIMIT 1 FOR UPDATE`,
-        [candidate.id],
-      );
-      const booking = (rows as Array<DueBooking & { status: string }>)[0];
-      // Otro proceso pudo pagarla o expirarla entre el listado y el bloqueo.
-      if (!booking) return null;
+        const [rows] = await connection.query(
+          `SELECT id, user_id, trip_id, booking_code, passenger_count, total_amount, status, expires_at
+           FROM bookings
+           WHERE id = ? AND status = 'PENDING' AND expires_at IS NOT NULL AND expires_at <= NOW()
+           LIMIT 1 FOR UPDATE`,
+          [candidate.id],
+        );
+        const booking = (rows as Array<DueBooking & { status: string; expires_at: string | null }>)[0];
+        // Otro proceso pudo pagarla o expirarla entre el listado y el bloqueo.
+        if (!booking) return null;
 
-      await connection.query("UPDATE bookings SET status = 'EXPIRED' WHERE id = ?", [booking.id]);
+        await connection.query("UPDATE bookings SET status = 'EXPIRED' WHERE id = ?", [booking.id]);
 
-      // Mismo efecto que antes, sin bloquear pagos de otras reservas: ver `cancelOpenPayments`.
-      await cancelOpenPayments(connection, booking.id, ['PENDING', 'PROCESSING']);
+        // Mismo efecto que antes, sin bloquear pagos de otras reservas: ver `cancelOpenPayments`.
+        await cancelOpenPayments(connection, booking.id, ['PENDING', 'PROCESSING']);
 
-      // Devuelve los cupos sin pasarse de la capacidad de LA VERSION que usa este viaje.
-      // Se sustituye el JOIN contra `buses` por subconsultas correlacionadas: un recurso
-      // menos que bloquear dentro de la transaccion de expiracion.
-      await connection.query(
-        `UPDATE trips t
-         SET t.available_seats = LEAST(COALESCE(t.available_seats, 0) + ?, ${TRIP_SEAT_CAPACITY_SQL})
-         WHERE t.id = ? AND t.available_seats IS NOT NULL`,
-        [booking.passenger_count, booking.trip_id],
-      );
+        // Devuelve los cupos sin pasarse de la capacidad de LA VERSION que usa este viaje.
+        // Se sustituye el JOIN contra `buses` por subconsultas correlacionadas: un recurso
+        // menos que bloquear dentro de la transaccion de expiracion.
+        await connection.query(
+          `UPDATE trips t
+           SET t.available_seats = LEAST(COALESCE(t.available_seats, 0) + ?, ${TRIP_SEAT_CAPACITY_SQL})
+           WHERE t.id = ? AND t.available_seats IS NOT NULL`,
+          [booking.passenger_count, booking.trip_id],
+        );
 
-      const [seatRows] = await connection.query(
-        `SELECT s.seat_number FROM booking_seats bs JOIN seats s ON s.id = bs.seat_id
-         WHERE bs.booking_id = ? ORDER BY s.seat_number`,
-        [booking.id],
-      );
-      const seatNumbers = (seatRows as Array<{ seat_number: string }>).map((row) => row.seat_number);
+        const [seatRows] = await connection.query(
+          `SELECT s.seat_number FROM booking_seats bs JOIN seats s ON s.id = bs.seat_id
+           WHERE bs.booking_id = ? ORDER BY s.seat_number`,
+          [booking.id],
+        );
+        const seatNumbers = (seatRows as Array<{ seat_number: string }>).map((row) => row.seat_number);
 
-      const [tripRows] = await connection.query(
-        `SELECT ol.city AS origin_city, dl.city AS destination_city
-         FROM trips t
-         JOIN routes r ON r.id = t.route_id
-         JOIN locations ol ON ol.id = r.origin_location_id
-         JOIN locations dl ON dl.id = r.destination_location_id
-         WHERE t.id = ? LIMIT 1`,
-        [booking.trip_id],
-      );
-      const tripInfo = (tripRows as Array<Record<string, string>>)[0] ?? {};
+        const [tripRows] = await connection.query(
+          `SELECT ol.city AS origin_city, dl.city AS destination_city
+           FROM trips t
+           JOIN routes r ON r.id = t.route_id
+           JOIN locations ol ON ol.id = r.origin_location_id
+           JOIN locations dl ON dl.id = r.destination_location_id
+           WHERE t.id = ? LIMIT 1`,
+          [booking.trip_id],
+        );
+        const tripInfo = (tripRows as Array<Record<string, string>>)[0] ?? {};
 
-      await notify(connection, {
-        userId: booking.user_id,
-        event: NOTIFICATION_EVENTS.BOOKING_EXPIRED,
-        eventKey: `${NOTIFICATION_EVENTS.BOOKING_EXPIRED}:${booking.id}`,
-        context: {
-          ...tripInfo,
-          booking_code: booking.booking_code,
-          booking_id: booking.id,
-          seat_numbers: seatNumbers.join(', '),
-          total_amount: `S/ ${Number(booking.total_amount).toFixed(2)}`,
-        },
-      });
+        await notify(connection, {
+          userId: booking.user_id,
+          event: NOTIFICATION_EVENTS.BOOKING_EXPIRED,
+          eventKey: `${NOTIFICATION_EVENTS.BOOKING_EXPIRED}:${booking.id}`,
+          context: {
+            ...tripInfo,
+            booking_code: booking.booking_code,
+            booking_id: booking.id,
+            seat_numbers: seatNumbers.join(', '),
+            total_amount: `S/ ${Number(booking.total_amount).toFixed(2)}`,
+          },
+        });
 
-      return { id: booking.id, seats: seatNumbers.length };
-    }));
+        /**
+         * RASTRO DE AUDITORÍA (F17C-SEC-10).
+         *
+         * Una reserva pasaba de PENDING a EXPIRED y liberaba asientos sin dejar nada en
+         * `audit_logs`: para `bookings` solo constaba CREATE. Al usuario se le avisaba, sí, pero
+         * una notificación no es una auditoría —se borra, es del usuario y no dice qué cambió—.
+         * Una expiración masiva anómala era indistinguible de la operación normal.
+         *
+         * Va DENTRO de la transacción y a propósito: o quedan el cambio de estado y su registro,
+         * o no queda ninguno de los dos. Si esta escritura fallara, la transacción entera se
+         * deshace, la reserva sigue PENDING y el barrido la cuenta como fallida (SEC-06) para
+         * reintentarla en el ciclo siguiente. Prefiero eso a una reserva expirada sin rastro.
+         *
+         * `user_id` queda en NULL porque no hay nadie detrás; quién fue se lee en `actor`.
+         */
+        await recordSystemAudit({
+          action: 'EXPIRE',
+          entityType: 'bookings',
+          entityId: booking.id,
+          actor: 'system:booking-expiry',
+          description: `Expiró automáticamente la reserva ${booking.booking_code} por falta de pago`,
+          oldValues: { status: 'PENDING', expires_at: booking.expires_at },
+          newValues: {
+            status: 'EXPIRED',
+            trip_id: booking.trip_id,
+            seats_released: seatNumbers.length,
+            reason: 'hold_expired',
+          },
+        }, connection);
+
+        return { id: booking.id, seats: seatNumbers.length };
+      }));
+    } catch (error) {
+      // El identificador de la reserva basta para investigar; no se registra nada del pasajero.
+      result.failed += 1;
+      logError('No se pudo expirar una reserva vencida', error, { bookingId: candidate.id });
+      continue;
+    }
 
     if (processed) {
       result.expired += 1;
@@ -199,6 +255,10 @@ export function startBookingExpiryScheduler(intervalMs: number): void {
       const result = await expireDueBookings();
       if (result.expired > 0) {
         console.log(`↺ Reservas expiradas: ${result.expired} (${result.bookingIds.join(', ')}), asientos liberados: ${result.seatsReleased}`);
+      }
+      // Una pasada incompleta se avisa: si el número no baja, hay una reserva atascada.
+      if (result.failed > 0) {
+        logError('Algunas reservas vencidas no se pudieron expirar', new Error(`${result.failed} con fallo`), {});
       }
     } catch (error) {
       logError('Error al expirar reservas vencidas', error);

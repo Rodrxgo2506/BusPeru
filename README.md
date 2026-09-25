@@ -50,6 +50,7 @@ El dump es el esquema original. Todo lo añadido después vive en `database/migr
 después de importar el dump:
 
 ```bash
+mysql -u root -p busperu < database/migrations/001-permiso-resenas-company-admin.sql
 mysql -u root -p busperu < database/migrations/002-password-reset-tokens.sql
 mysql -u root -p busperu < database/migrations/003-company-bank-accounts.sql
 mysql -u root -p busperu < database/migrations/004-drivers.sql
@@ -63,22 +64,52 @@ mysql -u root -p busperu < database/migrations/011-trip-seat-type-prices-restric
 mysql -u root -p busperu < database/migrations/012-drop-redundant-code-indexes.sql
 mysql -u root -p busperu < database/migrations/013-settlement-item-unique-transaction.sql
 mysql -u root -p busperu < database/migrations/014-revoked-sessions.sql
+mysql -u root -p busperu < database/migrations/015-destinations-content-branding.sql
+mysql -u root -p busperu < database/migrations/016-destination-enhancements.sql
+mysql -u root -p busperu < database/migrations/017-users-sessions-valid-from.sql
+mysql -u root -p busperu < database/migrations/018-fk-on-update-restrict-mariadb-1011.sql
 ```
 
-Es exactamente la lista que la suite de tests aplica sobre `busperu_test`. Con las trece, la base tiene **46 tablas**:
+**La cadena actual va de la `001` a la `018`** y se aplica completa, en orden y sin saltarse ninguna. La suite de
+tests aplica de la `002` a la `018` sobre `busperu_test` y reproduce en su preparación el cambio de datos de `001`.
+Hasta la `014`, la base tiene **46 tablas**:
 `012` elimina los índices `idx_bookings_code` e `idx_coupons_code`, duplicados de sus índices únicos (auditoría H-19);
 `013` pone UNIQUE sobre `settlement_items.financial_transaction_id` —un movimiento no puede estar en dos
 liquidaciones, auditoría F12-02— y retira el índice simple que duplicaría; `014` crea `revoked_sessions`, los tokens
-revocados al cerrar sesión (auditoría F12-07).
+revocados al cerrar sesión (auditoría F12-07). `015` (FASE 17) crea `destinations`, `destination_attractions` y
+`destination_festivities` y las claves públicas `branding.*` de `system_settings`: con ella la base tiene **49 tablas**.
+`016` (FASE 17B) no crea tablas: añade a `destinations` la altitud, la temperatura, el tiempo de viaje, los horarios de
+pasajes y encomiendas, la imagen del calendario festivo y dos referencias a `locations` (ciudad del destino y ciudad de
+origen sugerida). `schedule` y `weather` quedan obsoletas: se copian a `ticket_schedule` y `temperature` y dejan de usarse.
+`017` (F17C-SEC-10) no crea tablas: añade `users.sessions_valid_from` (`DATETIME NULL`), el instante desde el que son
+válidas las sesiones de una cuenta. Avanza al suspenderla y no retrocede al reactivarla, de modo que un token emitido
+antes de la suspensión no vuelve a servir. `NULL` significa «nunca suspendida» y no restringe nada.
+`018` (F18-02B) no crea tablas: deja `fk_integrations_company` y `fk_bus_layouts_bus` en `ON DELETE CASCADE ON UPDATE
+RESTRICT`, que es como las crean ahora 009 y 010. Es lo que permite instalar el esquema en MariaDB 10.11 (producción),
+que rechaza una columna generada STORED sobre una columna con clave ajena `ON UPDATE CASCADE`. El borrado en cascada no
+cambia y ninguna clave primaria se actualiza nunca.
 
 > **Estado de `012`, `013` y `014`:** la suite las aplica en `busperu_test` y **ya están aplicadas en la base
 > `busperu`** de este equipo (46 tablas, FASE 13, con backup previo). Cualquier otra base —en particular la de
 > producción— necesita que se ejecuten de forma explícita. `013` comprueba antes que no haya movimientos repetidos en
 > `settlement_items`; si los hubiera, falla sin cambiar nada. **`014` debe aplicarse antes de desplegar el código
 > actual**: el middleware de autenticación consulta `revoked_sessions` en cada petición autenticada.
+>
+> **Estado de `015` y `016`:** creadas y aplicadas solo en `busperu_test` (la suite las aplica). **No se han aplicado a
+> `busperu`.** Ambas deben aplicarse antes de desplegar el código de las FASES 17/17B: la portada y `/destinos/:slug`
+> consultan sus tablas y columnas.
+>
+> **Estado de `017`:** creada en F17C-SEC-10 y aplicada solo en `busperu_test` (la suite la aplica). **No se ha
+> aplicado a `busperu`.** **Es obligatoria antes de desplegar el código actual**: el middleware de autenticación lee
+> `users.sessions_valid_from` en cada petición autenticada, y sin la columna todas fallan.
+>
+> **Estado de `018`:** creada en F18-02B, aplicada en `busperu_test` y en la validación sobre MariaDB 10.11. **No se
+> ha aplicado a `busperu`.** En 10.4 no es imprescindible para funcionar, pero deja el esquema igual al de producción.
 
-`010`, `011`, `012`, `013` y `014` son reejecutables. `001-permiso-resenas-company-admin.sql` es distinta: no cambia el esquema, concede
-`reviews.update` al rol `COMPANY_ADMIN` en `role_permissions`, y la suite no la aplica. Qué añade cada migración y en
+`010` a `018` son reejecutables (`017` y `018` consultan `information_schema` y no hacen nada si ya están aplicadas).
+`001-permiso-resenas-company-admin.sql` es distinta: no cambia el esquema, concede `reviews.update` al rol
+`COMPANY_ADMIN` en `role_permissions` (también es idempotente), y la suite no ejecuta el archivo sino que reproduce ese
+cambio en su preparación. Qué añade cada migración y en
 qué estado queda cada funcionalidad está en
 [`database/migrations/PENDIENTES.md`](database/migrations/PENDIENTES.md).
 
@@ -115,6 +146,9 @@ MICROSOFT_TENANT=common
 # responde 503 y no guarda nada en texto plano. Independiente de JWT_SECRET.
 # Generar con:  node -e "console.log(require('crypto').randomBytes(32).toString('base64'))"
 INTEGRATIONS_ENCRYPTION_KEY=
+# Solo durante una rotación: la clave ANTERIOR, que únicamente descifra lo ya guardado.
+# Vacía el resto del tiempo. Procedimiento y límites en PRODUCCION.md (sección 2).
+INTEGRATIONS_ENCRYPTION_KEY_PREVIOUS=
 ```
 
 El `redirect_uri` que hay que registrar en la consola de cada proveedor es
@@ -237,7 +271,9 @@ busperu/
 │       └── types/          # tipos espejo del esquema
 └── database/
     ├── schema/Dump20260831.sql
-    └── migrations/            # 001..014 + PENDIENTES.md (qué añade cada una y en qué estado está)
+    └── migrations/            # 001..018 + PENDIENTES.md (qué añade cada una y en qué estado está)
+infra/aws/                     # F18-03: plantilla CloudFormation y scripts de despliegue (ver docs/production/STAGING-RUNBOOK.md)
+infra/aws/iam/                 # F18-03D: rol de despliegue BusPeruStagingDeployer y sus políticas (cuenta como {{ACCOUNT_ID}})
 ```
 
 ### Flujo de autenticación
@@ -462,6 +498,33 @@ pero no puede dar de alta ni editar personal.
 
 El `document_number` es único en toda la tabla (así lo define la migración). Si el documento ya existe la API
 responde 409 con un mensaje neutro, para no revelar en qué otra empresa está registrada esa persona.
+
+### Contenido de destinos e identidad visual (FASE 17)
+
+- **Contenido › Destinos** (`/admin/destinations`): alta, edición, orden (↑ ↓), publicar/ocultar y eliminación de
+  destinos editoriales; «Gestionar contenido» administra la imagen principal, «Qué visitar» (atractivos) y «Calendario
+  festivo». Un destino publicado no se elimina: primero se oculta. Solo ADMIN (permisos `settings.*` + rol ADMIN en la API).
+- **Web pública**: «Descubre más destinos» es un carrusel a ancho completo en la portada
+  (`GET /public/featured-destinations`) y una única ruta `/destinos/:slug` (`GET /public/destinations/:slug`) para todos
+  los destinos, con hero bajo, barra de compra compacta (fija en naranja al hacer scroll), información con insignias
+  de altitud, temperatura y tiempo de viaje, slider de atractivos y calendario festivo. Solo se publica contenido ACTIVE. Los
+  textos son texto plano: se muestran escapados. `price_from` es informativo y no toca precios de viajes, pagos ni
+  liquidaciones. La ruta antigua `/public/destinations` (destinos con viajes programados) no cambia.
+- **Configuración › Identidad visual** (`/admin/branding`): logo, logo móvil, favicon e imagen Open Graph, guardados como
+  referencias en `system_settings` (`branding.*`). `index.html` apunta a `GET /public/branding/favicon`, una URL estable:
+  cambiar el favicon no exige reconstruir. La imagen Open Graph se inserta en cliente, así que los rastreadores que no
+  ejecutan JavaScript no la ven (limitación de una SPA).
+- **Imágenes**: el mismo almacén y la misma validación que los documentos (`file-storage.service.ts`: extensión, MIME,
+  bytes mágicos, nombre aleatorio, contención de ruta), en `STORAGE_DIR/public/`. JPG, PNG y WebP (favicon: PNG o ICO);
+  sin SVG. Se sirven por `GET /public/media/<referencia>`, que solo acepta referencias `public/...` con la forma exacta que
+  genera el servidor y responde con `nosniff`, caché inmutable y `Cross-Origin-Resource-Policy: cross-origin`.
+- **Ciudad asociada (FASE 17B)**: cada destino puede referenciar una ubicación real de `locations` (y otra como origen
+  sugerido). Con ella, el buscador de la ficha llega precargado; sin ella, los campos quedan vacíos. Nunca se deduce del
+  nombre ni del slug.
+- **Buscador**: origen y destino usan un único `LocationDropdown` (búsqueda sin tildes, teclado, clic fuera) sobre
+  `GET /public/cities`; pasajeros con adultos/niños/bebés. La búsqueda sigue recibiendo el total de pasajeros.
+- El seed de desarrollo crea cuatro destinos marcados **DEMO** (Cajamarca, Huaraz, Trujillo, La Merced) sin precios ni
+  datos turísticos inventados.
 
 ### Integraciones por empresa (mockup 37)
 
@@ -805,6 +868,10 @@ Formato de respuesta uniforme:
 
 Todos los listados aceptan `page`, `limit`, `search`, `sort`, `order` y filtros por columna.
 
+Comprobaciones del servicio: `GET /api/health` (*liveness*: el proceso responde, no consulta
+nada) y `GET /api/ready` (*readiness*: base de datos y `STORAGE_DIR`; `200 {"status":"ready"}`
+o `503 {"status":"not_ready"}`, sin detalles internos).
+
 | Grupo | Endpoints |
 | --- | --- |
 | Auth | `POST /api/auth/login` · `POST /api/auth/register` · `POST /api/auth/register/company` · `GET /api/auth/me` · `PUT /api/auth/me` · `PUT /api/auth/me/password` · `POST /api/auth/logout` |
@@ -978,6 +1045,8 @@ npm run test:coverage # suite + informe de cobertura
 | `61-f12-cross-company-and-settlements.test.ts` | F12-01 · F12-02 · F12-03 · cupones y paradas no cambian de empresa por su padre, liquidaciones sin duplicados y máquina de estados con un único `PAYOUT` |
 | `62-f12-p3-dates-sessions-secrets.test.ts` | F12-04 · F12-07 · F12-08 · periodos de liquidación reales, revocación de sesión al cerrar y secretos de producción |
 | `63-f15-production-hardening.test.ts` | F15-04 · F15-05 · F15-08 · F15-10 · F15-11 · configuración de producción sin defaults inseguros, `TRUST_PROXY`, registro de acceso sin secretos, plantillas con arranques concurrentes y remitente de correo |
+| `64-destinations-cms-branding.test.ts` | FASE 17 · CRUD de destinos, atractivos y festividades, slug, orden, borrado seguro con archivos, API pública solo ACTIVE, imágenes (formatos, bytes mágicos, reemplazo, canal público sin documentos privados ni traversal), identidad visual, permisos por rol y auditoría |
+| `65-destination-enhancements.test.ts` | FASE 17B · migración `016`: columnas nuevas, índices y claves ajenas a `locations` con `SET NULL`, CRUD y validaciones de altitud, temperatura, horarios y tiempo de viaje, filtro por ciudad, ficha pública con ciudades resueltas e imagen del calendario festivo |
 
 El frontend tiene una prueba sin dependencias de la validación de `VITE_API_URL` (F15-02): `cd frontend && npm test`
 (usa la ejecución nativa de TypeScript de Node: requiere Node 22.18+ o 23.6+; probado con 24.x).
@@ -993,7 +1062,17 @@ npm run start      # ejecutar el build
 npm run typecheck  # verificación de tipos
 npm run seed       # datos de desarrollo
 npm test           # suite de tests (base busperu_test)
+npm run admin:bootstrap      # alta del primer ADMIN (build; interactivo, una sola vez)
+npm run admin:bootstrap:dev  # lo mismo sin compilar
 ```
+
+`admin:bootstrap` pide los datos por consola (la contraseña, dos veces y sin eco), exige
+teclear el nombre de la base para confirmar y se niega si ya existe un administrador. No
+acepta argumentos: una contraseña en la línea de órdenes quedaría en el historial.
+Procedimiento completo en `PRODUCCION.md` (sección 3).
+
+Para ejecutar la suite con el modo SQL estricto de producción (solo en las conexiones de
+prueba): `TEST_SQL_MODE="STRICT_TRANS_TABLES,ERROR_FOR_DIVISION_BY_ZERO,NO_AUTO_CREATE_USER,NO_ENGINE_SUBSTITUTION" npm test`.
 
 Para iterar sobre un solo archivo de la suite, `npm test -- --filter=<parte del nombre>`;
 por ejemplo `npm test -- --filter=17-oauth`. La sonda de seguridad de OAuth se ejecuta

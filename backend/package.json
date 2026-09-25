@@ -10,6 +10,10 @@
     "start": "node dist/server.js",
     "typecheck": "tsc --noEmit",
     "seed": "tsx src/database/seed.ts",
+    "admin:bootstrap": "node dist/scripts/bootstrap-admin.js",
+    "admin:bootstrap:dev": "tsx src/scripts/bootstrap-admin.ts",
+    "bank:encrypt": "node dist/scripts/encrypt-bank-accounts.js",
+    "bank:encrypt:dev": "tsx src/scripts/encrypt-bank-accounts.ts",
     "test": "tsx src/test/run.ts",
     "test:coverage": "tsx src/test/run.ts --coverage"
   },

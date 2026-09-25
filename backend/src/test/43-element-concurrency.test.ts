@@ -70,7 +70,7 @@ describe('H-07 · elementos y rejilla bajo el mismo cerrojo', () => {
     );
   const elementos = (id = deckId) =>
     query<ElementoFila>(
-      'SELECT id, deck_id, element_type, row_number, column_number, row_span, col_span FROM bus_layout_elements WHERE deck_id = ? ORDER BY id',
+      'SELECT id, deck_id, element_type, `row_number`, column_number, row_span, col_span FROM bus_layout_elements WHERE deck_id = ? ORDER BY id',
       [id],
     );
 
@@ -104,7 +104,7 @@ describe('H-07 · elementos y rejilla bajo el mismo cerrojo', () => {
 
     // Y ningún asiento compartiendo casilla con un elemento.
     const asientos = await query<{ id: number; row_number: number; column_number: number }>(
-      'SELECT id, row_number, column_number FROM seats WHERE deck_id = ?',
+      'SELECT id, `row_number`, column_number FROM seats WHERE deck_id = ?',
       [id],
     );
     for (const asiento of asientos) {
@@ -350,7 +350,7 @@ describe('H-07 · elementos y rejilla bajo el mismo cerrojo', () => {
 
     it('17 · un elemento no puede caer sobre un asiento', async () => {
       await execute(
-        `INSERT INTO seats (bus_id, layout_id, deck_id, seat_type_id, seat_number, row_number, column_number, is_window, is_aisle, status)
+        `INSERT INTO seats (bus_id, layout_id, deck_id, seat_type_id, seat_number, \`row_number\`, column_number, is_window, is_aisle, status)
          VALUES (?, ?, ?, NULL, '01', 5, 5, 0, 0, 'AVAILABLE')`,
         [ctx.fixtures.busA, layoutId, deckId],
       );
@@ -430,7 +430,7 @@ describe('H-07 · elementos y rejilla bajo el mismo cerrojo', () => {
 
       await execute('DELETE FROM bus_layout_elements WHERE deck_id = ?', [deckId]);
       await execute(
-        `INSERT INTO seats (bus_id, layout_id, deck_id, seat_type_id, seat_number, row_number, column_number, is_window, is_aisle, status)
+        `INSERT INTO seats (bus_id, layout_id, deck_id, seat_type_id, seat_number, \`row_number\`, column_number, is_window, is_aisle, status)
          VALUES (?, ?, ?, NULL, '02', 10, 1, 0, 0, 'AVAILABLE')`,
         [ctx.fixtures.busA, layoutId, deckId],
       );

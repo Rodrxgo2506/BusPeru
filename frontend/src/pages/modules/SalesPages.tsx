@@ -88,7 +88,7 @@ export function BookingsPage({ scope }: { scope: 'company' | 'admin' }) {
     <>
       <ResourcePage<Booking>
         title="Reservas"
-        description="Gestiona todas las reservas realizadas en tus viajes."
+        description={scope === 'company' ? 'Gestiona todas las reservas realizadas en tus viajes.' : 'Consulta todas las reservas realizadas en la plataforma.'}
         breadcrumbs={[{ label: scope === 'company' ? 'Portal Empresa' : 'Administración' }, { label: 'Reservas' }]}
         loader={(params) => bookingService.list(params)}
         reloadToken={reloadToken}

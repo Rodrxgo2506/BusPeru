@@ -58,6 +58,58 @@ async function seedSystemSettings(): Promise<void> {
   }
 }
 
+/**
+ * FASE 17 · destinos editoriales de DEMOSTRACIÓN. Solo para la base de desarrollo (`*_test`).
+ *
+ * No se inventan precios, horarios, clima ni datos turísticos: los textos dicen explícitamente
+ * que son de demostración y los campos informativos quedan vacíos para que el ADMIN los complete
+ * con información verificada desde «Contenido › Destinos».
+ */
+async function seedDemoDestinations(): Promise<number> {
+  const demo: Array<[string, string]> = [
+    ['Cajamarca', 'cajamarca'],
+    ['Huaraz', 'huaraz'],
+    ['Trujillo', 'trujillo'],
+    ['La Merced', 'la-merced'],
+  ];
+  // FASE 17B · la ciudad sale de `locations`, no de texto: solo se asocia si esa ciudad existe.
+  const cityLocation = async (city: string): Promise<number | null> => {
+    const row = await queryOne<{ id: number }>("SELECT id FROM locations WHERE city = ? AND status = 'ACTIVE' ORDER BY id LIMIT 1", [city]);
+    return row?.id ?? null;
+  };
+  const originId = await cityLocation('Lima');
+
+  for (const [index, [name, slug]] of demo.entries()) {
+    const destinationId = await upsert('destinations', 'slug = ?', [slug], {
+      name,
+      slug,
+      subtitle: 'Contenido DEMO',
+      description: `Texto de DEMOSTRACIÓN para ${name}. Reemplázalo con información verificada desde el panel de administración (Contenido › Destinos).`,
+      price_from: null,
+      status: 'ACTIVE',
+      display_order: index + 1,
+      location_id: await cityLocation(name),
+      origin_location_id: originId,
+    });
+    await upsert('destination_attractions', 'destination_id = ? AND name = ?', [destinationId, 'Atractivo DEMO'], {
+      destination_id: destinationId,
+      name: 'Atractivo DEMO',
+      description: 'Atractivo de demostración. Reemplázalo desde el panel.',
+      display_order: 1,
+      status: 'ACTIVE',
+    });
+    await upsert('destination_festivities', 'destination_id = ? AND name = ?', [destinationId, 'Festividad DEMO'], {
+      destination_id: destinationId,
+      name: 'Festividad DEMO',
+      date_label: 'Por definir',
+      description: 'Festividad de demostración. Reemplázala desde el panel.',
+      display_order: 1,
+      status: 'ACTIVE',
+    });
+  }
+  return demo.length;
+}
+
 async function seedCatalogues(): Promise<{ busTypeIds: number[]; seatTypeIds: number[] }> {
   const busTypes = [
     ['Cama 160°', 'Asientos reclinables a 160 grados', 42],
@@ -175,7 +227,7 @@ async function seedPublishedLayout(busId: number, plan: BusLayoutPlan, seatTypeI
     for (const column of plan.seatColumns) {
       if (seatNumber > plan.capacity) break;
       await execute(
-        `INSERT INTO seats (bus_id, layout_id, deck_id, seat_type_id, seat_number, row_number, column_number, is_window, is_aisle, status)
+        `INSERT INTO seats (bus_id, layout_id, deck_id, seat_type_id, seat_number, \`row_number\`, column_number, is_window, is_aisle, status)
          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'AVAILABLE')`,
         [
           busId,
@@ -425,9 +477,12 @@ async function main(): Promise<void> {
     }
   }
 
+  const demoDestinations = await seedDemoDestinations();
+
   const tripCount = await queryOne<{ total: number }>('SELECT COUNT(*) AS total FROM trips');
   console.log('✔ Seed completado.');
   console.log(`   Empresas: ${companyIds.length} · Buses: ${busIds.length} · Rutas: ${routeIds.length} · Viajes: ${tripCount?.total ?? 0}`);
+  console.log(`   Destinos DEMO: ${demoDestinations} (contenido de demostración, sin precios ni datos turísticos)`);
   console.log('   Usuarios de prueba (contraseña: %s):', DEMO_PASSWORD);
   console.log(`   · admin@busperu.com     (ADMIN, id ${adminId})`);
   console.log(`   · empresa@busperu.com   (COMPANY_ADMIN, id ${companyAdminId})`);

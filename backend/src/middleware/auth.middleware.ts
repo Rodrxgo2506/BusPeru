@@ -1,5 +1,5 @@
 import type { NextFunction, Request, Response } from 'express';
-import { findPasswordHash, loadAuthenticatedUser } from '../repositories/user.repository';
+import { findSessionGuard, loadAuthenticatedUser } from '../repositories/user.repository';
 import { ApiError } from '../utils/ApiError';
 import { isSessionRevoked } from '../services/session-revocation.service';
 import { sessionFingerprint, verifyToken, type TokenPayload } from '../utils/security';
@@ -23,13 +23,41 @@ function extractToken(req: Request): string | null {
  * iniciar sesión otra vez una sola vez, al desplegar.
  */
 async function assertSessionIsCurrent(payload: TokenPayload): Promise<void> {
-  const passwordHash = await findPasswordHash(payload.sub);
-  if (!passwordHash || payload.pwd !== sessionFingerprint(passwordHash)) {
+  const guard = await findSessionGuard(payload.sub);
+  if (!guard || payload.pwd !== sessionFingerprint(guard.passwordHash)) {
     throw ApiError.unauthorized('Tu sesión ya no es válida. Vuelve a iniciar sesión.');
   }
   // F12-07: un token cerrado con `POST /auth/logout` no vuelve a entrar.
   if (typeof payload.jti === 'string' && (await isSessionRevoked(payload.jti))) {
     throw ApiError.unauthorized('Tu sesión se cerró. Vuelve a iniciar sesión.');
+  }
+  assertIssuedAfterTermination(payload, guard.sessionsValidFrom);
+}
+
+/**
+ * TERCERA CAPA, que se SUMA a las dos de arriba (F17C-SEC-10).
+ *
+ * Suspender una cuenta ya cortaba el acceso mientras durase la suspensión, porque el estado se
+ * relee en cada petición. Lo que no hacía era terminar la sesión: al reactivar, un token emitido
+ * antes volvía a funcionar hasta agotar sus 8 horas. En el caso que de verdad importa —se
+ * suspende porque se sospecha que la cuenta está comprometida— el token del atacante quedaba en
+ * pausa, no destruido.
+ *
+ * `sessions_valid_from` avanza al salir de ACTIVE y NO retrocede al volver, así que todo token
+ * anterior queda fuera para siempre y solo sirve iniciar sesión de nuevo.
+ *
+ * SOBRE LA COMPARACIÓN ESTRICTA. `iat` va en segundos. Si un token se emitió en el MISMO segundo
+ * en que se suspendió la cuenta, no hay forma de saber cuál de los dos ocurrió antes, así que se
+ * rechaza: el lado seguro. No hay falso positivo posible en el sentido contrario, porque mientras
+ * la cuenta está suspendida el inicio de sesión ya está bloqueado y no puede emitirse un token
+ * legítimo con ese `iat`. El único coste es que ese usuario vuelva a entrar.
+ *
+ * Un token SIN `iat` también se rechaza cuando hay marca: no se puede demostrar que sea posterior.
+ */
+function assertIssuedAfterTermination(payload: TokenPayload, sessionsValidFrom: number | null): void {
+  if (sessionsValidFrom === null) return;
+  if (typeof payload.iat !== 'number' || payload.iat <= sessionsValidFrom) {
+    throw ApiError.unauthorized('Tu sesión se cerró por un cambio en la cuenta. Vuelve a iniciar sesión.');
   }
 }
 

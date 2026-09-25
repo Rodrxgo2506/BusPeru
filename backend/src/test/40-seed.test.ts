@@ -164,7 +164,7 @@ describe('H-02 · el seed siembra versiones de distribución completas', () => {
 
     it('13 · dos asientos no comparten casilla en el mismo piso', async () => {
       const choques = await query<{ deck_id: number; row_number: number; column_number: number }>(
-        'SELECT deck_id, row_number, column_number FROM seats GROUP BY deck_id, row_number, column_number HAVING COUNT(*) > 1',
+        'SELECT deck_id, `row_number`, column_number FROM seats GROUP BY deck_id, `row_number`, column_number HAVING COUNT(*) > 1',
       );
       assert.deepEqual(choques, []);
     });

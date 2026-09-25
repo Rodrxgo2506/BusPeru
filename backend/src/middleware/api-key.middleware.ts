@@ -10,9 +10,19 @@ import { ApiError } from '../utils/ApiError';
  * confunde una llave con una persona, y `requirePermission`, `requireRole` o
  * `visibilityScope` siguen comportándose exactamente igual que hasta ahora.
  *
- * NO está montado en ninguna ruta todavía, y es deliberado: BusPerú no tiene hoy ninguna
- * superficie pensada para sistemas externos, y no se inventan endpoints de negocio para
- * justificar el mecanismo. Ver el informe de la fase.
+ * DÓNDE ESTÁ MONTADO. `authenticateApiKeyRequest` protege la superficie de integración para
+ * sistemas externos: `routes/index.ts` monta `integration.routes.ts` bajo `/api/integration/v1`,
+ * y ese router lo aplica con `router.use(...)`, de modo que cubre TODOS sus endpoints antes que
+ * ninguna otra cosa. No está montado en ningún otro sitio: en el resto de la API la credencial
+ * sigue siendo el JWT, y una API Key no sirve allí.
+ *
+ * QUÉ GARANTIZA ESE CANAL, comprobado sobre el código de `integration.routes.ts`:
+ *   · Es de SOLO LECTURA: no contiene ningún INSERT, UPDATE ni DELETE.
+ *   · La empresa sale siempre de `req.apiKey.companyId`. Ese archivo no lee `company_id` del
+ *     cuerpo, de la query, de los parámetros ni de otra cabecera, así que no hay nada que
+ *     manipular para salirse del alcance.
+ *   · Usa `trips.view` y `bookings.view`, permisos ya existentes, recortados además al techo de
+ *     la empresa por `api-key.service.ts`.
  */
 
 function extractApiKey(req: Request): string | null {

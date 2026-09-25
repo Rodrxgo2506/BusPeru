@@ -1,9 +1,14 @@
-import { ArrowRightLeft, BusFront, CalendarDays, MapPin, Plus, Route as RouteIcon, Search, Trash2, Users } from 'lucide-react';
+import { ArrowRightLeft, BusFront, CalendarDays, Plus, Route as RouteIcon, Search, Trash2 } from 'lucide-react';
 import { useState, type FormEvent, type ReactNode } from 'react';
 import { useNavigate } from 'react-router-dom';
+import { LocationDropdown } from '@/components/common/LocationDropdown';
+import { PassengerSelector } from '@/components/common/PassengerSelector';
 import { Button } from '@/components/ui';
+import { useAsync } from '@/hooks/useAsync';
+import { publicService } from '@/services';
 import type { TripType } from '@/pages/public/checkout/CheckoutContext';
 import { todayIso } from '@/utils/format';
+import { DEFAULT_PASSENGERS, totalPassengers, type PassengerCounts } from '@/utils/passengers';
 import { cn } from '@/utils/cn';
 
 /**
@@ -45,54 +50,45 @@ export function decodeSegments(raw: string | null): SegmentDraft[] {
     .filter((segment) => segment.origin && segment.destination && segment.date);
 }
 
-function SelectCity({
+/** Máximo de pasajeros si la plataforma no publica `booking.max_seats_per_booking`: el de siempre. */
+const FALLBACK_MAX_PASSENGERS = 6;
+
+function DateField({
   label,
   value,
+  min,
   onChange,
-  options,
-  placeholder,
+  appearance = 'field',
+  tone = 'light',
 }: {
   label: string;
   value: string;
+  min: string;
   onChange: (value: string) => void;
-  options: string[];
-  placeholder: string;
+  appearance?: 'field' | 'bar';
+  tone?: 'light' | 'onBrand';
 }) {
+  const bar = appearance === 'bar';
+  const onBrand = tone === 'onBrand';
   return (
-    <label className="block rounded-control border border-border p-3 focus-within:border-brand-500">
-      <span className="mb-1 block text-xs font-medium text-muted">{label}</span>
+    <label
+      className={cn(
+        'block',
+        bar ? 'rounded-lg px-3 py-1.5' : 'rounded-control border border-border p-3 focus-within:border-brand-500',
+      )}
+    >
+      <span className={cn('block text-xs font-medium', bar ? 'mb-0.5' : 'mb-1', onBrand ? 'text-white/85' : 'text-muted')}>{label}</span>
       <span className="flex items-center gap-2">
-        <MapPin className="h-4 w-4 shrink-0 text-brand-500" />
-        <select
-          value={value}
-          onChange={(event) => onChange(event.target.value)}
-          className="w-full cursor-pointer border-0 bg-transparent p-0 text-sm font-medium text-ink focus:outline-none focus:ring-0"
-          aria-label={label}
-        >
-          <option value="">{placeholder}</option>
-          {options.map((city) => (
-            <option key={city} value={city}>
-              {city}
-            </option>
-          ))}
-        </select>
-      </span>
-    </label>
-  );
-}
-
-function DateField({ label, value, min, onChange }: { label: string; value: string; min: string; onChange: (value: string) => void }) {
-  return (
-    <label className="block rounded-control border border-border p-3 focus-within:border-brand-500">
-      <span className="mb-1 block text-xs font-medium text-muted">{label}</span>
-      <span className="flex items-center gap-2">
-        <CalendarDays className="h-4 w-4 shrink-0 text-brand-500" />
+        {!bar && <CalendarDays className="h-4 w-4 shrink-0 text-brand-500" aria-hidden />}
         <input
           type="date"
           value={value}
           min={min}
           onChange={(event) => onChange(event.target.value)}
-          className="w-full border-0 p-0 text-sm font-medium text-ink focus:outline-none focus:ring-0"
+          className={cn(
+            'w-full border-0 bg-transparent p-0 text-sm font-medium focus:outline-none focus:ring-0',
+            onBrand ? 'text-white [color-scheme:dark]' : 'text-ink',
+          )}
           aria-label={label}
         />
       </span>
@@ -100,16 +96,37 @@ function DateField({ label, value, min, onChange }: { label: string; value: stri
   );
 }
 
-export function TripSearchForm({ cities }: { cities: string[] }) {
+export function TripSearchForm({
+  cities,
+  initialDestination = '',
+  initialOrigin = '',
+  variant = 'card',
+  tone = 'light',
+}: {
+  cities: string[];
+  initialDestination?: string;
+  /** FASE 17B · la ficha de destino precarga origen y destino desde el CMS. */
+  initialOrigin?: string;
+  /** `card`: tarjeta con pestañas (portada). `bar`: una sola fila compacta (ficha de destino). */
+  variant?: 'card' | 'bar';
+  tone?: 'light' | 'onBrand';
+}) {
   const navigate = useNavigate();
 
   const [tab, setTab] = useState<TripType>('ONE_WAY');
-  const [passengers, setPassengers] = useState('1');
+  const [passengerCounts, setPassengerCounts] = useState<PassengerCounts>(DEFAULT_PASSENGERS);
   const [error, setError] = useState<string | null>(null);
 
+  // FASE 17: el tope del selector es el límite de asientos por reserva que publica la plataforma.
+  const settings = useAsync(() => publicService.settings(), []);
+  const configuredMax = Number(settings.data?.['booking.max_seats_per_booking']);
+  const maxPassengers = Number.isInteger(configuredMax) && configuredMax > 0 ? configuredMax : FALLBACK_MAX_PASSENGERS;
+  // El buscador envía el TOTAL, como antes: la búsqueda no aplica reglas por tipo de pasajero.
+  const passengers = String(totalPassengers(passengerCounts));
+
   // Ida e ida y vuelta comparten origen/destino; la vuelta añade su fecha.
-  const [origin, setOrigin] = useState('');
-  const [destination, setDestination] = useState('');
+  const [origin, setOrigin] = useState(initialOrigin);
+  const [destination, setDestination] = useState(initialDestination);
   const [date, setDate] = useState(todayIso());
   const [returnDate, setReturnDate] = useState('');
 
@@ -141,7 +158,7 @@ export function TripSearchForm({ cities }: { cities: string[] }) {
   };
 
   /** Las mismas reglas que valida el backend, para avisar antes de ir al servidor. */
-  function validate(): SegmentDraft[] | null {
+  function validate(tab: TripType): SegmentDraft[] | null {
     if (tab === 'ONE_WAY') {
       if (!date) return setError('Elige la fecha de ida'), null;
       return [{ origin, destination, date }];
@@ -175,15 +192,18 @@ export function TripSearchForm({ cities }: { cities: string[] }) {
     return drafts;
   }
 
+  // En la barra compacta no hay pestañas: con fecha de vuelta el viaje es de ida y vuelta.
+  const effectiveTab: TripType = variant === 'bar' ? (returnDate ? 'ROUND_TRIP' : 'ONE_WAY') : tab;
+
   const handleSubmit = (event: FormEvent) => {
     event.preventDefault();
     setError(null);
 
-    const drafts = validate();
+    const drafts = validate(effectiveTab);
     if (!drafts) return;
 
     // IDA: misma URL de siempre, para no cambiar nada de ese flujo.
-    if (tab === 'ONE_WAY') {
+    if (effectiveTab === 'ONE_WAY') {
       const params = new URLSearchParams({ date, passengers });
       if (origin) params.set('origin', origin);
       if (destination) params.set('destination', destination);
@@ -191,9 +211,76 @@ export function TripSearchForm({ cities }: { cities: string[] }) {
       return;
     }
 
-    const params = new URLSearchParams({ type: tab, passengers, segments: encodeSegments(drafts) });
+    const params = new URLSearchParams({ type: effectiveTab, passengers, segments: encodeSegments(drafts) });
     navigate(`/buscar?${params.toString()}`);
   };
+
+  const onBrand = tone === 'onBrand';
+
+  /**
+   * FASE 17B · barra compacta de la ficha de destino: una sola fila en escritorio, con los mismos
+   * controles, la misma validación y la misma navegación que la tarjeta. No hay segunda lógica.
+   */
+  if (variant === 'bar') {
+    const divider = <span aria-hidden className={cn('hidden h-8 w-px lg:block', onBrand ? 'bg-white/30' : 'bg-border')} />;
+    return (
+      <form onSubmit={handleSubmit} noValidate className="w-full">
+        <div className="grid gap-1 sm:grid-cols-2 lg:flex lg:items-center lg:gap-0">
+          <span className={cn('hidden shrink-0 px-3 text-sm font-bold lg:block', onBrand ? 'text-white' : 'text-ink')}>Compra tu pasaje:</span>
+          {divider}
+          <LocationDropdown
+            label="Origen:"
+            value={origin}
+            onChange={setOrigin}
+            options={cities}
+            placeholder="Elegir"
+            appearance="bar"
+            tone={tone}
+            className="lg:w-[150px]"
+          />
+          {divider}
+          <LocationDropdown
+            label="Destino:"
+            value={destination}
+            onChange={setDestination}
+            options={cities}
+            placeholder="Elegir"
+            appearance="bar"
+            tone={tone}
+            className="lg:w-[150px]"
+          />
+          {divider}
+          <DateField label="Fecha salida:" value={date} min={todayIso()} onChange={setDate} appearance="bar" tone={tone} />
+          {divider}
+          <DateField label="Fecha retorno:" value={returnDate} min={date || todayIso()} onChange={setReturnDate} appearance="bar" tone={tone} />
+          {divider}
+          <PassengerSelector
+            value={passengerCounts}
+            onChange={setPassengerCounts}
+            maxTotal={maxPassengers}
+            label="N° pasajeros:"
+            appearance="bar"
+            tone={tone}
+            className="lg:w-[150px]"
+          />
+          <button
+            type="submit"
+            className={cn(
+              'mt-2 shrink-0 rounded-full px-8 py-2.5 text-sm font-bold uppercase tracking-wide transition sm:col-span-2 lg:mt-0 lg:ml-3 lg:w-auto',
+              onBrand ? 'bg-white text-brand-600 hover:bg-brand-50' : 'bg-brand-500 text-white hover:bg-brand-600',
+            )}
+          >
+            Buscar
+          </button>
+        </div>
+        {error && (
+          <p role="alert" className={cn('mt-2 px-3 text-sm font-medium', onBrand ? 'text-white' : 'text-danger-600')}>
+            {error}
+          </p>
+        )}
+      </form>
+    );
+  }
 
   return (
     <>
@@ -237,14 +324,14 @@ export function TripSearchForm({ cities }: { cities: string[] }) {
                   )}
                 </div>
                 <div className="grid gap-3 sm:grid-cols-3">
-                  <SelectCity
+                  <LocationDropdown
                     label="Origen"
                     value={segment.origin}
                     onChange={(value) => updateSegment(index, { origin: value })}
                     options={cities}
                     placeholder="¿Desde dónde?"
                   />
-                  <SelectCity
+                  <LocationDropdown
                     label="Destino"
                     value={segment.destination}
                     onChange={(value) => updateSegment(index, { destination: value })}
@@ -274,18 +361,18 @@ export function TripSearchForm({ cities }: { cities: string[] }) {
         ) : (
           <div className={cn('grid gap-3', tab === 'ROUND_TRIP' ? 'lg:grid-cols-4' : 'lg:grid-cols-3')}>
             <div className="relative">
-              <SelectCity label="Origen" value={origin} onChange={setOrigin} options={cities} placeholder="¿Desde dónde viajas?" />
+              <LocationDropdown label="Origen" value={origin} onChange={setOrigin} options={cities} placeholder="¿Desde dónde viajas?" />
               <button
                 type="button"
                 onClick={swap}
-                className="absolute right-3 top-1/2 hidden -translate-y-1/2 rounded-full border border-border bg-white p-1.5 text-brand-500 shadow-sm transition hover:bg-brand-50 lg:block"
+                className="absolute -right-3 top-1/2 z-10 hidden -translate-y-1/2 rounded-full border border-border bg-white p-1.5 text-brand-500 shadow-sm transition hover:bg-brand-50 lg:block"
                 aria-label="Intercambiar origen y destino"
               >
                 <ArrowRightLeft className="h-3.5 w-3.5" />
               </button>
             </div>
 
-            <SelectCity label="Destino" value={destination} onChange={setDestination} options={cities} placeholder="¿A dónde vas?" />
+            <LocationDropdown label="Destino" value={destination} onChange={setDestination} options={cities} placeholder="¿A dónde vas?" />
 
             <DateField label="Fecha de ida" value={date} min={todayIso()} onChange={setDate} />
 
@@ -296,24 +383,7 @@ export function TripSearchForm({ cities }: { cities: string[] }) {
         )}
 
         <div className="grid gap-3 sm:grid-cols-[220px_1fr]">
-          <label className="block rounded-control border border-border p-3 focus-within:border-brand-500">
-            <span className="mb-1 block text-xs font-medium text-muted">Pasajeros</span>
-            <span className="flex items-center gap-2">
-              <Users className="h-4 w-4 shrink-0 text-brand-500" />
-              <select
-                value={passengers}
-                onChange={(event) => setPassengers(event.target.value)}
-                className="w-full cursor-pointer border-0 bg-transparent p-0 text-sm font-medium text-ink focus:outline-none focus:ring-0"
-                aria-label="Cantidad de pasajeros"
-              >
-                {[1, 2, 3, 4, 5, 6].map((count) => (
-                  <option key={count} value={count}>
-                    {count} {count === 1 ? 'pasajero' : 'pasajeros'}
-                  </option>
-                ))}
-              </select>
-            </span>
-          </label>
+          <PassengerSelector value={passengerCounts} onChange={setPassengerCounts} maxTotal={maxPassengers} />
 
           <Button type="submit" size="lg" icon={<Search className="h-4 w-4" />}>
             Buscar pasajes

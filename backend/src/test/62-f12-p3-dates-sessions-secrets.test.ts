@@ -11,6 +11,7 @@ import { execute, queryOne } from '../config/database';
 import { assertProductionSecrets, InsecureSecretError, isValidEncryptionKey } from '../config/secrets-guard';
 import { findPasswordHash } from '../repositories/user.repository';
 import { purgeExpiredRevocations, revokeSession } from '../services/session-revocation.service';
+import { tokenLifetimeSeconds } from '../utils/security';
 import { isCalendarDate, settlementPeriodErrors } from '../validators/resource.validators';
 import { login, TEST_PASSWORD } from './helpers/fixtures';
 import { PRODUCTION_ENV } from './helpers/productionEnv';
@@ -140,6 +141,20 @@ describe('12B · fechas de liquidación, sesiones y secretos', () => {
       await revokeSession(caducado, Number(usuario!.id), ahora - 3 * 3600);
       await revokeSession(caducado, Number(usuario!.id), ahora - 3 * 3600);
       await revokeSession(vigente, Number(usuario!.id), ahora + 3600);
+
+      /**
+       * F17C-SEC-05: la purga exige ahora DOS condiciones —que la caducidad del token haya
+       * pasado Y que la revocación sea más antigua que la vida máxima de un token—, porque
+       * la primera sola depende de que `expires_at` sea correcto. `revokeSession` inserta con
+       * `revoked_at = NOW()`, así que esta fila cumple la primera pero no la segunda: se
+       * envejece también `revoked_at` para representar lo que de verdad es una revocación
+       * vieja. La prueba sigue comprobando exactamente lo mismo que antes.
+       */
+      await execute('UPDATE revoked_sessions SET revoked_at = DATE_SUB(NOW(), INTERVAL ? SECOND) WHERE jti = ?', [
+        tokenLifetimeSeconds() + 7200,
+        caducado,
+      ]);
+
       assert.ok((await purgeExpiredRevocations()) >= 1);
       assert.equal(await queryOne('SELECT jti FROM revoked_sessions WHERE jti = ?', [caducado]), null);
       assert.ok(await queryOne('SELECT jti FROM revoked_sessions WHERE jti = ?', [vigente]));

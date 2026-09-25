@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type FormEvent } from 'react';
+import { useEffect, useRef, useState, type FormEvent, type ReactNode } from 'react';
 import { Button, Checkbox, Input, Modal, Select, Textarea } from '@/components/ui';
 import { ApiError } from '@/services/api';
 import { cn } from '@/utils/cn';
@@ -27,6 +27,11 @@ interface ResourceFormProps<T extends Record<string, unknown>> {
   initialValues?: Partial<T> | null;
   submitLabel?: string;
   size?: 'sm' | 'md' | 'lg' | 'xl';
+  /**
+   * Contenido propio al final del formulario, a todo el ancho. Para lo que no es un campo de texto
+   * y se guarda por su cuenta —una imagen, por ejemplo—, de modo que no entra en `onSubmit`.
+   */
+  extra?: ReactNode;
 }
 
 function normalize(value: unknown, field: FormField): string | boolean {
@@ -47,6 +52,7 @@ export function ResourceForm<T extends Record<string, unknown>>({
   initialValues,
   submitLabel = 'Guardar',
   size = 'md',
+  extra,
 }: ResourceFormProps<T>) {
   const isEditing = Boolean(initialValues);
   const visibleFields = fields.filter((field) => !field.createOnly || !isEditing);
@@ -198,6 +204,8 @@ export function ResourceForm<T extends Record<string, unknown>>({
             />
           );
         })}
+
+        {extra && <div className="sm:col-span-2">{extra}</div>}
       </form>
     </Modal>
   );

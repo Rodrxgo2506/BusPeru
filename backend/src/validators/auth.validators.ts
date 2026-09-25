@@ -7,6 +7,12 @@ const password = z
   .regex(/[A-Z]/, 'Debe incluir al menos una mayúscula')
   .regex(/[0-9]/, 'Debe incluir al menos un número');
 
+/**
+ * La misma regla de contraseña del registro y del cambio de contraseña, para quien necesite
+ * aplicarla fuera de estos esquemas (F18-02: alta del primer administrador). Una sola definición.
+ */
+export const strongPasswordSchema = password;
+
 export const loginSchema = z.object({
   email: z.string().email('Correo electrónico inválido').max(150),
   password: z.string().min(1, 'La contraseña es obligatoria'),

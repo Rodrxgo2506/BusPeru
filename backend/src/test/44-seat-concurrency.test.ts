@@ -69,7 +69,7 @@ describe('H-07 · asientos y geometría bajo el mismo cerrojo', () => {
     queryOne<{ row_count: number; column_count: number }>('SELECT row_count, column_count FROM bus_layout_decks WHERE id = ?', [id]);
   const asientos = (id = deckId) =>
     query<Celda & { seat_number: string; layout_id: number | null }>(
-      'SELECT id, row_number, column_number, seat_number, layout_id FROM seats WHERE deck_id = ? ORDER BY id',
+      'SELECT id, `row_number`, column_number, seat_number, layout_id FROM seats WHERE deck_id = ? ORDER BY id',
       [id],
     );
 
@@ -84,7 +84,7 @@ describe('H-07 · asientos y geometría bajo el mismo cerrojo', () => {
     const ocupadas = new Map<string, string>();
 
     const elementos = await query<Celda & { row_span: number; col_span: number }>(
-      'SELECT id, row_number, column_number, row_span, col_span FROM bus_layout_elements WHERE deck_id = ?',
+      'SELECT id, `row_number`, column_number, row_span, col_span FROM bus_layout_elements WHERE deck_id = ?',
       [id],
     );
     for (const elemento of elementos) {

@@ -47,7 +47,7 @@ describe('H-06 · la publicación valida la geometría completa', () => {
   /** Inserta un asiento directamente: hace falta para plantear estados que el CRUD prohíbe. */
   async function ponerAsiento(numero: string, fila: number, columna: number, deck = deckId): Promise<number> {
     const creado = await execute(
-      `INSERT INTO seats (bus_id, layout_id, deck_id, seat_type_id, seat_number, row_number, column_number, is_window, is_aisle, status)
+      `INSERT INTO seats (bus_id, layout_id, deck_id, seat_type_id, seat_number, \`row_number\`, column_number, is_window, is_aisle, status)
        VALUES (?, ?, ?, NULL, ?, ?, ?, 0, 0, 'AVAILABLE')`,
       [ctx.fixtures.busA, layoutId, deck, numero, fila, columna],
     );
@@ -68,7 +68,7 @@ describe('H-06 · la publicación valida la geometría completa', () => {
     deck = deckId,
   ): Promise<number> {
     const creado = await execute(
-      `INSERT INTO bus_layout_elements (deck_id, element_type, row_number, column_number, row_span, col_span, label)
+      `INSERT INTO bus_layout_elements (deck_id, element_type, \`row_number\`, column_number, row_span, col_span, label)
        VALUES (?, ?, ?, ?, ?, ?, NULL)`,
       [deck, tipo, fila, columna, rowSpan, colSpan],
     );

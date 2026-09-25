@@ -2,7 +2,7 @@ import type { Request } from 'express';
 import { requireAuth } from '../middleware/auth.middleware';
 import * as repository from '../repositories/company-integration.repository';
 import { ApiError } from '../utils/ApiError';
-import { decryptJson, encryptJson, isEncryptionConfigured } from './encryption.service';
+import { decryptJson, encryptJson, hasUnreadableCredentials, isEncryptionConfigured } from './encryption.service';
 import {
   PROVIDERS,
   findProvider,
@@ -137,6 +137,26 @@ export async function save(
 ): Promise<{ view: IntegrationView; created: boolean }> {
   const definition = assertProvider(provider);
   const existing = await repository.findForScope(scopeId(scope), provider);
+
+  /**
+   * NO SE ESCRIBE ENCIMA DE UN SOBRE QUE NO SE PUEDE LEER (F17C-SEC-08, SEC08-01).
+   *
+   * Un campo en blanco significa «déjalo como está», y para respetarlo hay que releer lo
+   * guardado. Si el sobre existe pero ninguna clave lo abre —clave cambiada sin re-cifrar, clave
+   * mal configurada, fila alterada— esa relectura no distingue «no había nada» de «no lo puedo
+   * leer», y guardar un solo campo borraba definitivamente los demás. Además el panel mostraba la
+   * integración como «sin configurar», así que volver a teclear un campo era la reacción natural.
+   *
+   * Se corta antes de tocar la base. Si de verdad se quiere empezar de cero, el camino explícito
+   * ya existe: desconectar la integración borra las credenciales y luego se configura de nuevo.
+   */
+  if (existing && hasUnreadableCredentials(existing.credentials)) {
+    throw ApiError.conflict(
+      'Las credenciales guardadas no se pueden descifrar con la clave actual de este servidor. '
+      + 'No se sobrescriben para no perderlas: revisa la clave de cifrado, o desconecta la integración para configurarla desde cero.',
+    );
+  }
+
   const previous = existing ? decryptJson(existing.credentials) : null;
 
   const credentials: Record<string, unknown> = {};

@@ -71,6 +71,14 @@ export interface ResourceDefinition {
   /** Regla posterior a un alta correcta (H-46: una empresa creada ya ACTIVE recibe su comisión). */
   afterCreate?: (id: number, data: Record<string, unknown>) => Promise<void>;
   /**
+   * Regla previa a un borrado (FASE 17). Si lanza, no se borra nada. Lo que devuelva llega a
+   * `afterDelete`: sirve para recoger antes del DELETE lo que la cascada va a hacer desaparecer
+   * (por ejemplo, las referencias de imágenes de las filas hijas).
+   */
+  prepareDelete?: (id: number, previous: Record<string, unknown>) => Promise<unknown>;
+  /** Limpieza posterior a un borrado correcto (FASE 17: archivos del almacén). No debe lanzar. */
+  afterDelete?: (id: number, previous: Record<string, unknown>, prepared: unknown) => Promise<void>;
+  /**
    * Cierra las escrituras de este recurso y explica por dónde se hacen ahora: se responde
    * con un error de negocio que dice a dónde ir, en vez de un 404 mudo.
    *
@@ -353,6 +361,7 @@ export function createResourceRouter(definition: ResourceDefinition): Router {
       asyncHandler(async (req, res) => {
         const id = parseId(req.params.id);
         const previous = await findRowOrFail(req, definition, id);
+        const prepared = await definition.prepareDelete?.(id, previous);
 
         await execute(`DELETE FROM ${definition.table} WHERE id = ?`, [id]);
         await recordAudit(req, {
@@ -362,6 +371,7 @@ export function createResourceRouter(definition: ResourceDefinition): Router {
           description: `Eliminó ${definition.entityName}`,
           oldValues: previous,
         });
+        await definition.afterDelete?.(id, previous, prepared);
         sendSuccess(res, { id });
       }),
     );

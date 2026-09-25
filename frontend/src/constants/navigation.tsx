@@ -12,7 +12,9 @@ import {
   KeyRound,
   Landmark,
   MapPin,
+  MapPinned,
   Megaphone,
+  Palette,
   Percent,
   Plug,
   Receipt,
@@ -98,6 +100,8 @@ export const ADMIN_NAV: NavItem[] = [
   { label: 'Liquidaciones', to: '/admin/settlements', icon: <Wallet {...iconProps} />, permissions: ['reports.view'], section: 'Gestión principal' },
   { label: 'Finanzas', to: '/admin/financial', icon: <Receipt {...iconProps} />, permissions: ['reports.view'], section: 'Gestión principal' },
 
+  { label: 'Destinos', to: '/admin/destinations', icon: <MapPinned {...iconProps} />, permissions: ['settings.view'], section: 'Contenido' },
+
   { label: 'Reportes', to: '/admin/reports', icon: <FileText {...iconProps} />, permissions: ['reports.view'], section: 'Configuración' },
   { label: 'Promociones', to: '/admin/promotions', icon: <Megaphone {...iconProps} />, permissions: ['promotions.view'], section: 'Configuración' },
   { label: 'Cupones', to: '/admin/coupons', icon: <TicketCheck {...iconProps} />, permissions: ['promotions.view'], section: 'Configuración' },
@@ -108,6 +112,7 @@ export const ADMIN_NAV: NavItem[] = [
   { label: 'Integraciones', to: '/admin/integrations', icon: <Plug {...iconProps} />, permissions: ['companies.update'], section: 'Configuración' },
   { label: 'API keys', to: '/admin/api-keys', icon: <KeyRound {...iconProps} />, permissions: ['settings.view'], section: 'Configuración' },
   { label: 'Configuración', to: '/admin/settings', icon: <Settings {...iconProps} />, permissions: ['settings.view'], section: 'Configuración' },
+  { label: 'Identidad visual', to: '/admin/branding', icon: <Palette {...iconProps} />, permissions: ['settings.view'], section: 'Configuración' },
 ];
 
 /**

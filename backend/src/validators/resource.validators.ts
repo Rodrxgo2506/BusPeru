@@ -2,13 +2,20 @@ import { z } from 'zod';
 import { activeStatus, id, jsonColumn, money, optionalId, optionalText, shortText, toUpdateSchema } from './common';
 
 /* ------------------------------------------------------------------ companies */
+/**
+ * Entrada del CRUD de empresas. NO incluye `logo_url` (F17C-CLEAN-01): desde
+ * F17C-COMPANY-LOGO-01-A esa columna solo la escribe `POST/DELETE /company/logo`, y aceptarla aquí
+ * para descartarla después hacía que la API aparentase admitir un campo que no es editable.
+ *
+ * Esto es el esquema de ESCRITURA. La lectura no cambia: las respuestas siguen devolviendo
+ * `logo_url` donde corresponde (`/public/companies`, viajes, reservas, `/company/logo`).
+ */
 export const companyShape = {
   name: shortText(150),
   legal_name: optionalText(200),
   tax_id: z.string().trim().regex(/^\d{11}$/, 'El RUC debe tener 11 dígitos').nullable().optional(),
   email: z.string().email('Correo inválido').max(150).nullable().optional(),
   phone: optionalText(30),
-  logo_url: optionalText(500),
   description: optionalText(5000),
   status: z.enum(['PENDING', 'ACTIVE', 'INACTIVE', 'SUSPENDED', 'REJECTED']).optional(),
 };

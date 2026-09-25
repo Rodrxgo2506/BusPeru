@@ -99,7 +99,7 @@ export function IntegrationsPage({ scope = 'company' }: { scope?: 'company' | 'a
       <PageHeader
         title="Integraciones"
         description="Conecta BusPerú con herramientas y servicios para potenciar tu negocio."
-        breadcrumbs={[{ label: scope === 'admin' ? 'Panel Admin' : 'Portal Empresa' }, { label: 'Integraciones' }]}
+        breadcrumbs={[{ label: scope === 'admin' ? 'Administración' : 'Portal Empresa' }, { label: 'Integraciones' }]}
       />
 
       {/*

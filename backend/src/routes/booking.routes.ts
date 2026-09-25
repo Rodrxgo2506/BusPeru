@@ -32,7 +32,7 @@ const router = Router();
 router.use(authenticate);
 
 const BOOKING_SELECT = `SELECT bk.*, t.departure_datetime, t.arrival_datetime, t.base_price,
-    r.company_id, co.name AS company_name,
+    r.company_id, co.name AS company_name, co.logo_url AS company_logo,
     ol.city AS origin_city, ol.name AS origin_terminal,
     dl.city AS destination_city, dl.name AS destination_terminal,
     b.code AS bus_code, b.plate_number, bt.name AS bus_type_name,

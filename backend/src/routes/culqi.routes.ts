@@ -8,6 +8,7 @@ import { env } from '../config/env';
 import { ApiError } from '../utils/ApiError';
 import { asyncHandler, sendSuccess } from '../utils/http';
 import { logError, logEvent } from '../utils/logger';
+import { recordSystemAudit } from '../services/audit.service';
 
 /**
  * Superficie pública de Culqi: la configuración que necesita el navegador y el webhook.
@@ -109,6 +110,7 @@ culqiWebhookRouter.post(
  *   · `compensated`         el cargo no pudo confirmar la reserva —no era confirmable, o ya la
  *                           había confirmado OTRO cargo (H-43)— y quedó con su reembolso.
  *   · `amount_mismatch`     el importe del cargo no coincide con el del pago. No se confirma.
+ *   · `currency_mismatch`   la moneda del cargo no es la del pago. Tampoco se confirma (SEC-03C).
  *   · `charge_mismatch`     el pago ya estaba cerrado con OTRO cargo. No se toca; queda registrado.
  *   · `verification_failed` no se pudo releer el cargo en Culqi para comprobarlo.
  *   · `unauthorized`        el secreto de la ruta no era el nuestro.
@@ -121,6 +123,7 @@ export type WebhookOutcome =
   | 'not_correlated'
   | 'unsupported_event'
   | 'amount_mismatch'
+  | 'currency_mismatch'
   | 'charge_mismatch'
   | 'verification_failed'
   | 'unauthorized';
@@ -230,12 +233,17 @@ async function procesarCargo(chargeId: string): Promise<Procesado> {
   if (paymentId === null) return { outcome: 'not_correlated', handled: false, reason: 'pago no encontrado' };
 
   if (!isSuccessfulCharge(charge)) {
-    await marcarFallido(paymentId);
+    await marcarFallido(paymentId, charge.id);
     return { outcome: 'marked_failed', handled: true, action: 'marcado como fallido', paymentId };
   }
 
   // H-42 · H-43: se concilia el cargo con SU pago, no «la reserva». Ver `reconcileApprovedCharge`.
-  const resultado = await reconcileApprovedCharge(paymentId, charge, 'El cargo se cobró cuando la reserva ya no se podía confirmar');
+  const resultado = await reconcileApprovedCharge(
+    paymentId,
+    charge,
+    'El cargo se cobró cuando la reserva ya no se podía confirmar',
+    'system:culqi-webhook',
+  );
   switch (resultado.outcome) {
     case 'confirmed':
       return { outcome: 'reconciled', handled: true, action: 'reserva confirmada', paymentId, bookingId: resultado.bookingId };
@@ -255,6 +263,8 @@ async function procesarCargo(chargeId: string): Promise<Procesado> {
       };
     case 'amount_mismatch':
       return { outcome: 'amount_mismatch', handled: false, reason: 'importe no coincide', paymentId, bookingId: resultado.bookingId };
+    case 'currency_mismatch':
+      return { outcome: 'currency_mismatch', handled: false, reason: 'moneda no coincide', paymentId, bookingId: resultado.bookingId };
     case 'charge_mismatch':
       return { outcome: 'charge_mismatch', handled: false, reason: 'el pago ya estaba cerrado con otro cargo', paymentId, bookingId: resultado.bookingId };
     default:
@@ -279,12 +289,25 @@ async function buscarPorMetadata(chargeId: string): Promise<number | null> {
   return fila.id;
 }
 
-async function marcarFallido(paymentId: number): Promise<void> {
+async function marcarFallido(paymentId: number, chargeId: string): Promise<void> {
   await withTransaction(async (connection) => {
     // Solo un intento todavía abierto: un pago ya cobrado no se degrada por un webhook.
-    await connection.query(
-      "UPDATE payments SET status = 'FAILED' WHERE id = ? AND status IN ('PENDING','PROCESSING')",
-      [paymentId],
+    const [filas] = await connection.query('SELECT status FROM payments WHERE id = ? LIMIT 1 FOR UPDATE', [paymentId]);
+    const previo = (filas as Array<{ status: string }>)[0]?.status;
+    if (previo !== 'PENDING' && previo !== 'PROCESSING') return;
+    await connection.query("UPDATE payments SET status = 'FAILED' WHERE id = ?", [paymentId]);
+    // F18-07 · el cambio y su rastro, en la misma transacción. Sin datos del medio de pago.
+    await recordSystemAudit(
+      {
+        action: 'FAIL',
+        entityType: 'payments',
+        entityId: paymentId,
+        actor: 'system:culqi-webhook',
+        description: `Culqi informó un cargo no exitoso (${chargeId}): pago #${paymentId} marcado como fallido`,
+        oldValues: { status: previo },
+        newValues: { status: 'FAILED', charge_id: chargeId },
+      },
+      connection,
     );
   });
 }

@@ -1,5 +1,6 @@
 import { LogOut } from 'lucide-react';
 import { NavLink, Outlet, useNavigate } from 'react-router-dom';
+import { RouteSuspense } from '@/components/common/RouteSuspense';
 import { Avatar } from '@/components/ui';
 import { CUSTOMER_NAV, ADMIN_NAV, COMPANY_NAV } from '@/constants/navigation';
 import { useAuth } from '@/context/AuthContext';
@@ -82,7 +83,9 @@ export function CustomerLayout() {
         </aside>
 
         <div className="min-w-0">
-          <Outlet />
+          <RouteSuspense>
+            <Outlet />
+          </RouteSuspense>
         </div>
       </div>
     </div>

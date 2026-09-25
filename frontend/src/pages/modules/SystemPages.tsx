@@ -650,15 +650,19 @@ export function SettingsPage({ scope }: { scope: 'company' | 'admin' }) {
     <>
       <PageHeader
         title="Configuración"
-        description="Parámetros del sistema almacenados en la tabla system_settings."
+        description="Parámetros generales que controlan el funcionamiento de la plataforma."
         breadcrumbs={[{ label: scope === 'company' ? 'Portal Empresa' : 'Administración' }, { label: 'Configuración' }]}
       />
 
+      {/* Nota para quien mantenga esta pantalla: las pestañas adicionales que aparecen en los mockups
+          (Correos, SEO, Términos, integraciones y datos bancarios) NO están implementadas porque
+          `system_settings` no guarda esos campos; añadirlas exige una extensión documentada del esquema.
+          Esa advertencia vivia antes en un aviso visible: es informacion de desarrollo, no de producto. */}
       <Card className="mb-6 flex gap-3 border-info-100 bg-info-50">
         <SettingsIcon className="mt-0.5 h-5 w-5 shrink-0 text-info-600" />
         <p className="text-sm text-info-700">
-          Los mockups muestran pestañas adicionales (Correos, SEO, Términos, integraciones y datos bancarios). Solo se implementan los campos
-          soportados por <code>system_settings</code>; el resto requiere una extensión documentada del esquema.
+          Cambiar un parámetro afecta a toda la plataforma de inmediato. Los marcados como públicos
+          son visibles para cualquier visitante del sitio.
         </p>
       </Card>
 

@@ -49,7 +49,7 @@ describe('seats_count del listado de buses (migración 010)', () => {
   async function crearAsientos(layoutId: number, deckId: number, cantidad: number, prefijo: string): Promise<void> {
     for (let indice = 1; indice <= cantidad; indice += 1) {
       await execute(
-        `INSERT INTO seats (bus_id, layout_id, deck_id, seat_number, row_number, column_number, is_window, is_aisle, status)
+        `INSERT INTO seats (bus_id, layout_id, deck_id, seat_number, \`row_number\`, column_number, is_window, is_aisle, status)
          VALUES (?, ?, ?, ?, ?, ?, 0, 0, 'AVAILABLE')`,
         [busId, layoutId, deckId, `${prefijo}${indice}`, Math.ceil(indice / 4), ((indice - 1) % 4) + 1],
       );
@@ -147,7 +147,7 @@ describe('seats_count del listado de buses (migración 010)', () => {
       // Así quedan los asientos que siembra `seed.ts`: colgados del bus y sin versión.
       for (let indice = 1; indice <= 6; indice += 1) {
         await execute(
-          `INSERT INTO seats (bus_id, seat_number, row_number, column_number, is_window, is_aisle, status)
+          `INSERT INTO seats (bus_id, seat_number, \`row_number\`, column_number, is_window, is_aisle, status)
            VALUES (?, ?, ?, ?, 0, 0, 'AVAILABLE')`,
           [busId, `L${indice}`, Math.ceil(indice / 4), ((indice - 1) % 4) + 1],
         );

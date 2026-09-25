@@ -5,6 +5,8 @@
  * sesiones en producción. Aquí se valida, SOLO con `NODE_ENV=production`, antes de abrir nada:
  *
  *   · JWT_SECRET: al menos 32 caracteres y 10 distintos (descarta «aaaa…» y marcadores obvios).
+ *   · INTEGRATIONS_ENCRYPTION_KEY_PREVIOUS: opcional, solo durante una rotación. Mismas reglas de
+ *     formato, y no puede coincidir con la vigente.
  *   · INTEGRATIONS_ENCRYPTION_KEY: opcional —sin ella el módulo de integraciones responde 503 y
  *     no guarda nada—, pero si está definida tiene que ser EXACTAMENTE lo que usa AES-256-GCM en
  *     `encryption.service.ts`: 32 bytes, como 64 caracteres hex o base64 canónico (44 caracteres).
@@ -33,7 +35,13 @@ export function isValidEncryptionKey(value: string): boolean {
   return bytes.length === ENCRYPTION_KEY_BYTES && bytes.toString('base64') === clave;
 }
 
-export function assertProductionSecrets(input: { nodeEnv: string; jwtSecret: string; encryptionKey: string }): void {
+export function assertProductionSecrets(input: {
+  nodeEnv: string;
+  jwtSecret: string;
+  encryptionKey: string;
+  /** Clave anterior durante una rotacion (F17C-SEC-08). Opcional, pero si esta debe ser valida. */
+  previousEncryptionKey?: string;
+}): void {
   if (input.nodeEnv !== 'production') return;
 
   const problemas: string[] = [];
@@ -45,6 +53,15 @@ export function assertProductionSecrets(input: { nodeEnv: string; jwtSecret: str
   }
   if (input.encryptionKey.trim() !== '' && !isValidEncryptionKey(input.encryptionKey)) {
     problemas.push('INTEGRATIONS_ENCRYPTION_KEY no es válida: debe ser una clave de 32 bytes en hex (64 caracteres) o base64 (44 caracteres).');
+  }
+  // La clave anterior se valida igual: puesta a medias, una rotación dejaría de leer lo viejo
+  // sin que nadie se entere hasta que alguien abra una integración.
+  const anterior = (input.previousEncryptionKey ?? '').trim();
+  if (anterior !== '' && !isValidEncryptionKey(anterior)) {
+    problemas.push('INTEGRATIONS_ENCRYPTION_KEY_PREVIOUS no es válida: debe ser una clave de 32 bytes en hex (64 caracteres) o base64 (44 caracteres).');
+  }
+  if (anterior !== '' && anterior === input.encryptionKey.trim()) {
+    problemas.push('INTEGRATIONS_ENCRYPTION_KEY_PREVIOUS no puede ser igual a INTEGRATIONS_ENCRYPTION_KEY: entonces no hay rotación que completar.');
   }
   if (problemas.length > 0) throw new InsecureSecretError(`Configuración insegura para producción. ${problemas.join(' ')}`);
 }

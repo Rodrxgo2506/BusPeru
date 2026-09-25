@@ -1,16 +1,18 @@
-import { ArrowRight, Building2, Bus, Star } from 'lucide-react';
+import { ArrowRight, BadgeCheck, Bus, Star } from 'lucide-react';
 import { Link } from 'react-router-dom';
+import { mediaUrl } from '@/services/api';
+import { cn } from '@/utils/cn';
 
 /**
- * Tarjeta de empresa de transporte.
+ * Tarjeta de empresa de transporte (composición revisada en F17C-UI-08).
  *
- * Todo lo que muestra viene del backend: nombre, descripción, valoración, número de reseñas
- * y rutas activas. Nada se completa a mano.
+ * Todo lo que muestra viene del backend: nombre, descripción, valoración, número de reseñas y rutas
+ * activas. Nada se completa a mano.
  *
- * SOBRE LOS LOGOS: el endpoint devuelve `logo_url` y hoy es `null` en todas las empresas.
- * En ese caso se pinta un monograma con sus iniciales, **nunca un logotipo corporativo
- * inventado**: presentar una imagen ajena como el logo oficial de una empresa sería falso.
- * Si algún día el backend devuelve un logo real, se usa ese.
+ * SOBRE LOS LOGOS: desde F17C-COMPANY-LOGO-01 cada empresa sube el suyo desde su panel, y el
+ * endpoint devuelve la referencia en `logo_url`. Mientras no lo haya, se pinta un monograma con sus
+ * iniciales, **nunca un logotipo corporativo inventado**: presentar una imagen ajena como el logo
+ * oficial de una empresa sería falso.
  */
 export function CompanyCard({
   name,
@@ -36,47 +38,66 @@ export function CompanyCard({
         <RatingPill rating={rating} reviewsCount={reviewsCount} />
       </div>
 
-      <h2 className="mt-5 text-lg font-bold leading-snug text-ink">{name}</h2>
+      {/* El listado público solo incluye empresas ACTIVE, es decir, las que superaron la
+          verificación de documentos: la insignia no afirma nada que no sea cierto. */}
+      <p className="mt-4 flex w-fit items-center gap-1.5 rounded-full bg-success-50 px-2.5 py-1 text-xs font-semibold text-success-700">
+        <BadgeCheck className="h-3.5 w-3.5" aria-hidden />
+        Empresa verificada
+      </p>
 
-      <dl className="mt-3 space-y-2.5 text-sm">
-        <div className="flex items-start gap-2.5">
-          <dt className="sr-only">Descripción</dt>
-          <Building2 className="mt-0.5 h-[18px] w-[18px] shrink-0 text-brand-500" aria-hidden />
-          <dd className="text-slate-600">{description ?? 'Transporte interprovincial en el Perú.'}</dd>
-        </div>
-        <div className="flex items-center gap-2.5">
-          <dt className="sr-only">Rutas activas</dt>
-          <Bus className="h-[18px] w-[18px] shrink-0 text-brand-500" aria-hidden />
-          <dd className="text-slate-600">
-            {routesCount} {routesCount === 1 ? 'ruta activa' : 'rutas activas'}
-          </dd>
-        </div>
+      <h2 className="mt-3 text-lg font-bold leading-snug text-ink">{name}</h2>
+      <p className="mt-1.5 line-clamp-3 text-sm text-slate-600">{description ?? 'Transporte interprovincial en el Perú.'}</p>
+
+      <dl className="mt-4 flex items-center gap-2.5 border-t border-border pt-4 text-sm">
+        <dt className="sr-only">Rutas activas</dt>
+        <Bus className="h-[18px] w-[18px] shrink-0 text-brand-500" aria-hidden />
+        <dd className="text-slate-600">
+          {routesCount} {routesCount === 1 ? 'ruta activa' : 'rutas activas'}
+        </dd>
       </dl>
 
-      <Link
-        to={to}
-        className="mt-5 flex items-center gap-1.5 border-t border-border pt-4 text-sm font-semibold text-brand-600 transition hover:text-brand-700"
-      >
-        Ver viajes
-        <ArrowRight className="h-4 w-4 transition-transform group-hover:translate-x-0.5" />
-      </Link>
+      {/* `mt-auto`: con descripciones de distinto largo, el botón queda a la misma altura en toda la fila. */}
+      <div className="mt-auto pt-5">
+        <Link
+          to={to}
+          className="flex h-11 w-full items-center justify-center gap-2 rounded-control bg-brand-500 px-5 text-sm font-semibold text-white transition-colors hover:bg-brand-600 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-2 group-hover:bg-brand-600"
+        >
+          Ver viajes
+          <ArrowRight className="h-4 w-4 transition-transform group-hover:translate-x-0.5" aria-hidden />
+        </Link>
+      </div>
     </article>
   );
 }
 
-/** Logo real si el backend lo tiene; si no, un monograma neutro con las iniciales. */
-function CompanyIdentity({ name, logoUrl }: { name: string; logoUrl: string | null }) {
-  if (logoUrl) {
+/**
+ * Logo real si el backend lo tiene; si no, un monograma neutro con las iniciales.
+ *
+ * Exportado desde F17C-COMPANY-LOGO-01 para que el resto de superficies que hoy solo muestran el
+ * nombre puedan usar la MISMA regla de respaldo, en vez de reinventarla cada una.
+ */
+export function CompanyIdentity({ name, logoUrl, size = 'md' }: { name: string; logoUrl: string | null; size?: 'sm' | 'md' }) {
+  // `logo_url` guarda una referencia del almacen publico; `mediaUrl` la convierte y descarta
+  // cualquier valor que no tenga esa forma, asi que una URL externa nunca se pinta.
+  const src = mediaUrl(logoUrl);
+  // `sm` para listados densos, como los resultados de búsqueda; `md` para el catálogo de empresas.
+  const box = size === 'sm' ? 'h-14 w-20' : 'h-20 w-28';
+
+  if (src) {
     return (
-      <span className="flex h-16 w-32 items-center justify-center overflow-hidden rounded-control border border-border bg-white p-2">
-        <img src={logoUrl} alt={`Logotipo de ${name}`} className="max-h-full max-w-full object-contain" loading="lazy" />
+      <span className={cn('flex items-center justify-center overflow-hidden rounded-control border border-border bg-slate-50', box, size === 'sm' ? 'p-1.5' : 'p-2.5')}>
+        <img src={src} alt={`Logotipo de ${name}`} className="max-h-full max-w-full object-contain" loading="lazy" />
       </span>
     );
   }
 
   return (
     <span
-      className="flex h-16 w-16 items-center justify-center rounded-control bg-brand-50 text-xl font-extrabold tracking-tight text-brand-600"
+      className={cn(
+        'flex items-center justify-center rounded-control bg-brand-50 font-extrabold tracking-tight text-brand-600',
+        box,
+        size === 'sm' ? 'text-lg' : 'text-2xl',
+      )}
       aria-hidden
     >
       {initials(name)}
@@ -127,19 +148,21 @@ function RatingPill({ rating, reviewsCount }: { rating: number | null; reviewsCo
 /** Esqueleto con la misma forma que la tarjeta, para que la carga no dé saltos. */
 export function CompanyCardSkeleton() {
   return (
-    <div className="rounded-card bg-white p-6 shadow-card ring-1 ring-black/5">
+    <div className="rounded-card bg-white p-5 shadow-card ring-1 ring-black/5 sm:p-6">
       <div className="flex items-start justify-between gap-4">
-        <div className="skeleton h-16 w-16 rounded-control" />
+        <div className="skeleton h-20 w-28 rounded-control" />
         <div className="skeleton h-9 w-16 rounded-full" />
       </div>
-      <div className="mt-5 space-y-3">
+      <div className="skeleton mt-4 h-6 w-36 rounded-full" />
+      <div className="mt-3 space-y-2">
         <div className="skeleton h-5 w-2/3" />
         <div className="skeleton h-4 w-full" />
-        <div className="skeleton h-4 w-1/3" />
+        <div className="skeleton h-4 w-4/5" />
       </div>
-      <div className="mt-5 border-t border-border pt-4">
+      <div className="mt-4 border-t border-border pt-4">
         <div className="skeleton h-4 w-24" />
       </div>
+      <div className="skeleton mt-5 h-11 w-full rounded-control" />
     </div>
   );
 }

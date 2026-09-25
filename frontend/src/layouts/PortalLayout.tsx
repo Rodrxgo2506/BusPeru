@@ -2,6 +2,7 @@ import { CheckCircle2, ChevronDown, HelpCircle, LogOut, Menu, Search, X } from '
 import { useEffect, useState, type ReactNode } from 'react';
 import { Link, NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom';
 import { NotificationBell } from '@/layouts/PublicLayout';
+import { RouteSuspense } from '@/components/common/RouteSuspense';
 import { Avatar, Button, Logo } from '@/components/ui';
 import { visibleNav, type NavItem } from '@/constants/navigation';
 import { useAuth } from '@/context/AuthContext';
@@ -204,7 +205,10 @@ export function PortalLayout({ items, theme, brandSubtitle, searchPlaceholder }:
         </header>
 
         <main className="min-w-0 flex-1 p-4 sm:p-6 lg:p-8">
-          <Outlet />
+          {/* Solo el área de contenido muestra el indicador: cabecera y barra lateral se mantienen. */}
+          <RouteSuspense>
+            <Outlet />
+          </RouteSuspense>
         </main>
       </div>
     </div>

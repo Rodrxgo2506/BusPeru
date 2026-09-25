@@ -1,9 +1,10 @@
-import { ArrowLeft, ArrowRight, BusFront, CalendarDays, ShieldCheck, Ticket, User, Wallet } from 'lucide-react';
+import { ArrowLeft, ArrowRight, BadgeCheck, BusFront, CalendarDays, ShieldCheck, Ticket, User, Wallet } from 'lucide-react';
 import { useEffect, useState, type FormEvent } from 'react';
 import { Navigate, useNavigate } from 'react-router-dom';
 import { Button, Card, Checkbox, Input, LoadingState, Select, Textarea } from '@/components/ui';
 import { useAuth } from '@/context/AuthContext';
 import { useAsync } from '@/hooks/useAsync';
+import { CompanyIdentity } from '@/components/companies/CompanyCard';
 import { publicService } from '@/services';
 import { formatCurrency, formatDate, formatTime } from '@/utils/format';
 import { CheckoutStepper, TrustBar } from './CheckoutStepper';
@@ -142,7 +143,17 @@ export function PassengerPage() {
               </ol>
             ) : (
               <>
-            <p className="text-lg font-extrabold uppercase text-ink">{data?.company_name}</p>
+{/* F17C-UI-12 · identidad real de la empresa, con el mismo componente que `/buscar`. */}
+            <div className="flex items-center gap-3">
+              <CompanyIdentity name={data?.company_name ?? 'Empresa'} logoUrl={data?.company_logo ?? null} size="sm" />
+              <div className="min-w-0">
+                <p className="truncate text-lg font-extrabold uppercase leading-tight text-ink">{data?.company_name}</p>
+                <span className="mt-1 inline-flex items-center gap-1.5 whitespace-nowrap rounded-full bg-success-50 px-2.5 py-0.5 text-xs font-medium text-success-700">
+                  <BadgeCheck className="h-3.5 w-3.5 shrink-0" aria-hidden />
+                  Empresa verificada
+                </span>
+              </div>
+            </div>
             <span className="mt-2 inline-flex items-center gap-1.5 rounded-full bg-slate-100 px-2.5 py-1 text-xs font-medium text-slate-600">
               <BusFront className="h-3.5 w-3.5" />
               {data?.bus_type_name ?? 'Bus'}

@@ -5,11 +5,18 @@ export function Card({ children, className, padded = true }: { children: ReactNo
   return <div className={cn('card', padded && 'p-5', className)}>{children}</div>;
 }
 
-export function CardHeader({ title, description, action, className }: { title: ReactNode; description?: ReactNode; action?: ReactNode; className?: string }) {
+/**
+ * `as` NO cambia nada visible: fija el nivel del encabezado.
+ *
+ * El valor por defecto (`h3`) sirve cuando la tarjeta cuelga de una sección con su propio `h2`. En
+ * las pantallas donde el título de la tarjeta ES el de la sección —los dos paneles de inicio— el
+ * documento saltaba de `h1` a `h3`; ahí se pasa `as="h2"` y el orden vuelve a ser continuo.
+ */
+export function CardHeader({ title, description, action, className, as: Heading = 'h3' }: { title: ReactNode; description?: ReactNode; action?: ReactNode; className?: string; as?: 'h2' | 'h3' }) {
   return (
     <div className={cn('flex flex-wrap items-start justify-between gap-3', className)}>
       <div className="min-w-0">
-        <h3 className="text-base font-semibold text-ink">{title}</h3>
+        <Heading className="text-base font-semibold text-ink">{title}</Heading>
         {description && <p className="mt-0.5 text-sm text-muted">{description}</p>}
       </div>
       {action}

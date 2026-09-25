@@ -220,7 +220,7 @@ export async function findItinerary(groupId: number, user: AuthenticatedUser): P
             t.departure_datetime, t.arrival_datetime,
             ol.city AS origin_city, ol.name AS origin_terminal,
             dl.city AS destination_city, dl.name AS destination_terminal,
-            co.name AS company_name,
+            co.name AS company_name, co.logo_url AS company_logo,
             (SELECT GROUP_CONCAT(s.seat_number ORDER BY s.seat_number SEPARATOR ', ')
              FROM booking_seats bs JOIN seats s ON s.id = bs.seat_id WHERE bs.booking_id = bk.id) AS seat_numbers
      FROM bookings bk

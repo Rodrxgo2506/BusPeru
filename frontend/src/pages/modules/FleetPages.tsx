@@ -291,7 +291,7 @@ export function RoutesPage({ scope }: { scope: 'company' | 'admin' }) {
   const page = (
     <ResourcePage<Route>
       title={scope === 'company' ? 'Mis rutas' : 'Rutas'}
-      description="Administra las rutas que ofrece la empresa."
+      description={scope === 'company' ? 'Administra las rutas que ofrece tu empresa.' : 'Administra las rutas de todas las empresas de la plataforma.'}
       breadcrumbs={[{ label: scope === 'company' ? 'Portal Empresa' : 'Administración' }, { label: 'Rutas' }]}
       loader={(params) => routeService.list(params)}
       columns={columns}

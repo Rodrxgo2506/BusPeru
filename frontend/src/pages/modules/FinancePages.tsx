@@ -336,7 +336,7 @@ export function ReportsPage({ scope }: { scope: 'company' | 'admin' }) {
     <>
       <PageHeader
         title="Reportes"
-        description="Genera y descarga los reportes de tu operación."
+        description={scope === 'company' ? 'Genera y descarga los reportes de tu operación.' : 'Genera y descarga los reportes de toda la plataforma.'}
         breadcrumbs={[{ label: scope === 'company' ? 'Portal Empresa' : 'Administración' }, { label: 'Reportes' }]}
         actions={
           rows.length > 0 ? (

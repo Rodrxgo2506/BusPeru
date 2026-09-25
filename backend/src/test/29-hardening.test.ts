@@ -1,7 +1,7 @@
 import '../test/helpers/testEnv';
 import assert from 'node:assert/strict';
 import jwt from 'jsonwebtoken';
-import { after, before, beforeEach, describe, it } from 'node:test';
+import { after, afterEach, before, beforeEach, describe, it } from 'node:test';
 import { get, put, testBaseUrl } from './helpers/api';
 import { execute, query, queryOne } from '../config/database';
 import { env } from '../config/env';
@@ -42,8 +42,41 @@ describe('BP-25 · robustez y bordes', () => {
   }
 
   let permisosOriginales: number[] = [];
+  /** Instantánea de TODOS los roles que esta suite puede tocar, tomada antes de cada caso. */
+  let instantanea = new Map<number, number[]>();
   beforeEach(async () => {
     permisosOriginales = await permisosDe(rolAdmin);
+    instantanea = new Map();
+    for (const rol of await query<{ id: number }>('SELECT id FROM roles')) {
+      instantanea.set(Number(rol.id), await permisosDe(Number(rol.id)));
+    }
+  });
+
+  /**
+   * F17C-SEC-11 · LA RESTAURACIÓN NO PUEDE DEPENDER DE QUE EL CASO PASE.
+   *
+   * `role_permissions` es de las pocas tablas que NO se vacían entre archivos: `prepareSuite`
+   * solo trunca datos operativos, y el catálogo de RBAC se siembra una vez por ejecución. Varios
+   * casos de abajo recortan roles y los devolvían a su estado con una llamada al FINAL del cuerpo,
+   * después de las aserciones. Si una aserción fallaba, esa llamada no llegaba a ejecutarse y el
+   * rol se quedaba recortado para TODOS los archivos siguientes de la batería.
+   *
+   * Se comprobó forzando un fallo en el caso 11: ADMIN pasó de 43 permisos a 2 y siguió así al
+   * terminar el proceso; al correr después las suites 30 a 33, un fallo real se convirtió en diez,
+   * nueve de ellos falsos y en suites inocentes («Se requiere el permiso: payments.refund»).
+   *
+   * Un `afterEach` corre aunque el caso falle. Se compara con la instantánea y solo se reescribe
+   * el rol que de verdad cambió, de modo que un caso que pasa no paga nada extra.
+   */
+  afterEach(async () => {
+    for (const [rol, permisos] of instantanea) {
+      const actuales = await permisosDe(rol);
+      if (actuales.length === permisos.length && actuales.every((permiso, i) => permiso === permisos[i])) continue;
+      await execute('DELETE FROM role_permissions WHERE role_id = ?', [rol]);
+      for (const permiso of permisos) {
+        await execute('INSERT INTO role_permissions (role_id, permission_id) VALUES (?, ?)', [rol, permiso]);
+      }
+    }
   });
 
   /** Devuelve el rol ADMIN a su estado original sin pasar por la API. */

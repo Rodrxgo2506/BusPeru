@@ -53,6 +53,11 @@ interface ResourcePageProps<T extends { id: number }> {
   /** Género gramatical del nombre de la entidad, para "Nuevo bus" frente a "Nueva ruta". */
   entityGender?: 'm' | 'f';
   formFields?: FormField[];
+  /**
+   * Contenido propio dentro del formulario, por debajo de los campos. Recibe la fila en edición, o
+   * `null` al crear: sirve para lo que necesita un registro ya existente, como subir una imagen.
+   */
+  formExtra?: (row: T | null) => ReactNode;
   formSize?: 'sm' | 'md' | 'lg' | 'xl';
   onCreate?: (values: Record<string, unknown>) => Promise<void>;
   onUpdate?: (id: number, values: Record<string, unknown>) => Promise<void>;
@@ -83,6 +88,7 @@ export function ResourcePage<T extends { id: number }>({
   entityLabel,
   entityGender = 'm',
   formFields,
+  formExtra,
   formSize = 'md',
   onCreate,
   onUpdate,
@@ -246,7 +252,12 @@ export function ResourcePage<T extends { id: number }>({
               sort={list.sort}
               onSort={list.toggleSort}
               loading={list.loading}
-              loadingState={<TableSkeleton columns={Math.min(allColumns.length, 6)} />}
+              /* F17C-NAV-03: el esqueleto reserva altura para que el documento no se encoja al entrar. */
+              loadingState={
+                <div className="min-h-[55vh]">
+                  <TableSkeleton columns={Math.min(allColumns.length, 6)} />
+                </div>
+              }
               mobileCard={mobileCard}
               emptyState={
                 <EmptyState
@@ -285,6 +296,7 @@ export function ResourcePage<T extends { id: number }>({
           fields={formFields}
           size={formSize}
           initialValues={editing ? ((toFormValues?.(editing) ?? editing) as Record<string, unknown>) : null}
+          extra={formExtra?.(editing)}
         />
       )}
 

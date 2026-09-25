@@ -1,6 +1,7 @@
-import { ArrowRight, ArrowRightLeft, Check, Clock3, Pencil, Route as RouteIcon } from 'lucide-react';
+import { ArrowRight, ArrowRightLeft, BadgeCheck, Check, Clock3, Pencil, Route as RouteIcon } from 'lucide-react';
 import { useEffect, useMemo, useRef } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
+import { CompanyIdentity } from '@/components/companies/CompanyCard';
 import { decodeSegments } from '@/components/common/TripSearchForm';
 import { Badge, Button, Card, EmptyState, ErrorState, LoadingState } from '@/components/ui';
 import { useAsync } from '@/hooks/useAsync';
@@ -141,8 +142,10 @@ export function ItineraryResultsPage() {
                   </Card>
                 ) : (
                   <div className="space-y-3">
-                    {bloque.trips.map((raw) => {
-                      const trip = raw as Record<string, unknown>;
+                    {bloque.trips.map((trip) => {
+                      // El servicio ya devuelve `PublicTrip` (F17C-CLEAN-01), así que sobra el molde a
+                      // `Record<string, unknown>`. Las conversiones de abajo se conservan tal cual:
+                      // protegen de los decimales que MySQL puede entregar como texto.
                       const id = Number(trip.id);
                       const elegido = segmento?.tripId === id;
                       // Mismo campo que usa el buscador de ida: el calculado (BP-15).
@@ -154,15 +157,30 @@ export function ItineraryResultsPage() {
                           className={cn('transition', elegido && 'border-brand-500 ring-1 ring-brand-500/30')}
                         >
                           <div className="flex flex-wrap items-center justify-between gap-4">
-                            <div className="min-w-0">
-                              <p className="font-semibold text-ink">{String(trip.company_name ?? '')}</p>
-                              <p className="mt-1 flex items-center gap-2 text-sm text-muted">
-                                <span className="font-medium text-ink">{formatTime(String(trip.departure_datetime))}</span>
-                                <ArrowRight className="h-3.5 w-3.5" />
-                                <span>{String(trip.destination_city ?? '')}</span>
-                                <span className="text-slate-300">|</span>
-                                <span>{String(trip.bus_type_name ?? 'Bus')}</span>
-                              </p>
+                            {/* F17C-UI-10 · `company_logo` ya viajaba en cada tramo y no se usaba. Mismo
+                                componente y mismo respaldo de iniciales que `/buscar` y `/empresas`. */}
+                            <div className="flex min-w-0 items-center gap-3">
+                              <CompanyIdentity
+                                name={String(trip.company_name ?? 'Empresa')}
+                                logoUrl={(trip.company_logo as string | null) ?? null}
+                                size="sm"
+                              />
+                              <div className="min-w-0">
+                                <p className="truncate font-semibold text-ink">{String(trip.company_name ?? '')}</p>
+                                {/* La búsqueda solo devuelve viajes de empresas ACTIVE (`co.status`), es
+                                    decir, verificadas: mismo criterio que en `/buscar`. */}
+                                <span className="mt-1 inline-flex items-center gap-1.5 whitespace-nowrap rounded-full bg-success-50 px-2.5 py-0.5 text-xs font-medium text-success-700">
+                                  <BadgeCheck className="h-3.5 w-3.5 shrink-0" aria-hidden />
+                                  Empresa verificada
+                                </span>
+                                <p className="mt-1 flex items-center gap-2 text-sm text-muted">
+                                  <span className="font-medium text-ink">{formatTime(String(trip.departure_datetime))}</span>
+                                  <ArrowRight className="h-3.5 w-3.5 shrink-0" />
+                                  <span className="truncate">{String(trip.destination_city ?? '')}</span>
+                                  <span className="text-slate-300">|</span>
+                                  <span className="truncate">{String(trip.bus_type_name ?? 'Bus')}</span>
+                                </p>
+                              </div>
                             </div>
 
                             <div className="flex items-center gap-4">

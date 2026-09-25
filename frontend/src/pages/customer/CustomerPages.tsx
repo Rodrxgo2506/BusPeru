@@ -2,9 +2,9 @@ import {
   AlertCircle,
   Armchair,
   ArrowRight,
+  BadgeCheck,
   BedDouble,
   Bell,
-  Building2,
   Bus,
   CalendarClock,
   CalendarDays,
@@ -32,6 +32,7 @@ import { TARJETA_FLOTANTE as FLOTANTE, TravelBackdrop } from '@/components/commo
 import { useToast } from '@/context/ToastContext';
 import { useAsync } from '@/hooks/useAsync';
 import { ApiError } from '@/services/api';
+import { CompanyIdentity } from '@/components/companies/CompanyCard';
 import { bookingService, notificationService, supportService } from '@/services';
 import { PRIORITY_LABELS, TICKET_CATEGORY_LABELS } from '@/constants/labels';
 import { formatCurrency, formatDateTime } from '@/utils/format';
@@ -95,8 +96,21 @@ export function BookingDetailPage() {
         <div className="space-y-5">
           <Card padded={false} className={FLOTANTE}>
             <SectionHead icon={<Bus />} title="Información del viaje" subtitle="Detalles de tu pasaje y recorrido" />
+            {/* F17C-UI-13 · identidad de la empresa antes de la ficha de datos. El nombre se sigue
+                listando abajo como dato del pasaje, que es otro contexto. */}
+            <div className="flex items-center gap-3 border-b border-border/70 px-5 py-4 sm:px-6">
+              <CompanyIdentity name={data.company_name ?? 'Empresa'} logoUrl={data.company_logo ?? null} size="sm" />
+              <div className="min-w-0">
+                <p className="truncate text-[15px] font-bold leading-tight text-ink">{data.company_name}</p>
+                <span className="mt-1 inline-flex items-center gap-1.5 whitespace-nowrap rounded-full bg-success-50 px-2.5 py-0.5 text-xs font-medium text-success-700">
+                  <BadgeCheck className="h-3.5 w-3.5 shrink-0" aria-hidden />
+                  Empresa verificada
+                </span>
+              </div>
+            </div>
             <TwoColumns>
-              <Detail icon={<Building2 />} label="Empresa" value={data.company_name} />
+              {/* El nombre de la empresa ya lo muestra el bloque de identidad de arriba: repetirlo
+                  aquí dejaba «Empresa A» dos veces seguidas (F17C-UI-13). */}
               <Detail icon={<BedDouble />} label="Tipo de servicio" value={data.bus_type_name ?? '—'} />
               <Detail icon={<CalendarDays />} label="Salida" value={formatDateTime(data.departure_datetime)} />
               <Detail icon={<CalendarClock />} label="Llegada estimada" value={formatDateTime(data.arrival_datetime)} />

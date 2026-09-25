@@ -874,21 +874,48 @@ describe('FASE 8H · cancelación de viajes, reservas y reembolsos', () => {
       // Una tercera transacción retiene el viaje, como lo haría una cancelación en curso.
       const bloqueo = await pool.getConnection();
       await bloqueo.beginTransaction();
-      await bloqueo.query('SELECT id FROM trips WHERE id = ? FOR UPDATE', [tripId]);
 
-      const expiracion = expireDueBookings({ limit: 500 });
-      const cancelacion = cancelar(tripId);
-      await new Promise((resolve) => setTimeout(resolve, 300));
-      // Mientras el viaje está retenido, ninguna de las dos pudo tocar la reserva.
-      assert.equal((await reserva(bookingId))?.status, 'PENDING');
+      /**
+       * F17C-SEC-11 · EL CERROJO SE SUELTA PASE LO QUE PASE.
+       *
+       * Antes el `commit()` y el `release()` iban detrás de una aserción. Si esa aserción
+       * fallaba, la conexión se quedaba fuera del pool con la transacción abierta y el `FOR
+       * UPDATE` puesto, y la expiración y la cancelación —lanzadas sin esperar— seguían vivas
+       * aguardando ese cerrojo 50 segundos después de que el caso hubiera terminado. Es el mismo
+       * artefacto (sesión ociosa con transacción abierta) que se capturó en la batería completa.
+       */
+      let suelto = false;
+      const soltar = async () => {
+        if (suelto) return;
+        suelto = true;
+        try {
+          await bloqueo.commit();
+        } finally {
+          bloqueo.release();
+        }
+      };
+      let expiracion: ReturnType<typeof expireDueBookings> | undefined;
+      let cancelacion: ReturnType<typeof cancelar> | undefined;
+      try {
+        await bloqueo.query('SELECT id FROM trips WHERE id = ? FOR UPDATE', [tripId]);
 
-      await bloqueo.commit();
-      bloqueo.release();
+        expiracion = expireDueBookings({ limit: 500 });
+        cancelacion = cancelar(tripId);
+        await new Promise((resolve) => setTimeout(resolve, 300));
+        // Mientras el viaje está retenido, ninguna de las dos pudo tocar la reserva.
+        assert.equal((await reserva(bookingId))?.status, 'PENDING');
 
-      const [resultadoExpiracion, resultadoCancelacion] = await Promise.all([expiracion, cancelacion]);
-      assert.equal(resultadoCancelacion.status, 200, JSON.stringify(resultadoCancelacion.body));
-      assert.ok(resultadoExpiracion.expired <= 1);
-      await assertCoherente(tripId, bookingId, capacidad);
+        await soltar();
+
+        const [resultadoExpiracion, resultadoCancelacion] = await Promise.all([expiracion, cancelacion]);
+        assert.equal(resultadoCancelacion.status, 200, JSON.stringify(resultadoCancelacion.body));
+        assert.ok(resultadoExpiracion.expired <= 1);
+        await assertCoherente(tripId, bookingId, capacidad);
+      } finally {
+        await soltar();
+        // Nada queda flotando después del caso: ni la expiración ni la cancelación.
+        await Promise.allSettled([expiracion, cancelacion].filter((p) => p !== undefined));
+      }
     });
   });
 });

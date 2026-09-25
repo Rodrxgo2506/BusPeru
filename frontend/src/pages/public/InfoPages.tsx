@@ -1,59 +1,11 @@
-import { ArrowRight, Building2, CalendarClock, Headphones, HelpCircle, MapPin, Percent, Wallet } from 'lucide-react';
+import { ArrowRight, Building2, CalendarClock, Headphones, HelpCircle, Percent, Wallet } from 'lucide-react';
 import { Button, Card, EmptyState, ErrorState } from '@/components/ui';
-import {
-  DestinationTile,
-  DestinationTileSkeleton,
-  DestinationsHero,
-} from '@/components/destinations/DestinationsSections';
 import { CompanyCard, CompanyCardSkeleton } from '@/components/companies/CompanyCard';
 import { PublicHero } from '@/components/common/PublicHero';
 import { companiesHeroImage, helpHeroImage, offersHeroImage } from '@/constants/images';
 import { useAsync } from '@/hooks/useAsync';
 import { publicService } from '@/services';
 import { formatCurrency, formatDate, todayIso } from '@/utils/format';
-
-export function DestinationsPage() {
-  const destinations = useAsync(() => publicService.destinations(), []);
-
-  const list = destinations.data ?? [];
-
-  return (
-    <DestinationsHero>
-      {destinations.error ? (
-        <Card padded={false}>
-          <ErrorState error={destinations.error} onRetry={destinations.reload} />
-        </Card>
-      ) : destinations.loading ? (
-        <div className="grid gap-5 sm:grid-cols-2 lg:grid-cols-4">
-          {Array.from({ length: 4 }).map((_, index) => (
-            <DestinationTileSkeleton key={index} />
-          ))}
-        </div>
-      ) : list.length === 0 ? (
-        <Card padded={false}>
-          <EmptyState
-            title="Aún no hay destinos disponibles"
-            description="Cuando las empresas programen viajes, sus destinos aparecerán aquí."
-            icon={<MapPin className="h-7 w-7" />}
-          />
-        </Card>
-      ) : (
-        <div className="grid gap-5 sm:grid-cols-2 lg:grid-cols-4">
-          {list.map((destination) => (
-            <DestinationTile
-              key={destination.city}
-              city={destination.city}
-              department={destination.department}
-              trips={destination.trips}
-              minPrice={destination.min_price}
-              to={`/buscar?destination=${encodeURIComponent(destination.city)}&date=${todayIso()}`}
-            />
-          ))}
-        </div>
-      )}
-    </DestinationsHero>
-  );
-}
 
 export function CompaniesPage() {
   const companies = useAsync(() => publicService.companies(), []);

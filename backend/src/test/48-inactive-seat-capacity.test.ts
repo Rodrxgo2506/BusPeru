@@ -73,7 +73,7 @@ describe('H-15 · la capacidad es de asientos vendibles', () => {
     const total = disponibles + inactivos;
     for (let i = 1; i <= total; i += 1) {
       const res = await execute(
-        `INSERT INTO seats (bus_id, layout_id, deck_id, seat_number, row_number, column_number, is_window, is_aisle, status)
+        `INSERT INTO seats (bus_id, layout_id, deck_id, seat_number, \`row_number\`, column_number, is_window, is_aisle, status)
          VALUES (?, ?, ?, ?, ?, ?, 0, 0, ?)`,
         [busId, layoutId, deckId, String(i).padStart(2, '0'), Math.ceil(i / 4), ((i - 1) % 4) + 1, i <= disponibles ? 'AVAILABLE' : 'INACTIVE'],
       );

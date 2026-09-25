@@ -7,6 +7,16 @@ const BASE_URL = resolveApiUrl(import.meta.env.VITE_API_URL, import.meta.env.DEV
 
 /** Base de la API, para flujos que necesitan NAVEGAR (OAuth) en lugar de hacer fetch. */
 export const API_BASE_URL = BASE_URL;
+
+/**
+ * URL de una imagen pública del almacén (FASE 17). La base guarda REFERENCIAS (`public/...`), no
+ * URLs: así la API decide dónde viven los archivos y cambiar de almacén no toca el contenido.
+ */
+export function mediaUrl(reference: string | null | undefined): string | null {
+  if (!reference || !/^public\/[\w/-]+\.(?:jpg|jpeg|png|webp|ico)$/.test(reference)) return null;
+  return `${BASE_URL}/public/media/${reference}`;
+}
+
 const TOKEN_KEY = 'busperu.token';
 
 export class ApiError extends Error {

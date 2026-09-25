@@ -2,6 +2,7 @@ import {
   ArrowLeftRight,
   ArrowRightLeft,
   Armchair,
+  BadgeCheck,
   BedDouble,
   Bus,
   CalendarDays,
@@ -23,6 +24,7 @@ import { TARJETA_FLOTANTE as FLOTANTE, TravelBackdrop } from '@/components/commo
 import { useToast } from '@/context/ToastContext';
 import { useAsync } from '@/hooks/useAsync';
 import { ApiError } from '@/services/api';
+import { CompanyIdentity } from '@/components/companies/CompanyCard';
 import { bookingService } from '@/services';
 import type { Booking } from '@/types';
 import { formatCurrency, formatDate, formatLongDate, formatTime, toBusinessDate } from '@/utils/format';
@@ -174,7 +176,17 @@ export function MyTripsPage() {
 
                 <div className="min-w-0">
                   <p className="text-[11px] font-semibold uppercase tracking-[0.12em] text-muted">Empresa</p>
-                  <p className="mt-0.5 text-lg font-bold leading-tight text-brand-600 sm:text-xl">{booking.company_name}</p>
+                  {/* F17C-UI-13 · identidad real de la empresa, con el mismo componente que `/buscar`. */}
+                  <div className="mt-1 flex items-center gap-3">
+                    <CompanyIdentity name={booking.company_name ?? 'Empresa'} logoUrl={booking.company_logo ?? null} size="sm" />
+                    <div className="min-w-0">
+                      <p className="truncate text-lg font-bold leading-tight text-brand-600 sm:text-xl">{booking.company_name}</p>
+                      <span className="mt-1 inline-flex items-center gap-1.5 whitespace-nowrap rounded-full bg-success-50 px-2.5 py-0.5 text-xs font-medium text-success-700">
+                        <BadgeCheck className="h-3.5 w-3.5 shrink-0" aria-hidden />
+                        Empresa verificada
+                      </span>
+                    </div>
+                  </div>
                   <p className="mt-2 inline-flex items-center gap-1.5 rounded-full bg-slate-50 px-2.5 py-1 text-xs font-medium text-slate-600">
                     <BedDouble className="h-3.5 w-3.5" />
                     {booking.bus_type_name ?? 'Bus'}

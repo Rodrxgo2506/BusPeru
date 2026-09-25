@@ -1,4 +1,5 @@
-import { execute, query, queryOne } from '../config/database';
+import { execute, query, queryOne, withTransaction } from '../config/database';
+import { recordSystemAudit } from './audit.service';
 import { resolveTripLayoutId } from './bus-layout.service';
 import type { AuthenticatedUser } from '../types/entities';
 import { ApiError } from '../utils/ApiError';
@@ -264,40 +265,63 @@ export const TRIP_CREATION_STATUSES = ['SCHEDULED', 'BOARDING', 'DELAYED'] as co
  * completado» en `notification_templates`, y esta fase no inventa contenido.
  */
 export async function advanceTripLifecycle(): Promise<TripLifecycleResult> {
-  // 1. Ha llegado la hora de salir. Desde SCHEDULED y, desde 11F (H-30), también desde
-  //    BOARDING: el embarque ocurre ANTES de la salida, así que un viaje en embarque cuya hora
-  //    de salida ya pasó ha salido; antes se quedaba en BOARDING para siempre.
-  //    DELAYED NO avanza solo: «retrasado» significa justamente que no salió a su hora y el
-  //    sistema no conoce la hora real; la empresa lo pasa a BOARDING o IN_PROGRESS (o corrige
-  //    la salida y lo vuelve a SCHEDULED). CANCELLED, COMPLETED e IN_PROGRESS no entran.
-  const started = await execute(
-    `UPDATE trips SET status = 'IN_PROGRESS'
-     WHERE status IN ('SCHEDULED', 'BOARDING') AND departure_datetime <= NOW()`,
-  );
+  /**
+   * F18-07 · AUDITORÍA DEL CICLO DE VIDA. Cada transición automática deja su fila en
+   * `audit_logs` (actor `system:trip-lifecycle`, `user_id` NULL) DENTRO de la misma transacción
+   * que la aplica: o quedan el cambio y su rastro, o ninguno. Para saber QUÉ filas cambian, se
+   * seleccionan primero con `FOR UPDATE`; así, si dos procesos corrieran a la vez, el segundo
+   * espera, vuelve a leer y ya no encuentra nada que mover: ni transiciones ni registros dobles.
+   * Las reglas de cada paso no cambian.
+   */
+  return withTransaction(async (connection) => {
+    const filas = async <T>(sql: string): Promise<T[]> => (await connection.query(sql))[0] as T[];
+    const auditar = (entityType: 'trips' | 'bookings', entityId: number, action: string, antes: string, despues: string, description: string) =>
+      recordSystemAudit(
+        { action, entityType, entityId, actor: 'system:trip-lifecycle', description, oldValues: { status: antes }, newValues: { status: despues } },
+        connection,
+      );
 
-  // 2. Ha llegado la hora de llegar. Se exige `arrival_datetime`: la columna es opcional en
-  //    el esquema y un viaje sin hora de llegada no puede darse por terminado. Se queda en
-  //    IN_PROGRESS hasta que alguien la complete, en lugar de inventarle una duración.
-  const completed = await execute(
-    `UPDATE trips SET status = 'COMPLETED'
-     WHERE status = 'IN_PROGRESS' AND arrival_datetime IS NOT NULL AND arrival_datetime <= NOW()`,
-  );
+    // 1. Ha llegado la hora de salir. Desde SCHEDULED y, desde 11F (H-30), también desde
+    //    BOARDING: el embarque ocurre ANTES de la salida, así que un viaje en embarque cuya hora
+    //    de salida ya pasó ha salido; antes se quedaba en BOARDING para siempre.
+    //    DELAYED NO avanza solo: «retrasado» significa justamente que no salió a su hora y el
+    //    sistema no conoce la hora real; la empresa lo pasa a BOARDING o IN_PROGRESS (o corrige
+    //    la salida y lo vuelve a SCHEDULED). CANCELLED, COMPLETED e IN_PROGRESS no entran.
+    const salen = await filas<{ id: number; status: string }>(
+      `SELECT id, status FROM trips
+       WHERE status IN ('SCHEDULED', 'BOARDING') AND departure_datetime <= NOW() ORDER BY id FOR UPDATE`,
+    );
+    if (salen.length) {
+      await connection.query("UPDATE trips SET status = 'IN_PROGRESS' WHERE id IN (?) AND status IN ('SCHEDULED', 'BOARDING')", [salen.map((t) => t.id)]);
+      for (const t of salen) await auditar('trips', t.id, 'START', t.status, 'IN_PROGRESS', `El viaje #${t.id} salió automáticamente al llegar su hora de salida`);
+    }
 
-  // 3. Las reservas de los viajes ya cerrados. Solo CONFIRMED: PENDING sigue su propio
-  //    camino de expiración, y CANCELLED y EXPIRED no se reviven jamás. No se tocan pagos,
-  //    reembolsos, asientos ni movimientos financieros: completar un viaje no mueve dinero.
-  const bookingsCompleted = await execute(
-    `UPDATE bookings bk
-     JOIN trips t ON t.id = bk.trip_id
-     SET bk.status = 'COMPLETED'
-     WHERE t.status = 'COMPLETED' AND bk.status = 'CONFIRMED'`,
-  );
+    // 2. Ha llegado la hora de llegar. Se exige `arrival_datetime`: la columna es opcional en
+    //    el esquema y un viaje sin hora de llegada no puede darse por terminado. Se queda en
+    //    IN_PROGRESS hasta que alguien la complete, en lugar de inventarle una duración.
+    const llegan = await filas<{ id: number }>(
+      `SELECT id FROM trips
+       WHERE status = 'IN_PROGRESS' AND arrival_datetime IS NOT NULL AND arrival_datetime <= NOW() ORDER BY id FOR UPDATE`,
+    );
+    if (llegan.length) {
+      await connection.query("UPDATE trips SET status = 'COMPLETED' WHERE id IN (?) AND status = 'IN_PROGRESS'", [llegan.map((t) => t.id)]);
+      for (const t of llegan) await auditar('trips', t.id, 'COMPLETE', 'IN_PROGRESS', 'COMPLETED', `El viaje #${t.id} se completó automáticamente al llegar su hora de llegada`);
+    }
 
-  return {
-    started: started.affectedRows,
-    completed: completed.affectedRows,
-    bookingsCompleted: bookingsCompleted.affectedRows,
-  };
+    // 3. Las reservas de los viajes ya cerrados. Solo CONFIRMED: PENDING sigue su propio
+    //    camino de expiración, y CANCELLED y EXPIRED no se reviven jamás. No se tocan pagos,
+    //    reembolsos, asientos ni movimientos financieros: completar un viaje no mueve dinero.
+    const reservas = await filas<{ id: number; trip_id: number }>(
+      `SELECT bk.id, bk.trip_id FROM bookings bk JOIN trips t ON t.id = bk.trip_id
+       WHERE t.status = 'COMPLETED' AND bk.status = 'CONFIRMED' ORDER BY bk.id FOR UPDATE`,
+    );
+    if (reservas.length) {
+      await connection.query("UPDATE bookings SET status = 'COMPLETED' WHERE id IN (?) AND status = 'CONFIRMED'", [reservas.map((b) => b.id)]);
+      for (const b of reservas) await auditar('bookings', b.id, 'COMPLETE', 'CONFIRMED', 'COMPLETED', `La reserva #${b.id} se completó con su viaje #${b.trip_id}`);
+    }
+
+    return { started: salen.length, completed: llegan.length, bookingsCompleted: reservas.length };
+  });
 }
 
 export interface TripSearchParams {

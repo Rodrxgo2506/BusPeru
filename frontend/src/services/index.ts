@@ -8,6 +8,8 @@ import type {
   Bus,
   BusType,
   Company,
+  CompanyLogo,
+  ItinerarySegmentResults,
   CompanyDocument,
   Coupon,
   Driver,
@@ -26,6 +28,13 @@ import type {
   SeatAvailability,
   SeatType,
   BusLayout,
+  BrandingAsset,
+  BrandingReferences,
+  Destination,
+  DestinationAttraction,
+  DestinationFestivity,
+  PublicDestinationCard,
+  PublicDestinationDetail,
   BusLayoutDeck,
   BusLayoutElement,
   LayoutSeat,
@@ -73,16 +82,15 @@ export const publicService = {
   terminals: (city?: string) => apiData(api.get<Location[]>('/public/terminals', { city })),
   companies: () => apiData(api.get<Array<Company & { rating: number | null; reviews_count: number; routes_count: number }>>('/public/companies')),
   searchTrips: (params: QueryParams) => api.get<PublicTrip[]>('/public/trips', params),
-  /** Búsqueda de itinerarios de varios tramos: ida y vuelta y multidestino. */
+  /**
+   * Búsqueda de itinerarios de varios tramos: ida y vuelta y multidestino.
+   *
+   * Cada tramo devuelve viajes con la MISMA forma que la búsqueda de ida: el backend reutiliza
+   * `searchTrips`, así que se tipa con `PublicTrip` en vez de `Record<string, unknown>`
+   * (F17C-CLEAN-01). Solo cambia el tipo; la respuesta JSON es la de siempre.
+   */
   searchItinerary: (body: { trip_type: string; segments: Array<{ origin: string; destination: string; date: string }> }) =>
-    apiData(api.post<Array<{
-      segment_order: number;
-      origin: string;
-      destination: string;
-      date: string;
-      trips: Array<Record<string, unknown>>;
-      total: number;
-    }>>('/public/itineraries/search', body)),
+    apiData(api.post<ItinerarySegmentResults[]>('/public/itineraries/search', body)),
   trip: (id: number) => apiData(api.get<PublicTrip & { stops: Array<{ name: string; city: string; stop_order: number }> }>(`/public/trips/${id}`)),
   tripSeats: (id: number) => apiData(api.get<SeatAvailability[]>(`/public/trips/${id}/seats`)),
   /** Geometría del bus del viaje: pisos, rejilla y elementos. Sin asientos ni precios. */
@@ -92,6 +100,58 @@ export const publicService = {
   reviews: (companyId?: number) => apiData(api.get<Review[]>('/public/reviews', { company_id: companyId })),
   settings: () => apiData(api.get<Record<string, unknown>>('/public/settings')),
   stats: () => apiData(api.get<{ companies: number; routes: number; bookings: number; terminals: number }>('/public/stats')),
+  /** FASE 17 · fichas editoriales ACTIVE para «Descubre más destinos», en el orden del ADMIN. */
+  featuredDestinations: () => apiData(api.get<PublicDestinationCard[]>('/public/featured-destinations')),
+  destinationBySlug: (slug: string) => apiData(api.get<PublicDestinationDetail>(`/public/destinations/${encodeURIComponent(slug)}`)),
+  branding: () => apiData(api.get<BrandingReferences>('/public/branding')),
+};
+
+/** FASE 17 · contenido de destinos (solo ADMIN). El CRUD es el genérico; imágenes y orden, aparte. */
+export const destinationService = {
+  ...crud<Destination>('/destinations'),
+  reorder: (ids: number[]) => apiData(api.post<{ reordered: boolean }>('/destinations/reorder', { ids })),
+  uploadImage: (id: number, file: File) => {
+    const form = new FormData();
+    form.append('file', file);
+    return apiData(api.upload<Destination>(`/destinations/${id}/image`, form));
+  },
+  removeImage: (id: number) => apiData(api.delete<Destination>(`/destinations/${id}/image`)),
+  /** FASE 17B · imagen de la sección «Calendario festivo». */
+  uploadFestivitiesImage: (id: number, file: File) => {
+    const form = new FormData();
+    form.append('file', file);
+    return apiData(api.upload<Destination>(`/destinations/${id}/festivities-image`, form));
+  },
+  removeFestivitiesImage: (id: number) => apiData(api.delete<Destination>(`/destinations/${id}/festivities-image`)),
+};
+
+export const attractionService = {
+  ...crud<DestinationAttraction>('/destination-attractions'),
+  reorder: (destinationId: number, ids: number[]) =>
+    apiData(api.post<{ reordered: boolean }>('/destination-attractions/reorder', { destination_id: destinationId, ids })),
+  uploadImage: (id: number, file: File) => {
+    const form = new FormData();
+    form.append('file', file);
+    return apiData(api.upload<DestinationAttraction>(`/destination-attractions/${id}/image`, form));
+  },
+  removeImage: (id: number) => apiData(api.delete<DestinationAttraction>(`/destination-attractions/${id}/image`)),
+};
+
+export const festivityService = {
+  ...crud<DestinationFestivity>('/destination-festivities'),
+  reorder: (destinationId: number, ids: number[]) =>
+    apiData(api.post<{ reordered: boolean }>('/destination-festivities/reorder', { destination_id: destinationId, ids })),
+};
+
+/** FASE 17 · identidad visual (solo ADMIN). */
+export const brandingService = {
+  get: () => apiData(api.get<BrandingReferences>('/admin/branding')),
+  upload: (asset: BrandingAsset, file: File) => {
+    const form = new FormData();
+    form.append('file', file);
+    return apiData(api.upload<BrandingReferences>(`/admin/branding/${asset}`, form));
+  },
+  remove: (asset: BrandingAsset) => apiData(api.delete<BrandingReferences>(`/admin/branding/${asset}`)),
 };
 
 export const userService = {
@@ -114,6 +174,28 @@ export const permissionService = {
 };
 
 export const companyService = crud<Company>('/companies');
+
+/**
+ * Logotipo de la empresa (F17C-COMPANY-LOGO-01). Un rol de empresa solo puede tocar la suya: la API
+ * la resuelve desde la sesión. `logo_url` es una referencia del almacén, no una URL: se convierte
+ * con `mediaUrl` para pintarla.
+ */
+export const companyLogoService = {
+  get: (companyId?: number) => apiData(api.get<CompanyLogo>(logoPath(companyId))),
+  upload: (file: File, companyId?: number) => {
+    const form = new FormData();
+    form.append('file', file);
+    return apiData(api.upload<CompanyLogo>(logoPath(companyId), form));
+  },
+  remove: (companyId?: number) => apiData(api.delete<CompanyLogo>(logoPath(companyId))),
+};
+
+/**
+ * `companyId` solo lo usa el ADMIN, para administrar el logotipo de una empresa concreta desde su
+ * panel. Un rol de empresa lo omite y la API resuelve la suya desde la sesión; si lo enviara, la
+ * API lo ignoraría igualmente.
+ */
+const logoPath = (companyId?: number) => (companyId ? `/company/logo?company_id=${companyId}` : '/company/logo');
 
 /** Datos bancarios de la empresa. La API resuelve la empresa desde la sesión. */
 export const bankAccountService = {

@@ -2,6 +2,7 @@ import { Router, type Request } from 'express';
 import { execute, query, queryOne, withTransaction } from '../config/database';
 import { authenticate, requireAuth } from '../middleware/auth.middleware';
 import { requirePermission } from '../middleware/permission.middleware';
+import { terminateSessions } from '../repositories/user.repository';
 import { validate } from '../middleware/validate.middleware';
 import { recordAudit } from '../services/audit.service';
 import { ApiError } from '../utils/ApiError';
@@ -279,13 +280,30 @@ router.put(
       userId,
     ]);
 
+    /**
+     * SUSPENDER TERMINA LAS SESIONES (F17C-SEC-10).
+     *
+     * Dejar la cuenta en cualquier estado que no sea ACTIVE significa «esta cuenta no debe tener
+     * sesiones vivas». Avanzar la marca invalida de golpe todos los JWT ya emitidos, sin tener
+     * que enumerarlos —cosa imposible: el token es sin estado y no se guarda en ninguna parte—.
+     *
+     * Reactivar NO retrocede la marca, y por eso un token anterior no revive. Esta es la única
+     * ruta que escribe `users.status`: se comprobó que ni el CRUD genérico ni ningún otro
+     * servicio lo tocan.
+     */
+    const nuevoEstado = typeof data.status === 'string' ? data.status : null;
+    const terminaSesiones = nuevoEstado !== null && nuevoEstado !== 'ACTIVE' && previous.status !== nuevoEstado;
+    if (terminaSesiones) await terminateSessions(userId);
+
     await recordAudit(req, {
       action: 'UPDATE',
       entityType: 'users',
       entityId: userId,
-      description: `Actualizó el usuario ${previous.email}`,
+      description: terminaSesiones
+        ? `Actualizó el usuario ${previous.email} y cerró sus sesiones activas`
+        : `Actualizó el usuario ${previous.email}`,
       oldValues: previous,
-      newValues: data,
+      newValues: terminaSesiones ? { ...data, sessions_terminated: true } : data,
     });
 
     sendSuccess(res, await findUserOrFail(req, userId));

@@ -20,16 +20,26 @@ interface AdminDashboardData {
 export function AdminDashboard() {
   const dashboard = useAsync(() => dashboardService.admin() as Promise<unknown>, []);
 
-  if (dashboard.loading) return <LoadingState label="Cargando el panel de administración..." />;
-  if (dashboard.error || !dashboard.data) {
-    return (
-      <Card padded={false}>
-        <ErrorState error={dashboard.error} onRetry={dashboard.reload} />
-      </Card>
-    );
-  }
+  /* El encabezado se pinta siempre (F17C-NAV-02): mientras llega el resumen, el indicador ocupa
+     solo la zona de los datos, no toda el área de contenido. Mismo patrón que «Identidad visual». */
+  return (
+    <>
+      <PageHeader title="¡Bienvenido de vuelta, Admin!" description="Resumen general de la plataforma BusPerú" />
+      {dashboard.loading ? (
+        <LoadingState label="Cargando el panel de administración..." className="min-h-[60vh]" />
+      ) : dashboard.error || !dashboard.data ? (
+        <Card padded={false}>
+          <ErrorState error={dashboard.error} onRetry={dashboard.reload} />
+        </Card>
+      ) : (
+        <DashboardBody data={dashboard.data as AdminDashboardData} />
+      )}
+    </>
+  );
+}
 
-  const data = dashboard.data as AdminDashboardData;
+/** Cuerpo del panel: solo se monta cuando el resumen ya está disponible. */
+function DashboardBody({ data }: { data: AdminDashboardData }) {
   const totals = data.totals ?? {};
   const alerts = data.alerts ?? {};
 
@@ -46,8 +56,6 @@ export function AdminDashboard() {
 
   return (
     <>
-      <PageHeader title="¡Bienvenido de vuelta, Admin!" description="Resumen general de la plataforma BusPerú" />
-
       <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6">
         <StatCard label="Empresas registradas" value={formatNumber(totals.companies_total ?? 0)} icon={<Building2 className="h-5 w-5" />} tone="purple" />
         <StatCard label="Pendientes de aprobación" value={formatNumber(totals.companies_pending ?? 0)} icon={<AlertTriangle className="h-5 w-5" />} tone="warning" />
@@ -68,7 +76,7 @@ export function AdminDashboard() {
 
       <div className="mt-6 grid gap-6 lg:grid-cols-3">
         <Card className="lg:col-span-2">
-          <CardHeader title="Ventas de pasajes" description="Últimos 30 días" />
+          <CardHeader as="h2" title="Ventas de pasajes" description="Últimos 30 días" />
           <div className="mt-4">
             {series.length === 0 ? (
               <p className="py-16 text-center text-sm text-muted">Aún no hay pagos registrados en la plataforma.</p>
@@ -79,7 +87,7 @@ export function AdminDashboard() {
         </Card>
 
         <Card>
-          <CardHeader title="Alertas importantes" action={<Link to="/admin/support" className="text-sm font-medium text-danger-600">Ver todas</Link>} />
+          <CardHeader as="h2" title="Alertas importantes" action={<Link to="/admin/support" className="text-sm font-medium text-danger-600">Ver todas</Link>} />
           {alertItems.length === 0 ? (
             <div className="mt-4 flex items-center gap-3 rounded-card bg-success-50 p-4">
               <CheckCircle2 className="h-5 w-5 shrink-0 text-success-600" />
@@ -117,7 +125,7 @@ export function AdminDashboard() {
 
       <div className="mt-6 grid gap-6 lg:grid-cols-4">
         <Card>
-          <CardHeader title="Top empresas por ventas" />
+          <CardHeader as="h2" title="Top empresas por ventas" />
           {data.topCompanies.length === 0 ? (
             <p className="py-10 text-center text-sm text-muted">Sin ventas registradas.</p>
           ) : (
@@ -139,7 +147,7 @@ export function AdminDashboard() {
         </Card>
 
         <Card>
-          <CardHeader title="Rutas más populares" />
+          <CardHeader as="h2" title="Rutas más populares" />
           {data.topRoutes.length === 0 ? (
             <p className="py-10 text-center text-sm text-muted">Sin reservas registradas.</p>
           ) : (
@@ -155,12 +163,12 @@ export function AdminDashboard() {
         </Card>
 
         <Card>
-          <CardHeader title="Métodos de pago" />
+          <CardHeader as="h2" title="Métodos de pago" />
           {methods.length === 0 ? <p className="py-10 text-center text-sm text-muted">Sin pagos.</p> : <DonutChart data={methods} height={220} />}
         </Card>
 
         <Card>
-          <CardHeader title="Actividad reciente" action={<Link to="/admin/audit" className="text-sm font-medium text-danger-600">Ver todo</Link>} />
+          <CardHeader as="h2" title="Actividad reciente" action={<Link to="/admin/audit" className="text-sm font-medium text-danger-600">Ver todo</Link>} />
           {data.recentActivity.length === 0 ? (
             <p className="py-10 text-center text-sm text-muted">Sin actividad registrada.</p>
           ) : (

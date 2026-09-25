@@ -234,6 +234,40 @@ async function lockBus(connection: PoolConnection, busId: number): Promise<void>
   if (!bus) throw ApiError.notFound('Bus no encontrado');
 }
 
+/**
+ * F17C-SEC-02B (SEC02-01) · topes de longitud de los textos de la distribución.
+ *
+ * Los números salen de la DEFINICIÓN DE LAS TABLAS, no de una convención: `seats.seat_number`
+ * es `varchar(10)` y `bus_layouts.name`, `bus_layout_decks.name` y `bus_layout_elements.label`
+ * son `varchar(100)`, los cuatro en utf8mb4.
+ *
+ * POR QUÉ HACÍA FALTA. Solo `createSeat` comprobaba la longitud. El resto de escrituras —y
+ * `updateSeat`, el MISMO campo por el otro verbo— dejaban pasar el texto entero, y como el
+ * servidor no corre con `STRICT_TRANS_TABLES`, MySQL lo guardaba TRUNCADO sin avisar: la API
+ * respondía 200 sobre un valor que la base ya había recortado. Comprobarlo aquí convierte ese
+ * 200 engañoso en un 400 honesto y deja la fila intacta.
+ *
+ * SOBRE LA UNIDAD. Se cuenta con `String.length` (unidades UTF-16), la misma semántica que el
+ * proyecto ya usaba en `createSeat` y en los esquemas Zod. Frente a MySQL, que en utf8mb4
+ * cuenta PUNTOS DE CÓDIGO, esta cuenta nunca se queda corta: un carácter fuera del plano
+ * básico ocupa 2 aquí y 1 allí, de modo que la regla es conservadora y jamás deja pasar algo
+ * que la base vaya a recortar, que es justo lo que se quiere evitar.
+ */
+const MAX_LARGO = {
+  seatNumber: 10,
+  layoutName: 100,
+  deckName: 100,
+  elementLabel: 100,
+} as const;
+
+/** Lanza 400 si el texto se pasa del tope. `null`/`undefined` es «no se toca» y no se valida. */
+function assertLargo(valor: string | null | undefined, maximo: number, etiqueta: string): void {
+  if (valor === null || valor === undefined) return;
+  if (String(valor).length > maximo) {
+    throw ApiError.badRequest(`${etiqueta} no puede pasar de ${maximo} caracteres`);
+  }
+}
+
 export interface DraftInput {
   name?: string | null;
   decks?: Array<{ deck_number: number; name?: string | null; row_count?: number; column_count?: number }>;
@@ -247,6 +281,9 @@ export interface DraftInput {
  * estado es fijo—, de modo que no hay forma de colar una versión ya publicada.
  */
 export async function createDraft(busId: number, input: DraftInput = {}): Promise<BusLayout> {
+  assertLargo(input.name, MAX_LARGO.layoutName, 'El nombre de la versión');
+  for (const deck of input.decks ?? []) assertLargo(deck.name, MAX_LARGO.deckName, 'El nombre del piso');
+
   return withTransaction(async (connection) => {
     await lockBus(connection, busId);
     const version = await nextVersion(connection, busId);
@@ -317,14 +354,14 @@ export async function cloneForEdit(layoutId: number): Promise<BusLayout> {
       const destino = equivalencia.get(piso.id);
       if (destino === undefined) continue;
       await connection.query(
-        `INSERT INTO bus_layout_elements (deck_id, element_type, row_number, column_number, row_span, col_span, label)
-         SELECT ?, element_type, row_number, column_number, row_span, col_span, label
+        `INSERT INTO bus_layout_elements (deck_id, element_type, \`row_number\`, column_number, row_span, col_span, label)
+         SELECT ?, element_type, \`row_number\`, column_number, row_span, col_span, label
          FROM bus_layout_elements WHERE deck_id = ?`,
         [destino, piso.id],
       );
       await connection.query(
-        `INSERT INTO seats (bus_id, layout_id, deck_id, seat_type_id, seat_number, row_number, column_number, is_window, is_aisle, status)
-         SELECT bus_id, ?, ?, seat_type_id, seat_number, row_number, column_number, is_window, is_aisle, status
+        `INSERT INTO seats (bus_id, layout_id, deck_id, seat_type_id, seat_number, \`row_number\`, column_number, is_window, is_aisle, status)
+         SELECT bus_id, ?, ?, seat_type_id, seat_number, \`row_number\`, column_number, is_window, is_aisle, status
          FROM seats WHERE layout_id = ? AND deck_id = ?`,
         [nuevoId, destino, layoutId, piso.id],
       );
@@ -333,8 +370,8 @@ export async function cloneForEdit(layoutId: number): Promise<BusLayout> {
     // Los asientos sin piso —solo pueden venir de datos anteriores a la migración— se copian
     // igualmente para no perderlos por el camino.
     await connection.query(
-      `INSERT INTO seats (bus_id, layout_id, deck_id, seat_type_id, seat_number, row_number, column_number, is_window, is_aisle, status)
-       SELECT bus_id, ?, NULL, seat_type_id, seat_number, row_number, column_number, is_window, is_aisle, status
+      `INSERT INTO seats (bus_id, layout_id, deck_id, seat_type_id, seat_number, \`row_number\`, column_number, is_window, is_aisle, status)
+       SELECT bus_id, ?, NULL, seat_type_id, seat_number, \`row_number\`, column_number, is_window, is_aisle, status
        FROM seats WHERE layout_id = ? AND deck_id IS NULL`,
       [nuevoId, layoutId],
     );
@@ -412,13 +449,13 @@ export async function publishLayout(layoutId: number): Promise<BusLayout> {
     for (const piso of pisos) {
       const elementos = await rows<BusLayoutElement>(
         connection,
-        `SELECT id, deck_id, element_type, row_number, column_number, row_span, col_span, label
-         FROM bus_layout_elements WHERE deck_id = ? ORDER BY row_number ASC, column_number ASC`,
+        `SELECT id, deck_id, element_type, \`row_number\`, column_number, row_span, col_span, label
+         FROM bus_layout_elements WHERE deck_id = ? ORDER BY \`row_number\` ASC, column_number ASC`,
         [piso.id],
       );
       const asientosDelPiso = await rows<{ row_number: number | null; column_number: number | null; seat_number: string }>(
         connection,
-        'SELECT row_number, column_number, seat_number FROM seats WHERE deck_id = ? ORDER BY row_number ASC, column_number ASC',
+        'SELECT `row_number`, column_number, seat_number FROM seats WHERE deck_id = ? ORDER BY `row_number` ASC, column_number ASC',
         [piso.id],
       );
       assertDeckGeometry(piso, elementos, asientosDelPiso);
@@ -611,7 +648,7 @@ async function assertFreeCells(
 
   const asientos = await readRows<{ id: number; row_number: number | null; column_number: number | null }>(
     connection,
-    'SELECT id, row_number, column_number FROM seats WHERE deck_id = ?',
+    'SELECT id, `row_number`, column_number FROM seats WHERE deck_id = ?',
     [deck.id],
   );
   for (const asiento of asientos) {
@@ -624,7 +661,7 @@ async function assertFreeCells(
 
   const elementos = await readRows<BusLayoutElement>(
     connection,
-    'SELECT id, deck_id, element_type, row_number, column_number, row_span, col_span, label FROM bus_layout_elements WHERE deck_id = ?',
+    'SELECT id, deck_id, element_type, `row_number`, column_number, row_span, col_span, label FROM bus_layout_elements WHERE deck_id = ?',
     [deck.id],
   );
   for (const elemento of elementos) {
@@ -718,6 +755,7 @@ export async function listDecks(layoutId: number): Promise<BusLayoutDeck[]> {
 
 export async function createDeck(layoutId: number, input: DeckInput): Promise<BusLayoutDeck> {
   await assertEditable(layoutId);
+  assertLargo(input.name, MAX_LARGO.deckName, 'El nombre del piso');
   const numero = Number(input.deck_number ?? 1);
   if (!Number.isInteger(numero) || numero < 1) throw ApiError.badRequest('El número de piso debe ser 1 o mayor');
   const filas = Number(input.row_count ?? 0);
@@ -763,6 +801,7 @@ export async function createDeck(layoutId: number, input: DeckInput): Promise<Bu
 export async function updateDeck(deckId: number, input: DeckInput): Promise<BusLayoutDeck> {
   const { layout } = await deckInDraft(deckId);
 
+  assertLargo(input.name, MAX_LARGO.deckName, 'El nombre del piso');
   if (input.deck_number !== undefined) {
     const pedido = Number(input.deck_number);
     if (!Number.isInteger(pedido) || pedido < 1) throw ApiError.badRequest('El número de piso debe ser 1 o mayor');
@@ -803,7 +842,7 @@ export async function updateDeck(deckId: number, input: DeckInput): Promise<BusL
     // Encoger la rejilla por debajo de lo que ya hay dentro dejaría asientos fuera del piso.
     const asientos = await rows<{ row_number: number | null; column_number: number | null }>(
       connection,
-      'SELECT row_number, column_number FROM seats WHERE deck_id = ?',
+      'SELECT `row_number`, column_number FROM seats WHERE deck_id = ?',
       [deckId],
     );
     const asientoFuera = asientos.some(
@@ -819,7 +858,7 @@ export async function updateDeck(deckId: number, input: DeckInput): Promise<BusL
     // Y tampoco por debajo de los elementos, contando su extensión entera.
     const elementos = await rows<BusLayoutElement>(
       connection,
-      'SELECT id, deck_id, element_type, row_number, column_number, row_span, col_span, label FROM bus_layout_elements WHERE deck_id = ?',
+      'SELECT id, deck_id, element_type, `row_number`, column_number, row_span, col_span, label FROM bus_layout_elements WHERE deck_id = ?',
       [deckId],
     );
     const elementoFuera = elementos.find(
@@ -893,8 +932,8 @@ export interface ElementInput {
 
 export async function listElements(deckId: number): Promise<BusLayoutElement[]> {
   return query<BusLayoutElement>(
-    `SELECT id, deck_id, element_type, row_number, column_number, row_span, col_span, label
-     FROM bus_layout_elements WHERE deck_id = ? ORDER BY row_number ASC, column_number ASC`,
+    `SELECT id, deck_id, element_type, \`row_number\`, column_number, row_span, col_span, label
+     FROM bus_layout_elements WHERE deck_id = ? ORDER BY \`row_number\` ASC, column_number ASC`,
     [deckId],
   );
 }
@@ -934,6 +973,7 @@ export async function createElement(deckId: number, input: ElementInput): Promis
   }
   const rowSpan = assertSpan(Number(input.row_span ?? 1), 'La altura');
   const colSpan = assertSpan(Number(input.col_span ?? 1), 'La anchura');
+  assertLargo(input.label, MAX_LARGO.elementLabel, 'La etiqueta del elemento');
 
   return withTransaction(async (connection) => {
     await lockBus(connection, layout.bus_id);
@@ -950,12 +990,12 @@ export async function createElement(deckId: number, input: ElementInput): Promis
     await assertFreeCells(deck, fila, columna, rowSpan, colSpan, {}, connection);
 
     const [creado] = await connection.query(
-      'INSERT INTO bus_layout_elements (deck_id, element_type, row_number, column_number, row_span, col_span, label) VALUES (?, ?, ?, ?, ?, ?, ?)',
+      'INSERT INTO bus_layout_elements (deck_id, element_type, `row_number`, column_number, row_span, col_span, label) VALUES (?, ?, ?, ?, ?, ?, ?)',
       [deckId, tipo, fila, columna, rowSpan, colSpan, input.label ?? null],
     );
     const elemento = await first<BusLayoutElement>(
       connection,
-      'SELECT id, deck_id, element_type, row_number, column_number, row_span, col_span, label FROM bus_layout_elements WHERE id = ?',
+      'SELECT id, deck_id, element_type, `row_number`, column_number, row_span, col_span, label FROM bus_layout_elements WHERE id = ?',
       [(creado as { insertId: number }).insertId],
     );
     if (!elemento) throw ApiError.badRequest('No se pudo crear el elemento');
@@ -981,13 +1021,14 @@ export async function updateElement(elementId: number, input: ElementInput): Pro
   const tipoPedido = input.element_type === undefined ? null : assertElementType(input.element_type);
   const rowSpanPedido = input.row_span === undefined ? null : assertSpan(Number(input.row_span), 'La altura');
   const colSpanPedido = input.col_span === undefined ? null : assertSpan(Number(input.col_span), 'La anchura');
+  assertLargo(input.label, MAX_LARGO.elementLabel, 'La etiqueta del elemento');
 
   return withTransaction(async (connection) => {
     await lockBus(connection, layout.bus_id);
 
     const actual = await first<BusLayoutElement>(
       connection,
-      'SELECT id, deck_id, element_type, row_number, column_number, row_span, col_span, label FROM bus_layout_elements WHERE id = ?',
+      'SELECT id, deck_id, element_type, `row_number`, column_number, row_span, col_span, label FROM bus_layout_elements WHERE id = ?',
       [elementId],
     );
     if (!actual) throw ApiError.notFound('Elemento no encontrado');
@@ -1009,12 +1050,12 @@ export async function updateElement(elementId: number, input: ElementInput): Pro
     await assertFreeCells(deck, fila, columna, rowSpan, colSpan, { elementId }, connection);
 
     await connection.query(
-      'UPDATE bus_layout_elements SET element_type = ?, row_number = ?, column_number = ?, row_span = ?, col_span = ?, label = ? WHERE id = ?',
+      'UPDATE bus_layout_elements SET element_type = ?, `row_number` = ?, column_number = ?, row_span = ?, col_span = ?, label = ? WHERE id = ?',
       [tipo, fila, columna, rowSpan, colSpan, input.label === undefined ? actual.label : input.label, elementId],
     );
     const elemento = await first<BusLayoutElement>(
       connection,
-      'SELECT id, deck_id, element_type, row_number, column_number, row_span, col_span, label FROM bus_layout_elements WHERE id = ?',
+      'SELECT id, deck_id, element_type, `row_number`, column_number, row_span, col_span, label FROM bus_layout_elements WHERE id = ?',
       [elementId],
     );
     if (!elemento) throw ApiError.notFound('Elemento no encontrado');
@@ -1104,7 +1145,7 @@ export async function createSeat(deckId: number, input: SeatInput): Promise<Layo
   // Lo que no depende del estado de la base se valida antes de pedir el cerrojo.
   const numero = String(input.seat_number ?? '').trim();
   if (!numero) throw ApiError.badRequest('El asiento necesita un número');
-  if (numero.length > 10) throw ApiError.badRequest('El número de asiento no puede pasar de 10 caracteres');
+  assertLargo(numero, MAX_LARGO.seatNumber, 'El número de asiento');
   const estado = input.status === undefined ? 'AVAILABLE' : assertSeatStatus(input.status);
   const fila = Number(input.row_number);
   const columna = Number(input.column_number);
@@ -1131,7 +1172,7 @@ export async function createSeat(deckId: number, input: SeatInput): Promise<Layo
     // `bus_id` y `layout_id` los pone el servidor a partir de la versión: no llegan del
     // cliente, de modo que un asiento no puede acabar en el bus ni en la versión de otro.
     const [creado] = await connection.query(
-      `INSERT INTO seats (bus_id, layout_id, deck_id, seat_type_id, seat_number, row_number, column_number, is_window, is_aisle, status)
+      `INSERT INTO seats (bus_id, layout_id, deck_id, seat_type_id, seat_number, \`row_number\`, column_number, is_window, is_aisle, status)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [
         layout.bus_id,
@@ -1174,7 +1215,7 @@ interface SeatRow {
   status: 'AVAILABLE' | 'INACTIVE';
 }
 
-const SEAT_ROW_SELECT = `SELECT id, bus_id, layout_id, deck_id, seat_type_id, seat_number, row_number, column_number,
+const SEAT_ROW_SELECT = `SELECT id, bus_id, layout_id, deck_id, seat_type_id, seat_number, \`row_number\`, column_number,
             is_window, is_aisle, status
      FROM seats`;
 
@@ -1194,6 +1235,11 @@ export async function updateSeat(seatId: number, input: SeatInput): Promise<Layo
   // Lo que no depende del estado de la base se valida antes de pedir el cerrojo.
   const estadoPedido = input.status === undefined ? null : assertSeatStatus(input.status);
   const tipoPedido = input.seat_type_id === undefined ? null : await assertSeatType(input.seat_type_id);
+  // El mismo tope que al crear, y ANTES de tocar la base: este verbo no lo aplicaba y el número
+  // acababa recortado en silencio (SEC02-01).
+  if (input.seat_number !== undefined) {
+    assertLargo(String(input.seat_number).trim(), MAX_LARGO.seatNumber, 'El número de asiento');
+  }
 
   return withTransaction(async (connection) => {
     await lockBus(connection, layoutPrevio.bus_id);
@@ -1229,7 +1275,7 @@ export async function updateSeat(seatId: number, input: SeatInput): Promise<Layo
     await assertFreeCells(deck, fila, columna, 1, 1, { seatId }, connection);
 
     await connection.query(
-      `UPDATE seats SET deck_id = ?, seat_type_id = ?, seat_number = ?, row_number = ?, column_number = ?,
+      `UPDATE seats SET deck_id = ?, seat_type_id = ?, seat_number = ?, \`row_number\` = ?, column_number = ?,
               is_window = ?, is_aisle = ?, status = ?
        WHERE id = ?`,
       [

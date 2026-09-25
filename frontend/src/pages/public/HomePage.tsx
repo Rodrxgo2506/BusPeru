@@ -1,5 +1,6 @@
 import { BusFront, Clock3, Headphones, Lock, MapPin, Route, ShieldCheck, Users } from 'lucide-react';
 import { TripSearchForm } from '@/components/common/TripSearchForm';
+import { DiscoverDestinationsSection } from '@/components/destinations/DiscoverDestinations';
 import {
   BenefitCard,
   DestinationCard,
@@ -73,6 +74,9 @@ export function HomePage() {
         </Reveal>
       </section>
 
+      {/* Descubre más destinos (FASE 17): fichas editoriales del CMS ----------- */}
+      <DiscoverDestinationsSection />
+
       {/* Ofertas ------------------------------------------------------------- */}
       <section className="mx-auto max-w-7xl px-4 pb-10 sm:px-6 lg:px-8 lg:pb-12">
         <Reveal>
@@ -113,16 +117,21 @@ export function HomePage() {
       <section className="border-y border-border bg-gradient-to-b from-brand-50/70 to-brand-50/30">
         <div className="mx-auto grid max-w-7xl gap-x-6 gap-y-6 px-4 py-7 sm:grid-cols-2 sm:px-6 lg:grid-cols-4 lg:divide-x lg:divide-brand-100 lg:px-8 lg:py-8">
           {[
-            { icon: BusFront, value: stats.data?.companies, label: 'Empresas de transporte' },
-            { icon: Route, value: stats.data?.routes, label: 'Rutas disponibles' },
-            { icon: Users, value: stats.data?.bookings, label: 'Reservas realizadas' },
-            { icon: MapPin, value: stats.data?.terminals, label: 'Terminales conectados' },
+            { icon: BusFront, value: stats.data?.companies, label: 'Empresas de transporte', singular: 'Empresa de transporte' },
+            { icon: Route, value: stats.data?.routes, label: 'Rutas disponibles', singular: 'Ruta disponible' },
+            { icon: Users, value: stats.data?.bookings, label: 'Reservas realizadas', singular: 'Reserva realizada' },
+            { icon: MapPin, value: stats.data?.terminals, label: 'Terminales conectados', singular: 'Terminal conectado' },
           ].map((item, index) => (
             <Reveal key={item.label} delay={index * 70}>
               <StatCard
                 icon={item.icon}
-                label={item.label}
-                value={stats.loading ? '—' : `+${formatNumber(item.value ?? 0)}`}
+                // Con una sola empresa el rótulo en plural desafinaba («1 Empresas de transporte»).
+                label={item.value === 1 ? item.singular : item.label}
+                // El «+» de los mockups sólo es honesto sobre una cifra redondeada hacia abajo, y
+                // estas son cuentas EXACTAS de la base: con dos empresas anunciaba «+2», y con la
+                // plataforma recién abierta llegaba a decir «+0 Reservas realizadas». Se muestra el
+                // número tal cual; cuando la cifra crezca seguirá siendo cierta sin prometer de más.
+                value={stats.loading ? '—' : formatNumber(item.value ?? 0)}
               />
             </Reveal>
           ))}

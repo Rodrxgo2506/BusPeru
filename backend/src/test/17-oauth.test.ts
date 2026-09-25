@@ -68,10 +68,17 @@ describe('Inicio de sesión con Google / Microsoft', () => {
   });
 
   after(async () => {
-    await teardownSuite();
-    await segunda.stop();
-    await google.stop();
-    await microsoft.stop();
+    // F17C-SEC-11: los procesos auxiliares se detienen AUNQUE el cierre falle. Si `teardownSuite`
+    // lanza —por ejemplo, porque detectó una transacción abierta—, sin este `finally` la segunda
+    // instancia del backend seguiría viva, conectada a la base de pruebas, durante los archivos
+    // siguientes.
+    try {
+      await teardownSuite();
+    } finally {
+      await segunda.stop();
+      await google.stop();
+      await microsoft.stop();
+    }
   });
 
   beforeEach(async () => {

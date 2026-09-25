@@ -58,6 +58,12 @@
 -- `uq_layout_published_bus` deja infinitas versiones DRAFT o ARCHIVED por bus y como mucho
 -- UNA publicada. Es la misma técnica que ya usa `company_integrations.company_scope`
 -- (migración 009); no se inventa un mecanismo distinto para el mismo problema.
+--
+-- Por la misma razón que en 009 (F18-02B), `fk_bus_layouts_bus` es `ON DELETE CASCADE ON UPDATE
+-- RESTRICT`: MariaDB 10.11 rechaza (ERROR 1901) una columna STORED cuya base (`bus_id`) tenga una
+-- clave ajena con `ON UPDATE CASCADE`. `buses.id` nunca se actualiza y el borrado en cascada se
+-- conserva. Las claves que APUNTAN a `bus_layouts.id` no cambian: `id` no es base de ninguna
+-- columna generada. Las bases ya creadas se ajustan con la migración 018.
 CREATE TABLE IF NOT EXISTS `bus_layouts` (
   `id` int(10) unsigned NOT NULL AUTO_INCREMENT,
   `bus_id` int(10) unsigned NOT NULL,
@@ -75,7 +81,7 @@ CREATE TABLE IF NOT EXISTS `bus_layouts` (
   KEY `idx_bus_layouts_bus` (`bus_id`),
   KEY `idx_bus_layouts_status` (`status`),
   CONSTRAINT `fk_bus_layouts_bus` FOREIGN KEY (`bus_id`) REFERENCES `buses` (`id`)
-    ON DELETE CASCADE ON UPDATE CASCADE
+    ON DELETE CASCADE ON UPDATE RESTRICT
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- Los pisos de una versión. Un bus de un piso tendrá una fila; uno de dos, dos.

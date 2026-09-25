@@ -124,7 +124,7 @@ export function TripsPage({ scope }: { scope: 'company' | 'admin' }) {
     <>
       <ResourcePage<Trip>
         title="Viajes"
-        description="Programa y administra los viajes de tus rutas."
+        description={scope === 'company' ? 'Programa y administra los viajes de tus rutas.' : 'Consulta y administra los viajes programados por todas las empresas.'}
         breadcrumbs={[{ label: scope === 'company' ? 'Portal Empresa' : 'Administración' }, { label: 'Viajes' }]}
         loader={(params) => tripService.list(params)}
         reloadToken={reloadToken}
