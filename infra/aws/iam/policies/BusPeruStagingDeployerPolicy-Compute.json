@@ -1,0 +1,235 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "Ec2Lectura",
+      "Effect": "Allow",
+      "Action": [
+        "ec2:Describe*",
+        "ec2:GetLaunchTemplateData"
+      ],
+      "Resource": "*",
+      "Condition": {
+        "StringEquals": {
+          "aws:RequestedRegion": "sa-east-1"
+        }
+      }
+    },
+    {
+      "Sid": "GruposDeLaVpcParaElAlb",
+      "Effect": "Allow",
+      "Action": "ec2:GetSecurityGroupsForVpc",
+      "Resource": "arn:aws:ec2:sa-east-1:{{ACCOUNT_ID}}:vpc/*",
+      "Condition": {
+        "StringEquals": {
+          "aws:ResourceTag/aws:cloudformation:stack-name": "busperu-staging"
+        }
+      }
+    },
+    {
+      "Sid": "CrearVpc",
+      "Effect": "Allow",
+      "Action": "ec2:CreateVpc",
+      "Resource": "arn:aws:ec2:sa-east-1:{{ACCOUNT_ID}}:vpc/*"
+    },
+    {
+      "Sid": "CrearRecursosNuevos",
+      "Effect": "Allow",
+      "Action": [
+        "ec2:CreateInternetGateway",
+        "ec2:CreateSubnet",
+        "ec2:CreateRouteTable",
+        "ec2:CreateSecurityGroup",
+        "ec2:CreateVolume",
+        "ec2:CreateLaunchTemplate"
+      ],
+      "Resource": [
+        "arn:aws:ec2:sa-east-1:{{ACCOUNT_ID}}:internet-gateway/*",
+        "arn:aws:ec2:sa-east-1:{{ACCOUNT_ID}}:subnet/*",
+        "arn:aws:ec2:sa-east-1:{{ACCOUNT_ID}}:route-table/*",
+        "arn:aws:ec2:sa-east-1:{{ACCOUNT_ID}}:security-group/*",
+        "arn:aws:ec2:sa-east-1:{{ACCOUNT_ID}}:volume/*",
+        "arn:aws:ec2:sa-east-1:{{ACCOUNT_ID}}:launch-template/*"
+      ]
+    },
+    {
+      "Sid": "ReglasNuevasDeSg",
+      "Effect": "Allow",
+      "Action": [
+        "ec2:AuthorizeSecurityGroupIngress",
+        "ec2:AuthorizeSecurityGroupEgress"
+      ],
+      "Resource": "arn:aws:ec2:sa-east-1:{{ACCOUNT_ID}}:security-group-rule/*"
+    },
+    {
+      "Sid": "EtiquetarAlCrear",
+      "Effect": "Allow",
+      "Action": "ec2:CreateTags",
+      "Resource": "*",
+      "Condition": {
+        "StringEquals": {
+          "ec2:CreateAction": [
+            "CreateVpc",
+            "CreateInternetGateway",
+            "CreateSubnet",
+            "CreateRouteTable",
+            "CreateSecurityGroup",
+            "CreateVolume",
+            "CreateLaunchTemplate",
+            "RunInstances"
+          ]
+        }
+      }
+    },
+    {
+      "Sid": "LanzarNuevos",
+      "Effect": "Allow",
+      "Action": "ec2:RunInstances",
+      "Resource": [
+        "arn:aws:ec2:sa-east-1:{{ACCOUNT_ID}}:instance/*",
+        "arn:aws:ec2:sa-east-1:{{ACCOUNT_ID}}:volume/*",
+        "arn:aws:ec2:sa-east-1:{{ACCOUNT_ID}}:network-interface/*"
+      ]
+    },
+    {
+      "Sid": "LanzarSoloAmiDeAmazon",
+      "Effect": "Allow",
+      "Action": "ec2:RunInstances",
+      "Resource": "arn:aws:ec2:sa-east-1::image/*",
+      "Condition": {
+        "StringEquals": {
+          "ec2:Owner": "amazon"
+        }
+      }
+    },
+    {
+      "Sid": "Ec2DeLaPila",
+      "Effect": "Allow",
+      "Action": [
+        "ec2:RunInstances",
+        "ec2:CreateInternetGateway",
+        "ec2:CreateSubnet",
+        "ec2:CreateRouteTable",
+        "ec2:CreateSecurityGroup",
+        "ec2:CreateVolume",
+        "ec2:CreateLaunchTemplate",
+        "ec2:DeleteVpc",
+        "ec2:ModifyVpcAttribute",
+        "ec2:DeleteSubnet",
+        "ec2:ModifySubnetAttribute",
+        "ec2:AttachInternetGateway",
+        "ec2:DetachInternetGateway",
+        "ec2:DeleteInternetGateway",
+        "ec2:DeleteRouteTable",
+        "ec2:CreateRoute",
+        "ec2:ReplaceRoute",
+        "ec2:DeleteRoute",
+        "ec2:AssociateRouteTable",
+        "ec2:DisassociateRouteTable",
+        "ec2:ReplaceRouteTableAssociation",
+        "ec2:DeleteSecurityGroup",
+        "ec2:AuthorizeSecurityGroupIngress",
+        "ec2:AuthorizeSecurityGroupEgress",
+        "ec2:RevokeSecurityGroupIngress",
+        "ec2:RevokeSecurityGroupEgress",
+        "ec2:UpdateSecurityGroupRuleDescriptionsIngress",
+        "ec2:UpdateSecurityGroupRuleDescriptionsEgress",
+        "ec2:DeleteLaunchTemplate",
+        "ec2:CreateLaunchTemplateVersion",
+        "ec2:DeleteLaunchTemplateVersions",
+        "ec2:ModifyLaunchTemplate",
+        "ec2:TerminateInstances",
+        "ec2:StartInstances",
+        "ec2:StopInstances",
+        "ec2:RebootInstances",
+        "ec2:ModifyInstanceAttribute",
+        "ec2:ModifyInstanceMetadataOptions",
+        "ec2:MonitorInstances",
+        "ec2:UnmonitorInstances",
+        "ec2:AssociateIamInstanceProfile",
+        "ec2:DisassociateIamInstanceProfile",
+        "ec2:ReplaceIamInstanceProfileAssociation",
+        "ec2:DeleteVolume",
+        "ec2:AttachVolume",
+        "ec2:DetachVolume",
+        "ec2:ModifyVolume",
+        "ec2:ModifyVolumeAttribute",
+        "ec2:CreateSnapshot",
+        "ec2:CreateTags",
+        "ec2:DeleteTags"
+      ],
+      "Resource": "arn:aws:ec2:sa-east-1:{{ACCOUNT_ID}}:*/*",
+      "Condition": {
+        "StringEquals": {
+          "aws:ResourceTag/aws:cloudformation:stack-name": "busperu-staging"
+        }
+      }
+    },
+    {
+      "Sid": "PlantillaDeLanzamientoDeLaPila",
+      "Effect": "Allow",
+      "Action": [
+        "ec2:RunInstances",
+        "ec2:DeleteLaunchTemplate",
+        "ec2:CreateLaunchTemplateVersion",
+        "ec2:DeleteLaunchTemplateVersions",
+        "ec2:ModifyLaunchTemplate",
+        "ec2:CreateTags",
+        "ec2:DeleteTags"
+      ],
+      "Resource": "arn:aws:ec2:sa-east-1:{{ACCOUNT_ID}}:launch-template/*",
+      "Condition": {
+        "StringEquals": {
+          "aws:ResourceTag/Project": "busperu",
+          "aws:ResourceTag/Environment": "staging"
+        }
+      }
+    },
+    {
+      "Sid": "SnapshotsNuevos",
+      "Effect": "Allow",
+      "Action": "ec2:CreateSnapshot",
+      "Resource": "arn:aws:ec2:sa-east-1::snapshot/*"
+    },
+    {
+      "Sid": "ElbLectura",
+      "Effect": "Allow",
+      "Action": "elasticloadbalancing:Describe*",
+      "Resource": "*",
+      "Condition": {
+        "StringEquals": {
+          "aws:RequestedRegion": "sa-east-1"
+        }
+      }
+    },
+    {
+      "Sid": "ElbDeLaPila",
+      "Effect": "Allow",
+      "Action": [
+        "elasticloadbalancing:CreateLoadBalancer",
+        "elasticloadbalancing:DeleteLoadBalancer",
+        "elasticloadbalancing:ModifyLoadBalancerAttributes",
+        "elasticloadbalancing:SetSecurityGroups",
+        "elasticloadbalancing:SetSubnets",
+        "elasticloadbalancing:CreateTargetGroup",
+        "elasticloadbalancing:DeleteTargetGroup",
+        "elasticloadbalancing:ModifyTargetGroup",
+        "elasticloadbalancing:ModifyTargetGroupAttributes",
+        "elasticloadbalancing:RegisterTargets",
+        "elasticloadbalancing:DeregisterTargets",
+        "elasticloadbalancing:CreateListener",
+        "elasticloadbalancing:DeleteListener",
+        "elasticloadbalancing:ModifyListener",
+        "elasticloadbalancing:ModifyListenerAttributes",
+        "elasticloadbalancing:AddTags",
+        "elasticloadbalancing:RemoveTags"
+      ],
+      "Resource": [
+        "arn:aws:elasticloadbalancing:sa-east-1:{{ACCOUNT_ID}}:loadbalancer/app/busperu-staging-alb/*",
+        "arn:aws:elasticloadbalancing:sa-east-1:{{ACCOUNT_ID}}:targetgroup/busperu-staging-api/*",
+        "arn:aws:elasticloadbalancing:sa-east-1:{{ACCOUNT_ID}}:listener/app/busperu-staging-alb/*",
+        "arn:aws:elasticloadbalancing:sa-east-1:{{ACCOUNT_ID}}:listener-rule/app/busperu-staging-alb/*"
+      ]
+    }
+  ]
+}

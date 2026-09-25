@@ -1,0 +1,140 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "ParametrosDeStaging",
+      "Effect": "Allow",
+      "Action": [
+        "ssm:PutParameter",
+        "ssm:GetParameter",
+        "ssm:GetParameters",
+        "ssm:GetParametersByPath",
+        "ssm:GetParameterHistory",
+        "ssm:DeleteParameter",
+        "ssm:DeleteParameters",
+        "ssm:AddTagsToResource",
+        "ssm:RemoveTagsFromResource",
+        "ssm:ListTagsForResource"
+      ],
+      "Resource": [
+        "arn:aws:ssm:sa-east-1:{{ACCOUNT_ID}}:parameter/busperu/staging",
+        "arn:aws:ssm:sa-east-1:{{ACCOUNT_ID}}:parameter/busperu/staging/*"
+      ]
+    },
+    {
+      "Sid": "AmiPublicaDeAmazonLinux",
+      "Effect": "Allow",
+      "Action": [
+        "ssm:GetParameters",
+        "ssm:GetParameter"
+      ],
+      "Resource": "arn:aws:ssm:sa-east-1::parameter/aws/service/ami-amazon-linux-latest/*"
+    },
+    {
+      "Sid": "ListarParametros",
+      "Effect": "Allow",
+      "Action": "ssm:DescribeParameters",
+      "Resource": "*",
+      "Condition": {
+        "StringEquals": {
+          "aws:RequestedRegion": "sa-east-1"
+        }
+      }
+    },
+    {
+      "Sid": "SesionEnLaInstanciaDeLaPila",
+      "Effect": "Allow",
+      "Action": "ssm:StartSession",
+      "Resource": "arn:aws:ec2:sa-east-1:{{ACCOUNT_ID}}:instance/*",
+      "Condition": {
+        "StringEquals": {
+          "ssm:resourceTag/aws:cloudformation:stack-name": "busperu-staging"
+        }
+      }
+    },
+    {
+      "Sid": "DocumentoDeSesion",
+      "Effect": "Allow",
+      "Action": "ssm:StartSession",
+      "Resource": "arn:aws:ssm:sa-east-1:{{ACCOUNT_ID}}:document/SSM-SessionManagerRunShell"
+    },
+    {
+      "Sid": "SusPropiasSesiones",
+      "Effect": "Allow",
+      "Action": [
+        "ssm:TerminateSession",
+        "ssm:ResumeSession"
+      ],
+      "Resource": "arn:aws:ssm:sa-east-1:{{ACCOUNT_ID}}:session/${aws:userid}-*"
+    },
+    {
+      "Sid": "EstadoDeSesiones",
+      "Effect": "Allow",
+      "Action": [
+        "ssm:DescribeInstanceInformation",
+        "ssm:DescribeSessions",
+        "ssm:GetConnectionStatus"
+      ],
+      "Resource": "*",
+      "Condition": {
+        "StringEquals": {
+          "aws:RequestedRegion": "sa-east-1"
+        }
+      }
+    },
+    {
+      "Sid": "ComandosSoloEnLaInstanciaDeLaPila",
+      "Effect": "Allow",
+      "Action": "ssm:SendCommand",
+      "Resource": "arn:aws:ec2:sa-east-1:{{ACCOUNT_ID}}:instance/*",
+      "Condition": {
+        "StringEquals": {
+          "ssm:resourceTag/aws:cloudformation:stack-name": "busperu-staging"
+        }
+      }
+    },
+    {
+      "Sid": "SoloElDocumentoRunShellScript",
+      "Effect": "Allow",
+      "Action": "ssm:SendCommand",
+      "Resource": "arn:aws:ssm:sa-east-1::document/AWS-RunShellScript"
+    },
+    {
+      "Sid": "ResultadosDeComandos",
+      "Effect": "Allow",
+      "Action": [
+        "ssm:GetCommandInvocation",
+        "ssm:ListCommandInvocations",
+        "ssm:ListCommands",
+        "ssm:CancelCommand"
+      ],
+      "Resource": "*",
+      "Condition": {
+        "StringEquals": {
+          "aws:RequestedRegion": "sa-east-1"
+        }
+      }
+    },
+    {
+      "Sid": "SecretoMaestroQueCreaRds",
+      "Effect": "Allow",
+      "Action": [
+        "secretsmanager:CreateSecret",
+        "secretsmanager:TagResource",
+        "secretsmanager:DescribeSecret"
+      ],
+      "Resource": "arn:aws:secretsmanager:sa-east-1:{{ACCOUNT_ID}}:secret:rds!db-*"
+    },
+    {
+      "Sid": "DescribirClaveDelSecretoMaestro",
+      "Effect": "Allow",
+      "Action": "kms:DescribeKey",
+      "Resource": "arn:aws:kms:sa-east-1:{{ACCOUNT_ID}}:key/*",
+      "Condition": {
+        "StringEquals": {
+          "kms:ViaService": "rds.sa-east-1.amazonaws.com"
+        }
+      }
+    }
+  ]
+}

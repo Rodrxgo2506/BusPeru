@@ -1,0 +1,116 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "SessionManager",
+      "Effect": "Allow",
+      "Resource": "*",
+      "Action": [
+        "ssm:UpdateInstanceInformation",
+        "ssmmessages:CreateControlChannel",
+        "ssmmessages:CreateDataChannel",
+        "ssmmessages:OpenControlChannel",
+        "ssmmessages:OpenDataChannel"
+      ]
+    },
+    {
+      "Sid": "SoloLosParametrosDeLaApp",
+      "Effect": "Allow",
+      "Action": [
+        "ssm:GetParametersByPath",
+        "ssm:GetParameter",
+        "ssm:GetParameters"
+      ],
+      "Resource": [
+        "arn:aws:ssm:sa-east-1:{{ACCOUNT_ID}}:parameter/busperu/prod/app",
+        "arn:aws:ssm:sa-east-1:{{ACCOUNT_ID}}:parameter/busperu/prod/app/*",
+        "arn:aws:ssm:sa-east-1:{{ACCOUNT_ID}}:parameter/busperu/prod/ops/MIGRATOR_DB_PASSWORD"
+      ]
+    },
+    {
+      "Sid": "DescifrarSoloLosDeLaApp",
+      "Effect": "Allow",
+      "Action": "kms:Decrypt",
+      "Resource": "arn:aws:kms:sa-east-1:{{ACCOUNT_ID}}:key/*",
+      "Condition": {
+        "StringEquals": {
+          "kms:ViaService": "ssm.sa-east-1.amazonaws.com"
+        },
+        "StringLike": {
+          "kms:EncryptionContext:PARAMETER_ARN": [
+            "arn:aws:ssm:sa-east-1:{{ACCOUNT_ID}}:parameter/busperu/prod/app/*",
+            "arn:aws:ssm:sa-east-1:{{ACCOUNT_ID}}:parameter/busperu/prod/ops/MIGRATOR_DB_PASSWORD"
+          ]
+        },
+        "ForAnyValue:StringEquals": {
+          "kms:ResourceAliases": [
+            "alias/busperu-prod-secrets",
+            "alias/busperu-prod-data"
+          ]
+        }
+      }
+    },
+    {
+      "Sid": "Registros",
+      "Effect": "Allow",
+      "Action": [
+        "logs:CreateLogStream",
+        "logs:PutLogEvents",
+        "logs:DescribeLogStreams"
+      ],
+      "Resource": "arn:aws:logs:sa-east-1:{{ACCOUNT_ID}}:log-group:/busperu/prod/*"
+    },
+    {
+      "Sid": "Metricas",
+      "Effect": "Allow",
+      "Action": "cloudwatch:PutMetricData",
+      "Resource": "*",
+      "Condition": {
+        "StringEquals": {
+          "cloudwatch:namespace": [
+            "CWAgent",
+            "BusPeru/App"
+          ]
+        }
+      }
+    },
+    {
+      "Sid": "Versiones",
+      "Effect": "Allow",
+      "Action": "s3:GetObject",
+      "Resource": "arn:aws:s3:::busperu-prod-artifacts-*/releases/*"
+    },
+    {
+      "Sid": "Almacenamiento",
+      "Effect": "Allow",
+      "Action": [
+        "s3:GetObject",
+        "s3:PutObject",
+        "s3:DeleteObject"
+      ],
+      "Resource": "arn:aws:s3:::busperu-prod-storage-*/*"
+    },
+    {
+      "Sid": "NadaDeControl",
+      "Effect": "Deny",
+      "Resource": "*",
+      "Action": [
+        "iam:*",
+        "sts:AssumeRole",
+        "cloudformation:*",
+        "ssm:PutParameter",
+        "ssm:DeleteParameter*",
+        "ssm:SendCommand",
+        "rds:*",
+        "ec2:Run*",
+        "ec2:Terminate*",
+        "ec2:Delete*",
+        "kms:Encrypt",
+        "kms:CreateGrant",
+        "kms:ScheduleKeyDeletion",
+        "secretsmanager:*",
+        "cloudtrail:*"
+      ]
+    }
+  ]
+}

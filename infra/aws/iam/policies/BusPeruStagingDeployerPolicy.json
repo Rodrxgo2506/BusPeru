@@ -1,0 +1,289 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "SoloSaoPaulo",
+      "Effect": "Deny",
+      "NotAction": [
+        "iam:*",
+        "sts:*",
+        "cloudfront:*",
+        "route53:*",
+        "support:*",
+        "health:*"
+      ],
+      "Resource": "*",
+      "Condition": {
+        "StringNotEquals": {
+          "aws:RequestedRegion": "sa-east-1"
+        }
+      }
+    },
+    {
+      "Sid": "NadaSobreLaVpcPorDefecto",
+      "Effect": "Deny",
+      "NotAction": [
+        "ec2:Describe*",
+        "ec2:Get*"
+      ],
+      "Resource": "*",
+      "Condition": {
+        "StringEquals": {
+          "ec2:Vpc": "arn:aws:ec2:sa-east-1:{{ACCOUNT_ID}}:vpc/vpc-00b4bcdf074ad434b"
+        }
+      }
+    },
+    {
+      "Sid": "NiLaVpcPorDefectoEnSi",
+      "Effect": "Deny",
+      "NotAction": [
+        "ec2:Describe*",
+        "ec2:Get*"
+      ],
+      "Resource": "arn:aws:ec2:sa-east-1:{{ACCOUNT_ID}}:vpc/vpc-00b4bcdf074ad434b"
+    },
+    {
+      "Sid": "SinAdministrarPersonasNiCredenciales",
+      "Effect": "Deny",
+      "Action": [
+        "iam:*User*",
+        "iam:*Group*",
+        "iam:*AccessKey*",
+        "iam:*LoginProfile*",
+        "iam:*MFADevice*",
+        "iam:*SSHPublicKey*",
+        "iam:*ServiceSpecificCredential*",
+        "iam:*SigningCertificate*",
+        "iam:*AccountAlias*",
+        "iam:*PasswordPolicy*",
+        "iam:*SAMLProvider*",
+        "iam:*OpenIDConnectProvider*",
+        "iam:CreatePolicy*",
+        "iam:DeletePolicy*",
+        "iam:SetDefaultPolicyVersion",
+        "iam:PutRolePermissionsBoundary",
+        "iam:DeleteRolePermissionsBoundary",
+        "iam:UpdateAssumeRolePolicy",
+        "organizations:*",
+        "account:*"
+      ],
+      "Resource": "*"
+    },
+    {
+      "Sid": "IntocableLaIdentidadDeDespliegue",
+      "Effect": "Deny",
+      "Action": "iam:*",
+      "Resource": [
+        "arn:aws:iam::{{ACCOUNT_ID}}:role/busperu/*",
+        "arn:aws:iam::{{ACCOUNT_ID}}:policy/busperu/*"
+      ]
+    },
+    {
+      "Sid": "NingunSecretoEnClaro",
+      "Effect": "Deny",
+      "Action": [
+        "secretsmanager:GetSecretValue",
+        "secretsmanager:PutSecretValue",
+        "secretsmanager:UpdateSecret",
+        "secretsmanager:RestoreSecret"
+      ],
+      "Resource": "*"
+    },
+    {
+      "Sid": "NoBorrarLaBaseOriginal",
+      "Effect": "Deny",
+      "Action": "rds:DeleteDBInstance",
+      "Resource": "arn:aws:rds:sa-east-1:{{ACCOUNT_ID}}:db:busperu-staging-db"
+    },
+    {
+      "Sid": "NoBorrarNiCompartirCopias",
+      "Effect": "Deny",
+      "Action": [
+        "rds:DeleteDBSnapshot",
+        "rds:ModifyDBSnapshotAttribute",
+        "rds:DeleteDBInstanceAutomatedBackup",
+        "rds:StartExportTask"
+      ],
+      "Resource": "*"
+    },
+    {
+      "Sid": "RestauracionesSiemprePrivadas",
+      "Effect": "Deny",
+      "Action": [
+        "rds:RestoreDBInstanceToPointInTime",
+        "rds:RestoreDBInstanceFromDBSnapshot"
+      ],
+      "Resource": "*",
+      "Condition": {
+        "Bool": {
+          "rds:PubliclyAccessible": "true"
+        }
+      }
+    },
+    {
+      "Sid": "NoBorrarSecretosCriticos",
+      "Effect": "Deny",
+      "Action": [
+        "ssm:DeleteParameter",
+        "ssm:DeleteParameters"
+      ],
+      "Resource": [
+        "arn:aws:ssm:sa-east-1:{{ACCOUNT_ID}}:parameter/busperu/*/app/INTEGRATIONS_ENCRYPTION_KEY",
+        "arn:aws:ssm:sa-east-1:{{ACCOUNT_ID}}:parameter/busperu/*/app/JWT_SECRET"
+      ]
+    },
+    {
+      "Sid": "PilaDeStaging",
+      "Effect": "Allow",
+      "Action": [
+        "cloudformation:CreateStack",
+        "cloudformation:UpdateStack",
+        "cloudformation:DeleteStack",
+        "cloudformation:DescribeStacks",
+        "cloudformation:DescribeStackEvents",
+        "cloudformation:DescribeStackResource",
+        "cloudformation:DescribeStackResources",
+        "cloudformation:ListStackResources",
+        "cloudformation:GetTemplate",
+        "cloudformation:CreateChangeSet",
+        "cloudformation:DescribeChangeSet",
+        "cloudformation:ExecuteChangeSet",
+        "cloudformation:DeleteChangeSet",
+        "cloudformation:ListChangeSets",
+        "cloudformation:CancelUpdateStack",
+        "cloudformation:ContinueUpdateRollback",
+        "cloudformation:TagResource",
+        "cloudformation:UntagResource",
+        "cloudformation:DetectStackDrift",
+        "cloudformation:DescribeStackResourceDrifts"
+      ],
+      "Resource": [
+        "arn:aws:cloudformation:sa-east-1:{{ACCOUNT_ID}}:stack/busperu-staging/*",
+        "arn:aws:cloudformation:sa-east-1:{{ACCOUNT_ID}}:changeSet/*/*"
+      ]
+    },
+    {
+      "Sid": "CloudFormationSinRecurso",
+      "Effect": "Allow",
+      "Action": [
+        "cloudformation:ValidateTemplate",
+        "cloudformation:GetTemplateSummary",
+        "cloudformation:ListStacks",
+        "cloudformation:DescribeType",
+        "cloudformation:DescribeStackDriftDetectionStatus"
+      ],
+      "Resource": "*",
+      "Condition": {
+        "StringEquals": {
+          "aws:RequestedRegion": "sa-east-1"
+        }
+      }
+    },
+    {
+      "Sid": "CrearRolesSoloConLimite",
+      "Effect": "Allow",
+      "Action": [
+        "iam:CreateRole",
+        "iam:PutRolePolicy",
+        "iam:DeleteRolePolicy",
+        "iam:DetachRolePolicy"
+      ],
+      "Resource": "arn:aws:iam::{{ACCOUNT_ID}}:role/busperu-staging-*",
+      "Condition": {
+        "StringEquals": {
+          "iam:PermissionsBoundary": "arn:aws:iam::{{ACCOUNT_ID}}:policy/busperu/BusPeruStagingWorkloadBoundary"
+        }
+      }
+    },
+    {
+      "Sid": "SoloLaPoliticaGestionadaDeDlm",
+      "Effect": "Allow",
+      "Action": "iam:AttachRolePolicy",
+      "Resource": "arn:aws:iam::{{ACCOUNT_ID}}:role/busperu-staging-*",
+      "Condition": {
+        "StringEquals": {
+          "iam:PermissionsBoundary": "arn:aws:iam::{{ACCOUNT_ID}}:policy/busperu/BusPeruStagingWorkloadBoundary"
+        },
+        "ArnEquals": {
+          "iam:PolicyARN": "arn:aws:iam::aws:policy/service-role/AWSDataLifecycleManagerServiceRole"
+        }
+      }
+    },
+    {
+      "Sid": "GestionarRolesDeLaPila",
+      "Effect": "Allow",
+      "Action": [
+        "iam:GetRole",
+        "iam:GetRolePolicy",
+        "iam:ListAttachedRolePolicies",
+        "iam:ListRolePolicies",
+        "iam:ListInstanceProfilesForRole",
+        "iam:TagRole",
+        "iam:UntagRole",
+        "iam:UpdateRole",
+        "iam:UpdateRoleDescription",
+        "iam:DeleteRole"
+      ],
+      "Resource": "arn:aws:iam::{{ACCOUNT_ID}}:role/busperu-staging-*"
+    },
+    {
+      "Sid": "PerfilDeInstanciaDeLaPila",
+      "Effect": "Allow",
+      "Action": [
+        "iam:CreateInstanceProfile",
+        "iam:DeleteInstanceProfile",
+        "iam:GetInstanceProfile",
+        "iam:AddRoleToInstanceProfile",
+        "iam:RemoveRoleFromInstanceProfile",
+        "iam:TagInstanceProfile",
+        "iam:UntagInstanceProfile"
+      ],
+      "Resource": "arn:aws:iam::{{ACCOUNT_ID}}:instance-profile/busperu-staging-*"
+    },
+    {
+      "Sid": "ListarRolesYPerfiles",
+      "Effect": "Allow",
+      "Action": [
+        "iam:ListRoles",
+        "iam:ListInstanceProfiles"
+      ],
+      "Resource": "*"
+    },
+    {
+      "Sid": "PasarRolDeLaAppSoloAEc2",
+      "Effect": "Allow",
+      "Action": "iam:PassRole",
+      "Resource": "arn:aws:iam::{{ACCOUNT_ID}}:role/busperu-staging-app-role",
+      "Condition": {
+        "StringEquals": {
+          "iam:PassedToService": "ec2.amazonaws.com"
+        }
+      }
+    },
+    {
+      "Sid": "PasarRolDeDlmSoloADlm",
+      "Effect": "Allow",
+      "Action": "iam:PassRole",
+      "Resource": "arn:aws:iam::{{ACCOUNT_ID}}:role/busperu-staging-DlmRole-*",
+      "Condition": {
+        "StringEquals": {
+          "iam:PassedToService": "dlm.amazonaws.com"
+        }
+      }
+    },
+    {
+      "Sid": "RolesVinculadosDeElbYRds",
+      "Effect": "Allow",
+      "Action": "iam:CreateServiceLinkedRole",
+      "Resource": "arn:aws:iam::{{ACCOUNT_ID}}:role/aws-service-role/*",
+      "Condition": {
+        "StringEquals": {
+          "iam:AWSServiceName": [
+            "elasticloadbalancing.amazonaws.com",
+            "rds.amazonaws.com"
+          ]
+        }
+      }
+    }
+  ]
+}

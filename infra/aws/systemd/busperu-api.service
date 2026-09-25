@@ -1,0 +1,62 @@
+# BusPerú · API (F18-03). Instalar en /etc/systemd/system/busperu-api.service
+#
+# · Corre como el usuario de sistema `busperu`, nunca como root.
+# · Los secretos NO están aquí ni en disco persistente: antes de arrancar, render-env.sh (como root,
+#   por eso el prefijo "+") los lee de Parameter Store y escribe /run/busperu/api.env (tmpfs, 0600,
+#   dueño busperu). Al parar el servicio, el archivo se borra.
+# · SIGTERM → cierre ordenado del proceso (10 s en el código); systemd espera hasta 30 s.
+# · Los registros JSON van a /var/log/busperu/api.log, que recoge el agente de CloudWatch.
+
+[Unit]
+Description=BusPeru API (Node.js)
+Documentation=file:///opt/busperu/current/docs/production/STAGING-RUNBOOK.md
+After=network-online.target data.mount
+Wants=network-online.target
+Requires=data.mount
+StartLimitIntervalSec=300
+StartLimitBurst=5
+
+[Service]
+Type=simple
+User=busperu
+Group=busperu
+WorkingDirectory=/opt/busperu/current/backend
+RuntimeDirectory=busperu
+RuntimeDirectoryMode=0750
+ExecStartPre=+/opt/busperu/bin/render-env.sh /run/busperu/api.env
+# F18-04: el "-" es imprescindible. systemd lee EnvironmentFile antes de CADA orden, también antes del
+# ExecStartPre que lo genera; sin "-", la primera vez falla con "unavailable resources". ExecStart lo lee
+# ya generado, y si render-env.sh falla el servicio no arranca.
+EnvironmentFile=-/run/busperu/api.env
+Environment=NODE_ENV=production
+ExecStart=/opt/node/bin/node dist/server.js
+ExecStopPost=+/bin/rm -f /run/busperu/api.env
+Restart=on-failure
+RestartSec=5
+KillSignal=SIGTERM
+TimeoutStopSec=30
+StandardOutput=append:/var/log/busperu/api.log
+StandardError=append:/var/log/busperu/api.log
+
+# Límites razonables para una t4g.small
+LimitNOFILE=8192
+MemoryMax=1536M
+TasksMax=512
+
+# Endurecimiento: solo puede escribir en su almacenamiento, sus logs y su directorio de runtime.
+NoNewPrivileges=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+LockPersonality=true
+ReadWritePaths=/data/busperu/storage /var/log/busperu
+CapabilityBoundingSet=
+AmbientCapabilities=
+
+[Install]
+WantedBy=multi-user.target

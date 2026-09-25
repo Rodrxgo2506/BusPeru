@@ -1,0 +1,71 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "CloudTrailLeeElAcl",
+      "Effect": "Allow",
+      "Principal": {
+        "Service": "cloudtrail.amazonaws.com"
+      },
+      "Action": "s3:GetBucketAcl",
+      "Resource": "arn:aws:s3:::busperu-prod-cloudtrail-{{ACCOUNT_ID}}",
+      "Condition": {
+        "StringEquals": {
+          "aws:SourceArn": "arn:aws:cloudtrail:sa-east-1:{{ACCOUNT_ID}}:trail/busperu-prod-trail"
+        }
+      }
+    },
+    {
+      "Sid": "CloudTrailEscribe",
+      "Effect": "Allow",
+      "Principal": {
+        "Service": "cloudtrail.amazonaws.com"
+      },
+      "Action": "s3:PutObject",
+      "Resource": "arn:aws:s3:::busperu-prod-cloudtrail-{{ACCOUNT_ID}}/AWSLogs/{{ACCOUNT_ID}}/*",
+      "Condition": {
+        "StringEquals": {
+          "s3:x-amz-acl": "bucket-owner-full-control",
+          "aws:SourceArn": "arn:aws:cloudtrail:sa-east-1:{{ACCOUNT_ID}}:trail/busperu-prod-trail"
+        }
+      }
+    },
+    {
+      "Sid": "SoloTls",
+      "Effect": "Deny",
+      "Principal": "*",
+      "Action": "s3:*",
+      "Resource": [
+        "arn:aws:s3:::busperu-prod-cloudtrail-{{ACCOUNT_ID}}",
+        "arn:aws:s3:::busperu-prod-cloudtrail-{{ACCOUNT_ID}}/*"
+      ],
+      "Condition": {
+        "Bool": {
+          "aws:SecureTransport": "false"
+        }
+      }
+    },
+    {
+      "Sid": "NadieBorraLaAuditoria",
+      "Effect": "Deny",
+      "Principal": "*",
+      "Action": [
+        "s3:DeleteObject",
+        "s3:DeleteObjectVersion",
+        "s3:DeleteBucket",
+        "s3:PutBucketPolicy",
+        "s3:PutLifecycleConfiguration",
+        "s3:PutBucketVersioning"
+      ],
+      "Resource": [
+        "arn:aws:s3:::busperu-prod-cloudtrail-{{ACCOUNT_ID}}",
+        "arn:aws:s3:::busperu-prod-cloudtrail-{{ACCOUNT_ID}}/*"
+      ],
+      "Condition": {
+        "ArnNotEquals": {
+          "aws:PrincipalArn": "arn:aws:iam::{{ACCOUNT_ID}}:role/busperu/BusPeruProdBreakGlass"
+        }
+      }
+    }
+  ]
+}

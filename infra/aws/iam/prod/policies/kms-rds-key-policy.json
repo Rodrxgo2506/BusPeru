@@ -1,0 +1,95 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "AdministrarSinUsar",
+      "Effect": "Allow",
+      "Principal": {
+        "AWS": "arn:aws:iam::{{ACCOUNT_ID}}:user/Rodrigo"
+      },
+      "Resource": "*",
+      "Condition": {
+        "Bool": {
+          "aws:MultiFactorAuthPresent": "true"
+        },
+        "NumericLessThan": {
+          "aws:MultiFactorAuthAge": "3600"
+        }
+      },
+      "Action": [
+        "kms:Describe*",
+        "kms:List*",
+        "kms:Get*",
+        "kms:Create*",
+        "kms:Enable*",
+        "kms:Put*",
+        "kms:Update*",
+        "kms:Revoke*",
+        "kms:Disable*",
+        "kms:TagResource",
+        "kms:UntagResource",
+        "kms:ScheduleKeyDeletion",
+        "kms:CancelKeyDeletion",
+        "kms:RotateKeyOnDemand"
+      ]
+    },
+    {
+      "Sid": "AccessAnalyzerSoloLee",
+      "Effect": "Allow",
+      "Principal": {
+        "AWS": "arn:aws:iam::{{ACCOUNT_ID}}:role/aws-service-role/access-analyzer.amazonaws.com/AWSServiceRoleForAccessAnalyzer"
+      },
+      "Action": [
+        "kms:DescribeKey",
+        "kms:GetKeyPolicy",
+        "kms:ListKeyPolicies",
+        "kms:ListGrants"
+      ],
+      "Resource": "*"
+    },
+    {
+      "Sid": "UsoSoloViaRds",
+      "Effect": "Allow",
+      "Principal": {
+        "AWS": [
+          "arn:aws:iam::{{ACCOUNT_ID}}:role/busperu/BusPeruProdCloudFormationExecution",
+          "arn:aws:iam::{{ACCOUNT_ID}}:role/busperu/BusPeruProdRecovery"
+        ]
+      },
+      "Action": [
+        "kms:Encrypt",
+        "kms:Decrypt",
+        "kms:ReEncrypt*",
+        "kms:GenerateDataKey*",
+        "kms:DescribeKey"
+      ],
+      "Resource": "*",
+      "Condition": {
+        "StringEquals": {
+          "kms:ViaService": "rds.sa-east-1.amazonaws.com",
+          "kms:CallerAccount": "{{ACCOUNT_ID}}"
+        }
+      }
+    },
+    {
+      "Sid": "ConcesionesSoloParaRds",
+      "Effect": "Allow",
+      "Principal": {
+        "AWS": [
+          "arn:aws:iam::{{ACCOUNT_ID}}:role/busperu/BusPeruProdCloudFormationExecution",
+          "arn:aws:iam::{{ACCOUNT_ID}}:role/busperu/BusPeruProdRecovery"
+        ]
+      },
+      "Action": "kms:CreateGrant",
+      "Resource": "*",
+      "Condition": {
+        "StringEquals": {
+          "kms:ViaService": "rds.sa-east-1.amazonaws.com"
+        },
+        "Bool": {
+          "kms:GrantIsForAWSResource": "true"
+        }
+      }
+    }
+  ]
+}

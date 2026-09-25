@@ -1,0 +1,17 @@
+{
+  "Name": "busperu-prod-trail",
+  "S3BucketName": "busperu-prod-cloudtrail-{{ACCOUNT_ID}}",
+  "IsMultiRegionTrail": true,
+  "IncludeGlobalServiceEvents": true,
+  "EnableLogFileValidation": true,
+  "EventSelectors": [
+    {
+      "ReadWriteType": "All",
+      "IncludeManagementEvents": true
+    }
+  ],
+  "retencionDias": 400,
+  "cifradoBucket": "SSE-S3",
+  "versionado": true,
+  "bloqueoPublico": true
+}

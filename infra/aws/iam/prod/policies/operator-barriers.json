@@ -1,0 +1,236 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "SoloSaoPaulo",
+      "Effect": "Deny",
+      "NotAction": [
+        "iam:*",
+        "sts:*",
+        "cloudfront:*",
+        "route53:*",
+        "support:*",
+        "health:*"
+      ],
+      "Resource": "*",
+      "Condition": {
+        "StringNotEquals": {
+          "aws:RequestedRegion": "sa-east-1"
+        }
+      }
+    },
+    {
+      "Sid": "NadaSobreLaVpcPorDefecto",
+      "Effect": "Deny",
+      "NotAction": [
+        "ec2:Describe*",
+        "ec2:Get*"
+      ],
+      "Resource": "*",
+      "Condition": {
+        "StringEquals": {
+          "ec2:Vpc": "arn:aws:ec2:sa-east-1:{{ACCOUNT_ID}}:vpc/vpc-00b4bcdf074ad434b"
+        }
+      }
+    },
+    {
+      "Sid": "NiLaVpcPorDefectoEnSi",
+      "Effect": "Deny",
+      "NotAction": [
+        "ec2:Describe*",
+        "ec2:Get*"
+      ],
+      "Resource": "arn:aws:ec2:sa-east-1:{{ACCOUNT_ID}}:vpc/vpc-00b4bcdf074ad434b"
+    },
+    {
+      "Sid": "SinAdministrarPersonasNiCredenciales",
+      "Effect": "Deny",
+      "Action": [
+        "iam:*User*",
+        "iam:*Group*",
+        "iam:*AccessKey*",
+        "iam:*LoginProfile*",
+        "iam:*MFADevice*",
+        "iam:*SSHPublicKey*",
+        "iam:*ServiceSpecificCredential*",
+        "iam:*SigningCertificate*",
+        "iam:*AccountAlias*",
+        "iam:*PasswordPolicy*",
+        "iam:*SAMLProvider*",
+        "iam:*OpenIDConnectProvider*",
+        "iam:CreatePolicy*",
+        "iam:DeletePolicy*",
+        "iam:SetDefaultPolicyVersion",
+        "iam:PutRolePermissionsBoundary",
+        "iam:DeleteRolePermissionsBoundary",
+        "iam:UpdateAssumeRolePolicy",
+        "organizations:*",
+        "account:*"
+      ],
+      "Resource": "*"
+    },
+    {
+      "Sid": "IntocableLaIdentidadDeDespliegue",
+      "Effect": "Deny",
+      "Resource": [
+        "arn:aws:iam::{{ACCOUNT_ID}}:role/busperu/*",
+        "arn:aws:iam::{{ACCOUNT_ID}}:policy/busperu/*"
+      ],
+      "NotAction": "iam:PassRole"
+    },
+    {
+      "Sid": "NingunSecretoEnClaro",
+      "Effect": "Deny",
+      "Action": [
+        "secretsmanager:GetSecretValue",
+        "secretsmanager:PutSecretValue",
+        "secretsmanager:UpdateSecret",
+        "secretsmanager:RestoreSecret"
+      ],
+      "Resource": "*"
+    },
+    {
+      "Sid": "NoBorrarLaBaseOriginal",
+      "Effect": "Deny",
+      "Action": "rds:DeleteDBInstance",
+      "Resource": "arn:aws:rds:sa-east-1:{{ACCOUNT_ID}}:db:busperu-prod-db"
+    },
+    {
+      "Sid": "NoBorrarNiCompartirCopias",
+      "Effect": "Deny",
+      "Action": [
+        "rds:DeleteDBSnapshot",
+        "rds:ModifyDBSnapshotAttribute",
+        "rds:DeleteDBInstanceAutomatedBackup",
+        "rds:StartExportTask"
+      ],
+      "Resource": "*"
+    },
+    {
+      "Sid": "RestauracionesSiemprePrivadas",
+      "Effect": "Deny",
+      "Action": [
+        "rds:RestoreDBInstanceToPointInTime",
+        "rds:RestoreDBInstanceFromDBSnapshot"
+      ],
+      "Resource": "*",
+      "Condition": {
+        "Bool": {
+          "rds:PubliclyAccessible": "true"
+        }
+      }
+    },
+    {
+      "Sid": "NoBorrarSecretosCriticos",
+      "Effect": "Deny",
+      "Action": [
+        "ssm:DeleteParameter",
+        "ssm:DeleteParameters"
+      ],
+      "Resource": [
+        "arn:aws:ssm:sa-east-1:{{ACCOUNT_ID}}:parameter/busperu/*/app/INTEGRATIONS_ENCRYPTION_KEY",
+        "arn:aws:ssm:sa-east-1:{{ACCOUNT_ID}}:parameter/busperu/*/app/JWT_SECRET"
+      ]
+    },
+    {
+      "Sid": "NoBorrarSecretosNiClaves",
+      "Effect": "Deny",
+      "Resource": "*",
+      "Action": [
+        "secretsmanager:DeleteSecret",
+        "kms:ScheduleKeyDeletion",
+        "kms:DisableKey",
+        "kms:PutKeyPolicy",
+        "kms:CreateGrant",
+        "kms:Decrypt",
+        "kms:ReEncryptFrom"
+      ],
+      "Condition": {
+        "ForAnyValue:StringEquals": {
+          "kms:ResourceAliases": [
+            "alias/busperu-prod-secrets",
+            "alias/busperu-prod-data"
+          ]
+        }
+      }
+    },
+    {
+      "Sid": "NoBorrarSecretsManager",
+      "Effect": "Deny",
+      "Action": [
+        "secretsmanager:DeleteSecret"
+      ],
+      "Resource": "*"
+    },
+    {
+      "Sid": "NoTocarLaAuditoria",
+      "Effect": "Deny",
+      "Resource": "*",
+      "Action": [
+        "cloudtrail:StopLogging",
+        "cloudtrail:DeleteTrail",
+        "cloudtrail:UpdateTrail",
+        "cloudtrail:PutEventSelectors",
+        "cloudtrail:PutInsightSelectors",
+        "events:DeleteRule",
+        "events:DisableRule",
+        "events:PutRule",
+        "events:RemoveTargets",
+        "events:PutTargets"
+      ]
+    },
+    {
+      "Sid": "NoTocarElBucketDeAuditoria",
+      "Effect": "Deny",
+      "Action": "s3:*",
+      "Resource": [
+        "arn:aws:s3:::busperu-prod-cloudtrail-{{ACCOUNT_ID}}",
+        "arn:aws:s3:::busperu-prod-cloudtrail-{{ACCOUNT_ID}}/*"
+      ]
+    },
+    {
+      "Sid": "NingunaClaveKmsSeBorra",
+      "Effect": "Deny",
+      "Action": [
+        "kms:ScheduleKeyDeletion",
+        "kms:DisableKey",
+        "kms:PutKeyPolicy"
+      ],
+      "Resource": "*"
+    },
+    {
+      "Sid": "SoloPasaElRolDeEjecucion",
+      "Effect": "Deny",
+      "Action": "iam:PassRole",
+      "NotResource": "arn:aws:iam::{{ACCOUNT_ID}}:role/busperu/BusPeruProdCloudFormationExecution"
+    },
+    {
+      "Sid": "SinEscrituraDirectaEnLaInfraestructura",
+      "Effect": "Deny",
+      "Resource": "*",
+      "Action": [
+        "rds:ModifyDBInstance",
+        "rds:RebootDBInstance",
+        "rds:DeleteDBInstance",
+        "rds:CreateDBInstance",
+        "rds:RestoreDBInstance*",
+        "ec2:TerminateInstances",
+        "ec2:DeleteVolume",
+        "ec2:DetachVolume",
+        "ec2:ModifyInstanceAttribute",
+        "ec2:AuthorizeSecurityGroup*",
+        "ec2:RevokeSecurityGroup*",
+        "ec2:CreateSecurityGroup",
+        "ec2:DeleteSecurityGroup",
+        "ec2:ModifySecurityGroupRules",
+        "elasticloadbalancing:Delete*",
+        "elasticloadbalancing:Modify*",
+        "dlm:DeleteLifecyclePolicy",
+        "dlm:UpdateLifecyclePolicy",
+        "cloudwatch:DeleteAlarms",
+        "logs:DeleteLogGroup",
+        "kms:Decrypt"
+      ]
+    }
+  ]
+}

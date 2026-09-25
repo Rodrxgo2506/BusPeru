@@ -1,0 +1,588 @@
+{
+  "AWSTemplateFormatVersion": "2010-09-09",
+  "Description": "BusPeru F18-09 - frontend de staging sin dominio: S3 privado + CloudFront (OAC) y la API por CloudFront hacia el ALB",
+  "Parameters": {
+    "EnvName": {
+      "Type": "String",
+      "AllowedValues": [
+        "staging"
+      ],
+      "Default": "staging",
+      "Description": "Solo staging: esta pila no se usa en produccion"
+    },
+    "AlbDnsName": {
+      "Type": "String",
+      "AllowedPattern": "^busperu-staging-alb-[0-9]+\\.[a-z0-9-]+\\.elb\\.amazonaws\\.com$",
+      "Description": "DNS del ALB de busperu-staging"
+    },
+    "AlbSecurityGroupId": {
+      "Type": "AWS::EC2::SecurityGroup::Id",
+      "Description": "SG del ALB de busperu-staging"
+    },
+    "ListenerArn": {
+      "Type": "String",
+      "AllowedPattern": "^arn:aws:elasticloadbalancing:[a-z0-9-]+:[0-9]{12}:listener/app/busperu-staging-alb/.+$",
+      "Description": "Oyente HTTP:80 del ALB"
+    },
+    "TargetGroupArn": {
+      "Type": "String",
+      "AllowedPattern": "^arn:aws:elasticloadbalancing:[a-z0-9-]+:[0-9]{12}:targetgroup/.+$",
+      "Description": "Grupo de destino de la API"
+    },
+    "OperatorCidrs": {
+      "Type": "CommaDelimitedList",
+      "Description": "CIDR /32 de operador ya aprobados en el SG del ALB"
+    },
+    "CloudFrontPrefixListId": {
+      "Type": "String",
+      "AllowedPattern": "^pl-[0-9a-f]+$",
+      "Description": "com.amazonaws.global.cloudfront.origin-facing en esta region"
+    },
+    "OriginVerifySecret": {
+      "Type": "String",
+      "NoEcho": true,
+      "AllowedPattern": "^[0-9a-f]{64}$",
+      "Description": "Valor de la cabecera secreta de origen (32 bytes en hex)"
+    },
+    "ViewerAccess": {
+      "Type": "String",
+      "AllowedValues": [
+        "operators",
+        "public"
+      ],
+      "Default": "operators",
+      "Description": "operators: solo las IP de ViewerAllowedIps; public: cualquiera"
+    },
+    "ViewerAllowedIps": {
+      "Type": "CommaDelimitedList",
+      "Description": "IPv4 exactas permitidas cuando ViewerAccess=operators"
+    }
+  },
+  "Conditions": {
+    "RestrictViewers": {
+      "Fn::Equals": [
+        {
+          "Ref": "ViewerAccess"
+        },
+        "operators"
+      ]
+    }
+  },
+  "Resources": {
+    "FrontendBucket": {
+      "Type": "AWS::S3::Bucket",
+      "DeletionPolicy": "Retain",
+      "UpdateReplacePolicy": "Retain",
+      "Properties": {
+        "BucketName": {
+          "Fn::Sub": "busperu-${EnvName}-web-${AWS::AccountId}"
+        },
+        "PublicAccessBlockConfiguration": {
+          "BlockPublicAcls": true,
+          "BlockPublicPolicy": true,
+          "IgnorePublicAcls": true,
+          "RestrictPublicBuckets": true
+        },
+        "OwnershipControls": {
+          "Rules": [
+            {
+              "ObjectOwnership": "BucketOwnerEnforced"
+            }
+          ]
+        },
+        "BucketEncryption": {
+          "ServerSideEncryptionConfiguration": [
+            {
+              "ServerSideEncryptionByDefault": {
+                "SSEAlgorithm": "AES256"
+              }
+            }
+          ]
+        },
+        "VersioningConfiguration": {
+          "Status": "Enabled"
+        },
+        "LifecycleConfiguration": {
+          "Rules": [
+            {
+              "Id": "versiones-antiguas",
+              "Status": "Enabled",
+              "NoncurrentVersionExpiration": {
+                "NoncurrentDays": 30
+              }
+            }
+          ]
+        },
+        "Tags": [
+          {
+            "Key": "Name",
+            "Value": {
+              "Fn::Sub": "busperu-${EnvName}-web"
+            }
+          },
+          {
+            "Key": "Project",
+            "Value": "busperu"
+          },
+          {
+            "Key": "Environment",
+            "Value": {
+              "Ref": "EnvName"
+            }
+          }
+        ]
+      }
+    },
+    "FrontendBucketPolicy": {
+      "Type": "AWS::S3::BucketPolicy",
+      "Properties": {
+        "Bucket": {
+          "Ref": "FrontendBucket"
+        },
+        "PolicyDocument": {
+          "Version": "2012-10-17",
+          "Statement": [
+            {
+              "Sid": "SoloLaDistribucionWebLee",
+              "Effect": "Allow",
+              "Principal": {
+                "Service": "cloudfront.amazonaws.com"
+              },
+              "Action": "s3:GetObject",
+              "Resource": {
+                "Fn::Sub": "arn:${AWS::Partition}:s3:::${FrontendBucket}/*"
+              },
+              "Condition": {
+                "StringEquals": {
+                  "AWS:SourceArn": {
+                    "Fn::Sub": "arn:${AWS::Partition}:cloudfront::${AWS::AccountId}:distribution/${WebDistribution}"
+                  }
+                }
+              }
+            },
+            {
+              "Sid": "SoloTls",
+              "Effect": "Deny",
+              "Principal": "*",
+              "Action": "s3:*",
+              "Resource": [
+                {
+                  "Fn::Sub": "arn:${AWS::Partition}:s3:::${FrontendBucket}"
+                },
+                {
+                  "Fn::Sub": "arn:${AWS::Partition}:s3:::${FrontendBucket}/*"
+                }
+              ],
+              "Condition": {
+                "Bool": {
+                  "aws:SecureTransport": "false"
+                }
+              }
+            }
+          ]
+        }
+      }
+    },
+    "FrontendOac": {
+      "Type": "AWS::CloudFront::OriginAccessControl",
+      "Properties": {
+        "OriginAccessControlConfig": {
+          "Name": {
+            "Fn::Sub": "busperu-${EnvName}-web-oac"
+          },
+          "Description": "BusPeru staging: CloudFront firma las lecturas del bucket del frontend",
+          "OriginAccessControlOriginType": "s3",
+          "SigningBehavior": "always",
+          "SigningProtocol": "sigv4"
+        }
+      }
+    },
+    "ViewerAllowlist": {
+      "Type": "AWS::CloudFront::Function",
+      "Condition": "RestrictViewers",
+      "Properties": {
+        "Name": {
+          "Fn::Sub": "busperu-${EnvName}-viewer-allowlist"
+        },
+        "AutoPublish": true,
+        "FunctionConfig": {
+          "Comment": "BusPeru staging: solo IP de operador",
+          "Runtime": "cloudfront-js-2.0"
+        },
+        "FunctionCode": {
+          "Fn::Sub": [
+            "function handler(event) {\n  var permitidas = ['${Lista}'];\n  if (permitidas.indexOf(event.viewer.ip) === -1) {\n    return { statusCode: 403, statusDescription: 'Forbidden' };\n  }\n  return event.request;\n}",
+            {
+              "Lista": {
+                "Fn::Join": [
+                  "','",
+                  {
+                    "Ref": "ViewerAllowedIps"
+                  }
+                ]
+              }
+            }
+          ]
+        }
+      }
+    },
+    "ApiCachePolicy": {
+      "Type": "AWS::CloudFront::CachePolicy",
+      "Properties": {
+        "CachePolicyConfig": {
+          "Name": {
+            "Fn::Sub": "busperu-${EnvName}-api-sin-cache"
+          },
+          "Comment": "La API no se cachea (TTL 0 salvo que el origen pida otra cosa, tope 1 s); Authorization llega al origen",
+          "MinTTL": 0,
+          "DefaultTTL": 0,
+          "MaxTTL": 1,
+          "ParametersInCacheKeyAndForwardedToOrigin": {
+            "EnableAcceptEncodingGzip": true,
+            "EnableAcceptEncodingBrotli": true,
+            "HeadersConfig": {
+              "HeaderBehavior": "whitelist",
+              "Headers": [
+                "Authorization"
+              ]
+            },
+            "CookiesConfig": {
+              "CookieBehavior": "none"
+            },
+            "QueryStringsConfig": {
+              "QueryStringBehavior": "all"
+            }
+          }
+        }
+      }
+    },
+    "WebDistribution": {
+      "Type": "AWS::CloudFront::Distribution",
+      "Properties": {
+        "DistributionConfig": {
+          "Enabled": true,
+          "Comment": "busperu-staging-web (SPA)",
+          "PriceClass": "PriceClass_All",
+          "HttpVersion": "http2and3",
+          "IPV6Enabled": false,
+          "DefaultRootObject": "index.html",
+          "Origins": [
+            {
+              "Id": "frontend-s3",
+              "DomainName": {
+                "Fn::GetAtt": [
+                  "FrontendBucket",
+                  "RegionalDomainName"
+                ]
+              },
+              "OriginAccessControlId": {
+                "Fn::GetAtt": [
+                  "FrontendOac",
+                  "Id"
+                ]
+              },
+              "S3OriginConfig": {
+                "OriginAccessIdentity": ""
+              }
+            }
+          ],
+          "DefaultCacheBehavior": {
+            "TargetOriginId": "frontend-s3",
+            "ViewerProtocolPolicy": "redirect-to-https",
+            "AllowedMethods": [
+              "GET",
+              "HEAD"
+            ],
+            "CachedMethods": [
+              "GET",
+              "HEAD"
+            ],
+            "CachePolicyId": "658327ea-f89d-4fab-a63d-7e88639e58f6",
+            "ResponseHeadersPolicyId": "67f7725c-6f97-4210-82d7-5512b31e9d03",
+            "Compress": true,
+            "FunctionAssociations": {
+              "Fn::If": [
+                "RestrictViewers",
+                [
+                  {
+                    "EventType": "viewer-request",
+                    "FunctionARN": {
+                      "Fn::GetAtt": [
+                        "ViewerAllowlist",
+                        "FunctionARN"
+                      ]
+                    }
+                  }
+                ],
+                {
+                  "Ref": "AWS::NoValue"
+                }
+              ]
+            }
+          },
+          "CustomErrorResponses": [
+            {
+              "ErrorCode": 403,
+              "ResponseCode": 200,
+              "ResponsePagePath": "/index.html",
+              "ErrorCachingMinTTL": 0
+            },
+            {
+              "ErrorCode": 404,
+              "ResponseCode": 200,
+              "ResponsePagePath": "/index.html",
+              "ErrorCachingMinTTL": 0
+            }
+          ],
+          "ViewerCertificate": {
+            "CloudFrontDefaultCertificate": true
+          }
+        },
+        "Tags": [
+          {
+            "Key": "Name",
+            "Value": {
+              "Fn::Sub": "busperu-${EnvName}-web-cdn"
+            }
+          },
+          {
+            "Key": "Project",
+            "Value": "busperu"
+          },
+          {
+            "Key": "Environment",
+            "Value": {
+              "Ref": "EnvName"
+            }
+          }
+        ]
+      }
+    },
+    "ApiDistribution": {
+      "Type": "AWS::CloudFront::Distribution",
+      "Properties": {
+        "DistributionConfig": {
+          "Enabled": true,
+          "Comment": "busperu-staging-api (ALB)",
+          "PriceClass": "PriceClass_All",
+          "HttpVersion": "http2and3",
+          "IPV6Enabled": false,
+          "Origins": [
+            {
+              "Id": "api-alb",
+              "DomainName": {
+                "Ref": "AlbDnsName"
+              },
+              "CustomOriginConfig": {
+                "HTTPPort": 80,
+                "OriginProtocolPolicy": "http-only",
+                "OriginReadTimeout": 30,
+                "OriginKeepaliveTimeout": 5
+              },
+              "OriginCustomHeaders": [
+                {
+                  "HeaderName": "X-BusPeru-Origin",
+                  "HeaderValue": {
+                    "Ref": "OriginVerifySecret"
+                  }
+                }
+              ]
+            }
+          ],
+          "DefaultCacheBehavior": {
+            "TargetOriginId": "api-alb",
+            "ViewerProtocolPolicy": "https-only",
+            "AllowedMethods": [
+              "GET",
+              "HEAD",
+              "OPTIONS",
+              "PUT",
+              "PATCH",
+              "POST",
+              "DELETE"
+            ],
+            "CachedMethods": [
+              "GET",
+              "HEAD"
+            ],
+            "CachePolicyId": {
+              "Ref": "ApiCachePolicy"
+            },
+            "OriginRequestPolicyId": "b689b0a8-53d0-40ab-baf2-68738e2966ac",
+            "Compress": true,
+            "FunctionAssociations": {
+              "Fn::If": [
+                "RestrictViewers",
+                [
+                  {
+                    "EventType": "viewer-request",
+                    "FunctionARN": {
+                      "Fn::GetAtt": [
+                        "ViewerAllowlist",
+                        "FunctionARN"
+                      ]
+                    }
+                  }
+                ],
+                {
+                  "Ref": "AWS::NoValue"
+                }
+              ]
+            }
+          },
+          "ViewerCertificate": {
+            "CloudFrontDefaultCertificate": true
+          }
+        },
+        "Tags": [
+          {
+            "Key": "Name",
+            "Value": {
+              "Fn::Sub": "busperu-${EnvName}-api-cdn"
+            }
+          },
+          {
+            "Key": "Project",
+            "Value": "busperu"
+          },
+          {
+            "Key": "Environment",
+            "Value": {
+              "Ref": "EnvName"
+            }
+          }
+        ]
+      }
+    },
+    "AlbFromCloudFront": {
+      "Type": "AWS::EC2::SecurityGroupIngress",
+      "Properties": {
+        "GroupId": {
+          "Ref": "AlbSecurityGroupId"
+        },
+        "Description": "F18-09: CloudFront (origin-facing) hacia el ALB, solo HTTP 80",
+        "IpProtocol": "tcp",
+        "FromPort": 80,
+        "ToPort": 80,
+        "SourcePrefixListId": {
+          "Ref": "CloudFrontPrefixListId"
+        }
+      }
+    },
+    "RuleFromApiDistribution": {
+      "Type": "AWS::ElasticLoadBalancingV2::ListenerRule",
+      "Properties": {
+        "ListenerArn": {
+          "Ref": "ListenerArn"
+        },
+        "Priority": 10,
+        "Conditions": [
+          {
+            "Field": "http-header",
+            "HttpHeaderConfig": {
+              "HttpHeaderName": "X-BusPeru-Origin",
+              "Values": [
+                {
+                  "Ref": "OriginVerifySecret"
+                }
+              ]
+            }
+          }
+        ],
+        "Actions": [
+          {
+            "Type": "forward",
+            "TargetGroupArn": {
+              "Ref": "TargetGroupArn"
+            }
+          }
+        ]
+      }
+    },
+    "RuleFromOperators": {
+      "Type": "AWS::ElasticLoadBalancingV2::ListenerRule",
+      "Properties": {
+        "ListenerArn": {
+          "Ref": "ListenerArn"
+        },
+        "Priority": 20,
+        "Conditions": [
+          {
+            "Field": "source-ip",
+            "SourceIpConfig": {
+              "Values": {
+                "Ref": "OperatorCidrs"
+              }
+            }
+          }
+        ],
+        "Actions": [
+          {
+            "Type": "forward",
+            "TargetGroupArn": {
+              "Ref": "TargetGroupArn"
+            }
+          }
+        ]
+      }
+    },
+    "RuleDenyEverythingElse": {
+      "Type": "AWS::ElasticLoadBalancingV2::ListenerRule",
+      "Properties": {
+        "ListenerArn": {
+          "Ref": "ListenerArn"
+        },
+        "Priority": 30,
+        "Conditions": [
+          {
+            "Field": "path-pattern",
+            "PathPatternConfig": {
+              "Values": [
+                "*"
+              ]
+            }
+          }
+        ],
+        "Actions": [
+          {
+            "Type": "fixed-response",
+            "FixedResponseConfig": {
+              "StatusCode": "403",
+              "ContentType": "text/plain",
+              "MessageBody": "Forbidden"
+            }
+          }
+        ]
+      }
+    }
+  },
+  "Outputs": {
+    "WebUrl": {
+      "Description": "Origen del SPA (FRONTEND_URL)",
+      "Value": {
+        "Fn::Sub": "https://${WebDistribution.DomainName}"
+      }
+    },
+    "ApiUrl": {
+      "Description": "VITE_API_URL del build",
+      "Value": {
+        "Fn::Sub": "https://${ApiDistribution.DomainName}/api"
+      }
+    },
+    "FrontendBucketName": {
+      "Value": {
+        "Ref": "FrontendBucket"
+      }
+    },
+    "WebDistributionId": {
+      "Value": {
+        "Ref": "WebDistribution"
+      }
+    },
+    "ApiDistributionId": {
+      "Value": {
+        "Ref": "ApiDistribution"
+      }
+    }
+  }
+}

@@ -1,0 +1,9 @@
+{
+  "origen": "F18-07 · MariaDB 10.11.19 · dump Dump20260831.sql + migraciones 001→019 (019 = cifrado de datos bancarios: +4 columnas, account_number admite NULL). Referencia anterior (001→018, F18-02B): columnas 492 [78d67d18a072]",
+  "sql_mode": "STRICT_TRANS_TABLES,ERROR_FOR_DIVISION_BY_ZERO,NO_AUTO_CREATE_USER,NO_ENGINE_SUBSTITUTION",
+  "tablas": 49,
+  "columnas": {"total": 496, "huella": "13a439ac3096"},
+  "indices": {"total": 221, "huella": "8cecf83a85ba"},
+  "fks": {"total": 81, "huella": "dd9f630fb43f"},
+  "checks": {"total": 12, "huella": "e598da78a1e9"}
+}

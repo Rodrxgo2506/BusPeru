@@ -1,0 +1,42 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "LeerUnSecretoEnEmergencia",
+      "Effect": "Allow",
+      "Action": [
+        "ssm:GetParameter",
+        "ssm:GetParameterHistory"
+      ],
+      "Resource": "arn:aws:ssm:sa-east-1:{{ACCOUNT_ID}}:parameter/busperu/prod/*"
+    },
+    {
+      "Sid": "DescifrarSoloViaSsm",
+      "Effect": "Allow",
+      "Action": "kms:Decrypt",
+      "Resource": "arn:aws:kms:sa-east-1:{{ACCOUNT_ID}}:key/*",
+      "Condition": {
+        "StringEquals": {
+          "kms:ViaService": "ssm.sa-east-1.amazonaws.com"
+        },
+        "ForAnyValue:StringEquals": {
+          "kms:ResourceAliases": [
+            "alias/busperu-prod-secrets",
+            "alias/busperu-prod-data"
+          ]
+        }
+      }
+    },
+    {
+      "Sid": "NadaMas",
+      "Effect": "Deny",
+      "NotAction": [
+        "ssm:GetParameter",
+        "ssm:GetParameterHistory",
+        "kms:Decrypt",
+        "sts:GetCallerIdentity"
+      ],
+      "Resource": "*"
+    }
+  ]
+}

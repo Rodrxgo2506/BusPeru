@@ -1,0 +1,117 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "LeerParaRecuperar",
+      "Effect": "Allow",
+      "Resource": "*",
+      "Condition": {
+        "StringEquals": {
+          "aws:RequestedRegion": "sa-east-1"
+        }
+      },
+      "Action": [
+        "rds:DescribeDBInstances",
+        "rds:DescribeDBSnapshots",
+        "rds:DescribeDBInstanceAutomatedBackups",
+        "rds:DescribeDBSubnetGroups",
+        "rds:DescribeDBParameterGroups",
+        "rds:DescribeEvents",
+        "rds:ListTagsForResource",
+        "ec2:DescribeSecurityGroups",
+        "ec2:DescribeSubnets",
+        "ec2:DescribeVpcs"
+      ]
+    },
+    {
+      "Sid": "RestaurarSoloEnPrivadoYEnInstanciaNueva",
+      "Effect": "Allow",
+      "Action": [
+        "rds:RestoreDBInstanceToPointInTime",
+        "rds:RestoreDBInstanceFromDBSnapshot"
+      ],
+      "Resource": [
+        "arn:aws:rds:sa-east-1:{{ACCOUNT_ID}}:db:busperu-prod-dr-*",
+        "arn:aws:rds:sa-east-1:{{ACCOUNT_ID}}:db:busperu-prod-db",
+        "arn:aws:rds:sa-east-1:{{ACCOUNT_ID}}:snapshot:*",
+        "arn:aws:rds:sa-east-1:{{ACCOUNT_ID}}:auto-backup:*",
+        "arn:aws:rds:sa-east-1:{{ACCOUNT_ID}}:subgrp:busperu-prod-*",
+        "arn:aws:rds:sa-east-1:{{ACCOUNT_ID}}:pg:busperu-prod-*",
+        "arn:aws:rds:sa-east-1:{{ACCOUNT_ID}}:og:default:mariadb-10-11"
+      ],
+      "Condition": {
+        "Bool": {
+          "rds:PubliclyAccessible": "false"
+        }
+      }
+    },
+    {
+      "Sid": "EtiquetarLaRestaurada",
+      "Effect": "Allow",
+      "Action": "rds:AddTagsToResource",
+      "Resource": "arn:aws:rds:sa-east-1:{{ACCOUNT_ID}}:db:busperu-prod-dr-*"
+    },
+    {
+      "Sid": "ClaveDeLaBaseSoloViaRds",
+      "Effect": "Allow",
+      "Action": [
+        "kms:DescribeKey",
+        "kms:CreateGrant"
+      ],
+      "Resource": "arn:aws:kms:sa-east-1:{{ACCOUNT_ID}}:key/*",
+      "Condition": {
+        "StringEquals": {
+          "kms:ViaService": "rds.sa-east-1.amazonaws.com"
+        },
+        "Bool": {
+          "kms:GrantIsForAWSResource": "true"
+        },
+        "ForAnyValue:StringEquals": {
+          "kms:ResourceAliases": [
+            "alias/busperu-prod-rds"
+          ]
+        }
+      }
+    },
+    {
+      "Sid": "NadaDestructivoNiFueraDeRecuperar",
+      "Effect": "Deny",
+      "Resource": "*",
+      "Action": [
+        "rds:Delete*",
+        "rds:Modify*",
+        "rds:Reboot*",
+        "rds:StartExportTask",
+        "rds:CopyDBSnapshot",
+        "iam:*",
+        "sts:AssumeRole",
+        "cloudformation:*",
+        "ssm:*",
+        "secretsmanager:*",
+        "ec2:Delete*",
+        "ec2:Terminate*",
+        "ec2:Modify*",
+        "s3:*",
+        "kms:ScheduleKeyDeletion",
+        "kms:DisableKey",
+        "kms:PutKeyPolicy",
+        "kms:Decrypt",
+        "cloudtrail:*"
+      ]
+    },
+    {
+      "Sid": "RestauracionesSiemprePrivadas",
+      "Effect": "Deny",
+      "Action": [
+        "rds:RestoreDBInstanceToPointInTime",
+        "rds:RestoreDBInstanceFromDBSnapshot"
+      ],
+      "Resource": "*",
+      "Condition": {
+        "Bool": {
+          "rds:PubliclyAccessible": "true"
+        }
+      }
+    }
+  ]
+}
