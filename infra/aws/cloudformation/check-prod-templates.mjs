@@ -26,6 +26,7 @@
 import { readFileSync } from 'node:fs';
 import prod, { VPC_CIDR, APP_ROLE, ALARM_TOPIC, ORIGIN_HEADER } from './build-prod-template.mjs';
 import web, { CSP, API_ORIGIN, DOMINIO } from './build-prod-web-template.mjs';
+import { API_ERROR_CODES } from './build-web-template.mjs';
 import obs from './build-prod-observability-template.mjs';
 import boot, { ACCIONES, BOOTSTRAP_SESSION, TUNEL } from './build-prod-db-bootstrap-template.mjs';
 
@@ -231,7 +232,11 @@ function separacion(nombre, t) {
     if (!JSON.stringify(d.DefaultCacheBehavior.FunctionAssociations).includes('ViewerFunction')) fallo(`${n}: sin la función de visor`);
   }
   if (wd.DefaultCacheBehavior.ViewerProtocolPolicy !== 'redirect-to-https' || wd.DefaultCacheBehavior.ResponseHeadersPolicyId?.Ref !== 'WebSecurityHeaders') fallo('web: HTTPS y política de cabeceras propia');
-  if (ad.DefaultCacheBehavior.ViewerProtocolPolicy !== 'https-only' || ad.CustomErrorResponses) fallo('api: solo HTTPS y sin páginas de error');
+  if (ad.DefaultCacheBehavior.ViewerProtocolPolicy !== 'https-only') fallo('api: solo HTTPS');
+  // F18-19B (F-01): errores de la API con TTL 0 y sin página de sustitución.
+  const ea = ad.CustomErrorResponses ?? [];
+  if (ea.some((e) => e.ResponsePagePath || e.ResponseCode)) fallo('api: sin páginas de error');
+  if (ea.map((e) => `${e.ErrorCode}:${e.ErrorCachingMinTTL}`).sort().join() !== API_ERROR_CODES.map((c) => `${c}:0`).sort().join()) fallo('api: los errores deben tener ErrorCachingMinTTL 0');
   const origen = ad.Origins[0];
   if (origen.CustomOriginConfig.OriginProtocolPolicy !== 'https-only' || JSON.stringify(origen.CustomOriginConfig.OriginSSLProtocols) !== '["TLSv1.2"]') fallo('api: origen solo HTTPS TLS 1.2');
   if (origen.OriginCustomHeaders?.[0]?.HeaderName !== ORIGIN_HEADER || origen.OriginCustomHeaders[0].HeaderValue.Ref !== 'OriginVerifySecret') fallo('api: falta la cabecera secreta de origen');

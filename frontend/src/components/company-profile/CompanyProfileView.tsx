@@ -141,15 +141,18 @@ export function CompanyProfileView({ data, loadGalleryPage, loadReviews }: Props
           <div className="absolute inset-0 bg-gradient-to-t from-black/55 via-black/10 to-transparent" aria-hidden />
         </div>
         <div className="mx-auto max-w-6xl px-4 sm:px-6 lg:px-8">
-          <div className="-mt-14 flex flex-col items-center gap-4 text-center sm:-mt-16 sm:flex-row sm:items-end sm:text-left">
-            <span className="flex h-28 w-28 shrink-0 items-center justify-center overflow-hidden rounded-2xl bg-white shadow-elevated ring-4 ring-white sm:h-32 sm:w-32">
+          {/* F18-19B (F-02): la portada es un elemento posicionado; este bloque también debe serlo (z-10, por debajo de
+              la barra del sitio y de la navegación de secciones) o la portada se pinta encima. Solo el logo sube sobre
+              la portada; el nombre y el lema quedan debajo, sobre fondo claro. */}
+          <div className="relative z-10 flex flex-col items-center gap-4 text-center sm:flex-row sm:items-end sm:text-left">
+            <span className="-mt-14 flex h-28 w-28 shrink-0 items-center justify-center overflow-hidden rounded-2xl bg-white shadow-elevated ring-4 ring-white sm:-mt-16 sm:h-32 sm:w-32">
               {logo ? (
                 <img src={logo} alt={`Logotipo de ${company.name}`} className="max-h-full max-w-full object-contain p-2" />
               ) : (
                 <Building2 className="h-12 w-12 text-brand-500" aria-hidden />
               )}
             </span>
-            <div className="min-w-0 flex-1 pb-1">
+            <div className="min-w-0 flex-1 pb-1 sm:pt-4">
               <p className="text-xs font-semibold uppercase tracking-wider text-brand-600">Empresa de transporte</p>
               <h1 className="mt-1 text-3xl font-extrabold tracking-tight text-ink sm:text-4xl">{company.name}</h1>
               {profile.tagline && <p className="mt-2 max-w-2xl text-base text-slate-600">{profile.tagline}</p>}
@@ -280,22 +283,24 @@ function AboutSection({ data }: { data: PublicCompanyProfile }) {
 
 // ================================================================================ Servicios
 function ServicesSection({ services }: { services: PublicCompanyProfile['services'] }) {
-  const [active, setActive] = useState(services[0]!.id);
-  const current = services.find((service) => service.id === active) ?? services[0]!;
+  // F18-19B (F-06): la pestaña activa se recuerda por posición; la vista pública ya no trae ids internos.
+  const [active, setActive] = useState(0);
+  const index = active < services.length ? active : 0;
+  const current = services[index]!;
   const image = mediaUrl(current.image);
   return (
     <Section id="servicios" title="Servicios" eyebrow="Modalidades de viaje">
       <div className="scrollbar-none -mx-1 flex gap-2 overflow-x-auto pb-1" role="tablist" aria-label="Servicios">
-        {services.map((service) => (
+        {services.map((service, i) => (
           <button
-            key={service.id}
+            key={`${i}-${service.name}`}
             type="button"
             role="tab"
-            aria-selected={service.id === current.id}
-            onClick={() => setActive(service.id)}
+            aria-selected={i === index}
+            onClick={() => setActive(i)}
             className={cn(
               'whitespace-nowrap rounded-full px-4 py-2 text-sm font-semibold transition',
-              service.id === current.id ? 'bg-brand-500 text-white shadow-card' : 'bg-slate-100 text-slate-600 hover:bg-slate-200',
+              i === index ? 'bg-brand-500 text-white shadow-card' : 'bg-slate-100 text-slate-600 hover:bg-slate-200',
             )}
           >
             {service.name}
@@ -327,7 +332,8 @@ function ServicesSection({ services }: { services: PublicCompanyProfile['service
 
 // ================================================================================ Agencias
 function AgenciesSection({ agencies, today }: { agencies: PublicCompanyProfile['agencies']; today: string }) {
-  const groups = useMemo(() => groupByCity(agencies), [agencies]);
+  // F18-19B (F-06): cada agencia se identifica por su posición en la lista (la vista pública no trae ids).
+  const groups = useMemo(() => groupByCity(agencies.map((agency, key) => ({ ...agency, key }))), [agencies]);
   const [city, setCity] = useState(groups[0]!.city);
   const current = groups.find((group) => group.city === city) ?? groups[0]!;
   const [mapFor, setMapFor] = useState<number | null>(null);
@@ -365,7 +371,7 @@ function AgenciesSection({ agencies, today }: { agencies: PublicCompanyProfile['
           const tel = agency.phone ? telUrl(agency.phone) : null;
           const special = upcomingSpecialHours(agency.special_hours, today);
           return (
-            <article key={agency.id} className="overflow-hidden rounded-card bg-white shadow-card ring-1 ring-black/5">
+            <article key={agency.key} className="overflow-hidden rounded-card bg-white shadow-card ring-1 ring-black/5">
               {image && <img src={image} alt={agency.name} className="aspect-[16/7] w-full object-cover" loading="lazy" decoding="async" />}
               <div className="p-5">
                 <h3 className="flex flex-wrap items-center gap-2 text-lg font-bold text-ink">
@@ -437,8 +443,8 @@ function AgenciesSection({ agencies, today }: { agencies: PublicCompanyProfile['
 
                 {hasMap && (
                   <div className="mt-4 flex flex-wrap gap-2">
-                    <Button size="sm" variant="outline" icon={<MapIcon className="h-4 w-4" />} onClick={() => setMapFor(mapFor === agency.id ? null : agency.id)} aria-expanded={mapFor === agency.id}>
-                      {mapFor === agency.id ? 'Ocultar mapa' : 'Ver en mapa'}
+                    <Button size="sm" variant="outline" icon={<MapIcon className="h-4 w-4" />} onClick={() => setMapFor(mapFor === agency.key ? null : agency.key)} aria-expanded={mapFor === agency.key}>
+                      {mapFor === agency.key ? 'Ocultar mapa' : 'Ver en mapa'}
                     </Button>
                     <a
                       href={directionsUrl(agency.latitude!, agency.longitude!)}
@@ -450,7 +456,7 @@ function AgenciesSection({ agencies, today }: { agencies: PublicCompanyProfile['
                     </a>
                   </div>
                 )}
-                {hasMap && mapFor === agency.id && (
+                {hasMap && mapFor === agency.key && (
                   <div className="mt-3 overflow-hidden rounded-control ring-1 ring-black/10">
                     {/* El mapa (OpenStreetMap, sin clave ni coste) solo se descarga cuando se pide. */}
                     <iframe
@@ -557,20 +563,21 @@ function GallerySection({ data, loadPage }: { data: PublicCompanyProfile; loadPa
   const [items, setItems] = useState(data.gallery.items);
   const [page, setPage] = useState(1);
   const [loading, setLoading] = useState(false);
-  const [open, setOpen] = useState<number | null>(null);
+  // F18-19B (F-06): cada foto se identifica por su archivo (nombre aleatorio y único), no por un id interno.
+  const [open, setOpen] = useState<string | null>(null);
   useEffect(() => {
     setItems(data.gallery.items);
     setPage(1);
   }, [data.gallery.items]);
   const more = loadPage && items.length < data.gallery.total;
-  const selected = items.find((item) => item.id === open) ?? null;
+  const selected = items.find((item) => item.image === open) ?? null;
 
   const loadMore = async () => {
     if (!loadPage) return;
     setLoading(true);
     try {
       const next = await loadPage(page + 1);
-      setItems((current) => [...current, ...next.filter((item) => !current.some((c) => c.id === item.id))]);
+      setItems((current) => [...current, ...next.filter((item) => !current.some((c) => c.image === item.image))]);
       setPage(page + 1);
     } finally {
       setLoading(false);
@@ -581,8 +588,8 @@ function GallerySection({ data, loadPage }: { data: PublicCompanyProfile; loadPa
     <Section id="galeria" title="Galería" eyebrow="Conócenos">
       <ul className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-4">
         {items.map((item) => (
-          <li key={item.id}>
-            <button type="button" onClick={() => setOpen(item.id)} className="group relative block w-full overflow-hidden rounded-card ring-1 ring-black/5 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500">
+          <li key={item.image}>
+            <button type="button" onClick={() => setOpen(item.image)} className="group relative block w-full overflow-hidden rounded-card ring-1 ring-black/5 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500">
               <img
                 src={mediaUrl(item.image) ?? ''}
                 alt={item.title ?? GALLERY_CATEGORY_LABELS[item.category]}
@@ -693,8 +700,8 @@ function ReviewsSection({ data, loadReviews }: { data: PublicCompanyProfile; loa
                 <p className="text-sm text-danger-600">No se pudieron cargar las opiniones. <button type="button" className="underline" onClick={() => void load(1)}>Reintentar</button></p>
               ) : (
                 <ul className="space-y-4">
-                  {rows.map((review) => (
-                    <li key={review.id} className="rounded-card bg-white p-5 shadow-card ring-1 ring-black/5">
+                  {rows.map((review, i) => (
+                    <li key={i} className="rounded-card bg-white p-5 shadow-card ring-1 ring-black/5">
                       <div className="flex flex-wrap items-center justify-between gap-2">
                         <Stars value={review.rating} />
                         <span className="text-xs text-muted">{review.first_name} · {formatDate(review.created_at)}</span>

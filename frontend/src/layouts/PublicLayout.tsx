@@ -6,6 +6,7 @@ import { WhatsAppButton } from '@/components/common/WhatsAppButton';
 import { Button, Logo } from '@/components/ui';
 import { PUBLIC_NAV_LINKS as NAV_LINKS } from '@/constants/navigation';
 import { useAuth } from '@/context/AuthContext';
+import { useCanonicalLink } from '@/hooks/usePageMeta';
 import { homePathFor } from '@/guards';
 import { cn } from '@/utils/cn';
 
@@ -25,6 +26,8 @@ export function PublicLayout() {
   const navigate = useNavigate();
   const location = useLocation();
   const [menuOpen, setMenuOpen] = useState(false);
+  // F18-19B (F-05): URL canónica de cada página pública, con el origen real (staging apunta a staging).
+  useCanonicalLink(location.pathname);
 
   const orangeOnMobile = ORANGE_HEADER_PREFIXES.some((prefix) => location.pathname.startsWith(prefix));
 

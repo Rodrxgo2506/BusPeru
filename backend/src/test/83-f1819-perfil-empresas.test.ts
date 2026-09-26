@@ -339,7 +339,11 @@ describe('F18-19 · perfil público de empresas', () => {
       await post(`/company/profile/agencies/${id}/submit`, {}, token('companyAdmin'));
       await moderate(ctx.fixtures.companyA, { entity: 'agency', id, action: 'approve' });
       const pub = await get('/public/companies/empresa-a');
-      const agencia = pub.body.data.agencies.find((a: { id: number }) => a.id === id);
+      // F18-19B (F-06): la vista pública no expone el id interno de la agencia ni su location_id.
+      const agencia = pub.body.data.agencies.find((a: { name: string }) => a.name === base.name);
+      assert.ok(agencia, 'la agencia aprobada aparece en el perfil público');
+      assert.equal('id' in agencia, false, 'sin id interno');
+      assert.equal('location_id' in agencia, false, 'sin location_id');
       assert.equal(agencia.city, 'Lima');
       assert.deepEqual(agencia.services, ['TICKET_SALES', 'BOARDING', 'PARCELS']);
       assert.equal(agencia.weekly_hours['1'].ranges.length, 2);
@@ -454,6 +458,36 @@ describe('F18-19 · perfil público de empresas', () => {
       assert.equal(reviews.body.data[0].company_response, '¡Gracias por viajar con nosotros!');
       const plano = JSON.stringify(reviews.body.data);
       for (const sensible of ['cliente@test.pe', 'last_name', 'booking_code', 'Prueba']) assert.equal(plano.includes(sensible), false, sensible);
+    });
+
+    it('F18-19B · la vista pública no expone ids internos; la vista previa de la empresa sí los conserva', async () => {
+      // Contenido propio, publicado, para no depender del orden de las demás pruebas.
+      const tk = token('companyAdmin');
+      const servicio = (await post('/company/profile/services', { name: 'Servicio F-06' }, tk)).body.data.id;
+      const agencia = (await post('/company/profile/agencies', { name: 'Agencia F-06', city: 'Lima', address: 'Av. F-06 1', location_id: ctx.fixtures.locations[0] }, tk)).body.data.id;
+      const foto = (await upload('/company/profile/gallery', tk, png(400, 300), 'f06.png', 'image/png', { title: 'Foto F-06' })).body.data.id;
+      for (const [tipo, entidad, id] of [['services', 'service', servicio], ['agencies', 'agency', agencia], ['gallery', 'gallery', foto]] as const) {
+        assert.equal((await post(`/company/profile/${tipo}/${id}/submit`, {}, tk)).status, 200);
+        assert.equal((await moderate(ctx.fixtures.companyA, { entity: entidad, id, action: 'approve' })).status, 200);
+      }
+      const pub = (await get('/public/companies/empresa-a')).body.data;
+      assert.ok(pub.services.some((s: { name: string }) => s.name === 'Servicio F-06') && pub.agencies.some((a: { name: string }) => a.name === 'Agencia F-06')
+        && pub.gallery.items.some((g: { title: string }) => g.title === 'Foto F-06'), 'los elementos aprobados son públicos');
+      for (const [grupo, filas] of [['servicios', pub.services], ['agencias', pub.agencies], ['galería', pub.gallery.items]] as const) {
+        for (const fila of filas as Array<Record<string, unknown>>) {
+          assert.equal('id' in fila, false, `${grupo}: id interno`);
+          assert.equal('location_id' in fila, false, `${grupo}: location_id`);
+        }
+      }
+      const galeria = (await get('/public/companies/empresa-a/gallery')).body.data as Array<Record<string, unknown>>;
+      assert.ok(galeria.length && galeria.every((foto) => !('id' in foto) && typeof foto.image === 'string'), 'galería paginada sin ids, identificada por su imagen');
+      const opiniones = (await get('/public/companies/empresa-a/reviews')).body.data as Array<Record<string, unknown>>;
+      assert.ok(opiniones.length && opiniones.every((o) => !('id' in o)), 'opiniones sin id');
+      // Único id público: el de la empresa, el que ya usa el buscador existente (/buscar?company_id=…).
+      assert.equal(pub.company.id, ctx.fixtures.companyA);
+
+      const vista = (await get('/company/profile/preview', token('companyAdmin'))).body.data;
+      assert.ok(vista.services.every((s: { id?: number }) => Number.isInteger(s.id)), 'la vista previa conserva los ids para editar');
     });
   });
 

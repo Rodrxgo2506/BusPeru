@@ -1,4 +1,5 @@
 import { useEffect } from 'react';
+import { canonicalUrl } from '@/utils/seo';
 
 /**
  * F18-19 · SEO básico de una página del SPA: título, descripción, Open Graph y, opcionalmente, datos
@@ -54,7 +55,8 @@ export function usePageMeta(meta: PageMeta | null): void {
       upsertMeta('property', 'og:title', title),
       upsertMeta('property', 'og:description', description),
       upsertMeta('property', 'og:type', 'website'),
-      upsertMeta('property', 'og:url', window.location.href),
+      // F18-19B (F-05): la URL canónica (sin query ni #), no la de la barra de direcciones.
+      upsertMeta('property', 'og:url', canonicalUrl(window.location.origin, window.location.pathname)),
       upsertMeta('property', 'og:image', image),
     ];
     let script: HTMLScriptElement | null = null;
@@ -72,4 +74,26 @@ export function usePageMeta(meta: PageMeta | null): void {
       script?.remove();
     };
   }, [title, description, image, jsonLd]);
+}
+
+/**
+ * F18-19B (F-05) · `<link rel="canonical">` de la página pública actual. Se recalcula al cambiar de ruta y, al
+ * salir, se deja como estaba (el panel no lo necesita). El origen es el real: en staging, staging.
+ */
+export function useCanonicalLink(pathname: string): void {
+  useEffect(() => {
+    let link = document.head.querySelector<HTMLLinkElement>('link[rel="canonical"]');
+    const created = !link;
+    const previous = link?.getAttribute('href') ?? null;
+    if (!link) {
+      link = document.createElement('link');
+      link.rel = 'canonical';
+      document.head.appendChild(link);
+    }
+    link.href = canonicalUrl(window.location.origin, pathname);
+    return () => {
+      if (created) link?.remove();
+      else if (previous !== null) link?.setAttribute('href', previous);
+    };
+  }, [pathname]);
 }

@@ -135,9 +135,10 @@ export interface PublicCompanyProfile {
   slug: string;
   profile: ProfileContent;
   reviews: ReviewSummary;
-  services: Array<ServiceContent & { id: number; review_status?: ReviewStatus; is_published?: boolean }>;
-  agencies: Array<AgencyContent & { id: number; review_status?: ReviewStatus; is_published?: boolean }>;
-  gallery: { items: Array<GalleryContent & { id: number; review_status?: ReviewStatus }>; total: number; page_size: number };
+  // F18-19B (F-06): la respuesta pública no trae ids internos; la vista previa de la empresa sí (copia de trabajo).
+  services: Array<ServiceContent & { id?: number; review_status?: ReviewStatus; is_published?: boolean }>;
+  agencies: Array<AgencyContent & { id?: number; review_status?: ReviewStatus; is_published?: boolean }>;
+  gallery: { items: Array<GalleryContent & { id?: number; review_status?: ReviewStatus }>; total: number; page_size: number };
   destinations: CompanyDestinationCard[];
   fleet: FleetGroup[];
   preview?: boolean;
@@ -146,7 +147,6 @@ export interface PublicCompanyProfile {
 }
 
 export interface PublicCompanyReview {
-  id: number;
   rating: number;
   title: string | null;
   comment: string | null;

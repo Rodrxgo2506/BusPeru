@@ -8,6 +8,7 @@ import { usePageMeta } from '@/hooks/usePageMeta';
 import { mediaUrl } from '@/services/api';
 import { publicCompanyService } from '@/services/company-profile';
 import { safeExternalUrl } from '@/utils/company-profile';
+import { canonicalUrl } from '@/utils/seo';
 
 /**
  * F18-19 · perfil público de una empresa (`/empresas/:slug`). Solo contenido aprobado por BusPerú: una
@@ -28,7 +29,7 @@ export function CompanyProfilePage() {
             '@context': 'https://schema.org',
             '@type': 'Organization',
             name: data.company.name,
-            url: window.location.href,
+            url: canonicalUrl(window.location.origin, window.location.pathname),
             ...(data.company.logo_url ? { logo: mediaUrl(data.company.logo_url) } : {}),
             ...(data.profile.tagline ? { description: data.profile.tagline } : {}),
             ...(data.profile.contact_phone ? { telephone: data.profile.contact_phone } : {}),

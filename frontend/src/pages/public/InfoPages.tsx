@@ -4,11 +4,14 @@ import { CompanyCard, CompanyCardSkeleton } from '@/components/companies/Company
 import { PublicHero } from '@/components/common/PublicHero';
 import { companiesHeroImage, helpHeroImage, offersHeroImage } from '@/constants/images';
 import { useAsync } from '@/hooks/useAsync';
+import { usePageMeta } from '@/hooks/usePageMeta';
 import { publicService } from '@/services';
 import { formatCurrency, formatDate, todayIso } from '@/utils/format';
 
 export function CompaniesPage() {
   const companies = useAsync(() => publicService.companies(), []);
+  // F18-19B (F-05): título y descripción propios (antes heredaba el genérico del sitio).
+  usePageMeta({ title: 'Empresas de transporte interprovincial | BusPerú', description: 'Empresas de transporte verificadas que venden pasajes de bus interprovincial en BusPerú: rutas, agencias y opiniones.' });
 
   const list = companies.data ?? [];
 
@@ -151,6 +154,7 @@ const FAQS = [
 ];
 
 export function HelpPage() {
+  usePageMeta({ title: 'Centro de ayuda y preguntas frecuentes | BusPerú', description: 'Respuestas sobre compras, pagos, cancelaciones y viajes en BusPerú, y cómo contactar con soporte.' });
   return (
     <PublicHero
       eyebrow="Estamos para ayudarte"

@@ -46,6 +46,11 @@ export const MANAGED = {
   allViewerExceptHost: 'b689b0a8-53d0-40ab-baf2-68738e2966ac',
 };
 export const ORIGIN_HEADER = 'X-BusPeru-Origin';
+/**
+ * F18-19B (F-01) · códigos de error que CloudFront guarda por defecto (ErrorCachingMinTTL 10 s) aunque la política
+ * de caché sea TTL 0. En las distribuciones de la API se fijan a 0 s, sin página de sustitución.
+ */
+export const API_ERROR_CODES = [400, 403, 404, 405, 414, 416, 500, 501, 502, 503, 504];
 
 const BUCKET_ARN = sub('arn:${AWS::Partition}:s3:::${FrontendBucket}');
 const funcion = iff('RestrictViewers', [{ EventType: 'viewer-request', FunctionARN: att('ViewerAllowlist', 'FunctionARN') }], noValue);
@@ -223,6 +228,10 @@ const template = {
             Compress: true,
             FunctionAssociations: funcion,
           },
+          // F18-19B (F-01): sin esto CloudFront guarda ~10 s los errores de la API (404, 403, 5xx…) aunque la
+          // política de caché sea TTL 0, y un perfil recién aprobado seguía respondiendo «no encontrado».
+          // Solo el TTL del error: sin ResponsePagePath ni ResponseCode, el error llega tal cual (nunca index.html).
+          CustomErrorResponses: API_ERROR_CODES.map((ErrorCode) => ({ ErrorCode, ErrorCachingMinTTL: 0 })),
           ViewerCertificate: { CloudFrontDefaultCertificate: true },
         },
         Tags: tags('api-cdn'),

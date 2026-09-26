@@ -10,7 +10,7 @@
 // 3) Que el JSON escrito coincida con el generador.
 
 import { readFileSync } from 'node:fs';
-import template, { MANAGED, ORIGIN_HEADER } from './build-web-template.mjs';
+import template, { API_ERROR_CODES, MANAGED, ORIGIN_HEADER } from './build-web-template.mjs';
 
 const problemas = [];
 const fallo = (m) => problemas.push(m);
@@ -77,7 +77,11 @@ if (web.Origins.length !== 1 || !web.Origins[0].OriginAccessControlId || web.Ori
 const errores = (web.CustomErrorResponses ?? []).map((e) => `${e.ErrorCode}>${e.ResponseCode}${e.ResponsePagePath}`).sort().join();
 if (errores !== '403>200/index.html,404>200/index.html') fallo(`web: fallback de SPA inesperado (${errores})`);
 if (web.DefaultCacheBehavior.ResponseHeadersPolicyId !== MANAGED.securityHeaders) fallo('web: faltan las cabeceras de seguridad');
-if (api.CustomErrorResponses) fallo('api: las páginas de error convertirían los 403/404 de la API en index.html');
+// F18-19B (F-01): cada error cacheable de la API con TTL 0 y SIN página de sustitución (un 403/404 de la API nunca
+// puede convertirse en index.html ni guardarse 10 s en CloudFront).
+const erroresApi = (api.CustomErrorResponses ?? []);
+if (erroresApi.some((e) => e.ResponsePagePath || e.ResponseCode)) fallo('api: las páginas de error convertirían los errores de la API en index.html');
+if (erroresApi.map((e) => `${e.ErrorCode}:${e.ErrorCachingMinTTL}`).sort().join() !== API_ERROR_CODES.map((c) => `${c}:0`).sort().join()) fallo(`api: los errores deben tener ErrorCachingMinTTL 0 (${JSON.stringify(erroresApi)})`);
 if (api.Origins.length !== 1 || !api.Origins[0].CustomOriginConfig) fallo('api: el único origen debe ser el ALB');
 const cabecera = api.Origins[0].OriginCustomHeaders ?? [];
 if (cabecera.length !== 1 || cabecera[0].HeaderName !== ORIGIN_HEADER || JSON.stringify(cabecera[0].HeaderValue) !== '{"Ref":"OriginVerifySecret"}') fallo('api: la cabecera de origen debe salir del parámetro secreto');

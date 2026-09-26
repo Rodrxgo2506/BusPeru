@@ -369,6 +369,17 @@ infra/aws/scripts/qa-staging.sh purgar ./.qa-staging/qa-manifest-*-<sello>.json 
 
 `audit_logs` no se toca nunca: al purgar un usuario, su `user_id` pasa a NULL.
 
+**F18-19B · datos de F18-19.** La purga también cubre lo que cuelga de las empresas y usuarios del manifiesto:
+
+- **Perfil público:** perfil, servicios, agencias (con sus horarios y servicios por agencia) y galería, más sus
+  imágenes bajo `public/companies/<id>/`.
+- **Libro de Reclamaciones:** hojas ligadas a una empresa, un usuario o una reserva del conjunto, y sus eventos. Cada
+  hoja debe ser de un consumidor `@busperu-staging.example`; una hoja real ligada a una empresa sintética **aborta** la
+  purga, porque las hojas se conservan 2 años. El contador de un año solo se retira si todas sus hojas son del conjunto.
+
+Una prueba que cree hojas sin empresa ni usuario sintéticos (p. ej. anónimas y sin empresa) no las liga al manifiesto:
+debe relacionarlas con su empresa sintética.
+
 ### 9.2 Datos DEMO permanentes (F18-10)
 
 `infra/aws/scripts/seed-demo-staging.mjs` crea por la API la empresa «BusPerú Demo»: 3 usuarios

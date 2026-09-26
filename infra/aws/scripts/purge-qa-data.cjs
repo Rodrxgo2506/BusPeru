@@ -20,6 +20,15 @@
 // audit_logs NO se toca: al borrar un usuario su user_id pasa a NULL (FK SET NULL) y el registro se conserva.
 // Tras el COMMIT borra los archivos de logotipo que aún referenciaran las empresas purgadas (solo bajo
 // STORAGE_DIR/public/companies/<id>/, con <id> del conjunto). Sin secretos en la salida.
+//
+// F18-19B (F-03) · también purga lo de F18-19 que cuelga del conjunto:
+//   · perfil público: company_profiles, company_services, company_agencies (horarios y servicios por agencia van en
+//     columnas JSON de la propia agencia) y company_gallery_images de las empresas del conjunto, y sus imágenes
+//     (portada, «nosotros», servicios, agencias y galería; copia de trabajo y publicada) bajo public/companies/<id>/;
+//   · Libro de Reclamaciones: las hojas ligadas a una empresa, un usuario o una reserva del conjunto (y sus eventos).
+//     Cada una debe ser de un consumidor sintético (@busperu-staging.example) y no estar ligada a nada ajeno: una hoja
+//     real ligada a una empresa sintética ABORTA la purga (las hojas se conservan 2 años, DS 011-2011-PCM art. 12).
+//     El contador del año solo se borra si todas las hojas de ese año son del conjunto.
 'use strict';
 const fs = require('fs');
 const path = require('path');
@@ -114,6 +123,12 @@ const enSql = (ids) => (ids.length ? ids.join(',') : 'NULL');
       ['movimientos contables ajenos ligados al conjunto', `SELECT COUNT(*) n FROM financial_transactions WHERE (company_id IN (${enSql(C)}) OR user_id IN (${enSql(U)})) AND (booking_id IS NULL OR booking_id NOT IN (${enSql(K)}))`],
       ['reembolsos ligados al conjunto', `SELECT COUNT(*) n FROM refunds WHERE booking_id IN (${enSql(K)}) OR payment_id IN (${enSql(P)})`],
     ];
+    // F18-19: hojas del Libro de Reclamaciones ligadas al conjunto.
+    const LR = await ids(`SELECT id FROM complaint_book_entries WHERE company_id IN (${enSql(C)}) OR user_id IN (${enSql(U)}) OR booking_id IN (${enSql(K)})`);
+    cerrado.push(
+      ['hojas del Libro ligadas también a una empresa, usuario o reserva ajenos', `SELECT COUNT(*) n FROM complaint_book_entries WHERE id IN (${enSql(LR)}) AND ((company_id IS NOT NULL AND company_id NOT IN (${enSql(C)})) OR (user_id IS NOT NULL AND user_id NOT IN (${enSql(U)})) OR (booking_id IS NOT NULL AND booking_id NOT IN (${enSql(K)})))`],
+      ['hojas del Libro de consumidores reales ligadas al conjunto (se conservan 2 años)', `SELECT COUNT(*) n FROM complaint_book_entries WHERE id IN (${enSql(LR)}) AND consumer_email NOT LIKE '%${DOMINIO}'`],
+    );
     for (const [que, sql] of cerrado) { const x = await n(sql); if (x) falla(`conjunto no cerrado: ${que} (${x})`); }
     for (const [t, col, conj] of NO_CONTEMPLADAS) {
       const set = { C, U, L, T, K, ST }[conj];
@@ -138,7 +153,19 @@ const enSql = (ids) => (ids.length ? ids.join(',') : 'NULL');
       api_keys: await n(`SELECT COUNT(*) n FROM api_keys WHERE company_id IN (${enSql(C)}) OR user_id IN (${enSql(U)})`),
       notifications: await n(`SELECT COUNT(*) n FROM notifications WHERE user_id IN (${enSql(U)})`),
       revoked_sessions: await n(`SELECT COUNT(*) n FROM revoked_sessions WHERE user_id IN (${enSql(U)})`),
+      // F18-19 (en cascada al borrar la empresa o la hoja; se cuentan igual para las postcondiciones)
+      company_profiles: await n(`SELECT COUNT(*) n FROM company_profiles WHERE company_id IN (${enSql(C)})`),
+      company_services: await n(`SELECT COUNT(*) n FROM company_services WHERE company_id IN (${enSql(C)})`),
+      company_agencies: await n(`SELECT COUNT(*) n FROM company_agencies WHERE company_id IN (${enSql(C)})`),
+      company_gallery_images: await n(`SELECT COUNT(*) n FROM company_gallery_images WHERE company_id IN (${enSql(C)})`),
+      complaint_book_entries: LR.length,
+      complaint_book_events: await n(`SELECT COUNT(*) n FROM complaint_book_events WHERE entry_id IN (${enSql(LR)})`),
     };
+    // Contador del Libro: solo se retira el de un año cuyas hojas son TODAS del conjunto (si no, el correlativo sigue).
+    const aniosLR = LR.length ? (await q(`SELECT DISTINCT YEAR(created_at) y FROM complaint_book_entries WHERE id IN (${enSql(LR)})`)).map((r) => Number(r.y)) : [];
+    const contadores = [];
+    for (const y of aniosLR) if (!(await n(`SELECT COUNT(*) n FROM complaint_book_entries WHERE YEAR(created_at) = ${Number(y)} AND id NOT IN (${enSql(LR)})`))) contadores.push(y);
+    aBorrar.complaint_book_counters = contadores.length ? await n(`SELECT COUNT(*) n FROM complaint_book_counters WHERE year IN (${contadores.join(',')})`) : 0;
     informe.a_borrar = aBorrar;
     for (const [t, v] of Object.entries(m.esperado || {})) {
       if (aBorrar[t] === undefined) falla(`esperado.${t}: tabla no contemplada por la purga`);
@@ -148,6 +175,21 @@ const enSql = (ids) => (ids.length ? ids.join(',') : 'NULL');
     const todas = (await q("SELECT table_name t FROM information_schema.tables WHERE table_schema = 'busperu_staging' AND table_type = 'BASE TABLE'")).map((r) => r.t);
     for (const t of todas) antes[t] = await n(`SELECT COUNT(*) n FROM \`${t}\``);
     logos = (await q(`SELECT id, logo_url FROM companies WHERE id IN (${enSql(C)}) AND logo_url IS NOT NULL`)).map((r) => ({ id: Number(r.id), url: r.logo_url }));
+    // F18-19: imágenes del perfil público (copia de trabajo y publicada) de las empresas del conjunto.
+    const textos = [
+      ...(await q(`SELECT company_id id, CONCAT_WS(' ', cover_image, about_image, published_content) t FROM company_profiles WHERE company_id IN (${enSql(C)})`)),
+      ...(await q(`SELECT company_id id, CONCAT_WS(' ', image, published_content) t FROM company_services WHERE company_id IN (${enSql(C)})`)),
+      ...(await q(`SELECT company_id id, CONCAT_WS(' ', image, published_content) t FROM company_agencies WHERE company_id IN (${enSql(C)})`)),
+      ...(await q(`SELECT company_id id, CONCAT_WS(' ', image, published_content) t FROM company_gallery_images WHERE company_id IN (${enSql(C)})`)),
+    ];
+    const vistos = new Set();
+    for (const r of textos) {
+      for (const x of String(r.t ?? '').matchAll(/public\/companies\/(\d+)\/[a-f0-9]{32}\.(?:png|jpe?g|webp)/g)) {
+        if (Number(x[1]) !== Number(r.id)) falla(`imagen de otra empresa referenciada por la empresa ${r.id}: ${x[0]}`);
+        if (!vistos.has(x[0]) && !logos.some((l) => l.url === x[0])) { vistos.add(x[0]); logos.push({ id: Number(r.id), url: x[0] }); }
+      }
+    }
+    informe.imagenes_perfil = vistos.size;
 
     // ------------------------------------------------------------ 4. borrado (orden que respeta las FK RESTRICT)
     const borrados = {};
@@ -157,7 +199,9 @@ const enSql = (ids) => (ids.length ? ids.join(',') : 'NULL');
     await del('bookings', `DELETE FROM bookings WHERE id IN (${enSql(K)})`);                 // + booking_seats (CASCADE)
     await del('booking_groups', `DELETE FROM booking_groups WHERE id IN (${enSql(G)})`);
     await del('trips', `DELETE FROM trips WHERE id IN (${enSql(T)})`);
-    await del('companies', `DELETE FROM companies WHERE id IN (${enSql(C)})`);              // + rutas, buses, llaves, cuentas…
+    await del('complaint_book_entries', `DELETE FROM complaint_book_entries WHERE id IN (${enSql(LR)})`);   // + eventos (CASCADE)
+    if (contadores.length) await del('complaint_book_counters', `DELETE FROM complaint_book_counters WHERE year IN (${contadores.join(',')})`);
+    await del('companies', `DELETE FROM companies WHERE id IN (${enSql(C)})`);              // + rutas, buses, llaves, cuentas, perfil público…
     await del('locations', `DELETE FROM locations WHERE id IN (${enSql(L)})`);
     await del('bus_types', `DELETE FROM bus_types WHERE id IN (${enSql(BT)})`);
     await del('seat_types', `DELETE FROM seat_types WHERE id IN (${enSql(ST)})`);
@@ -179,7 +223,7 @@ const enSql = (ids) => (ids.length ? ids.join(',') : 'NULL');
     for (const [t, v] of Object.entries(aBorrar)) if (v && diferencia[t] !== v) falla(`postcondición: ${t} debía perder ${v} y perdió ${diferencia[t] || 0}`);
     const admin = await n("SELECT COUNT(*) n FROM users u JOIN roles r ON r.id = u.role_id WHERE r.name = 'ADMIN' AND u.status = 'ACTIVE'");
     if (admin < 1) falla('postcondición: no queda ningún ADMIN activo');
-    informe.quedan = Object.fromEntries(['users', 'companies', 'locations', 'trips', 'bookings', ...INTOCABLES].map((t) => [t, despues[t]]));
+    informe.quedan = Object.fromEntries(['users', 'companies', 'locations', 'trips', 'bookings', 'company_profiles', 'complaint_book_entries', ...INTOCABLES].map((t) => [t, despues[t]]));
 
     if (ejecutar) { await c.commit(); informe.resultado = 'COMMIT'; } else { await c.rollback(); informe.resultado = 'ROLLBACK (ensayo)'; }
   } catch (e) {

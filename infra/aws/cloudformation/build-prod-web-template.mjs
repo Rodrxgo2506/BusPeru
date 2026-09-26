@@ -25,6 +25,7 @@
 import { writeFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { ORIGIN_HEADER } from './build-prod-template.mjs';
+import { API_ERROR_CODES } from './build-web-template.mjs';
 
 const ENV = 'prod';
 const P = `busperu-${ENV}`;
@@ -266,6 +267,8 @@ const template = {
             Compress: true,
             FunctionAssociations: [{ EventType: 'viewer-request', FunctionARN: att('ViewerFunction', 'FunctionARN') }],
           },
+          // F18-19B (F-01): los errores de la API no se cachean (igual que staging); el error llega tal cual.
+          CustomErrorResponses: API_ERROR_CODES.map((ErrorCode) => ({ ErrorCode, ErrorCachingMinTTL: 0 })),
           ViewerCertificate: { AcmCertificateArn: ref('WebCertificateArn'), SslSupportMethod: 'sni-only', MinimumProtocolVersion: 'TLSv1.2_2021' },
         },
         Tags: tags('api-cdn'),

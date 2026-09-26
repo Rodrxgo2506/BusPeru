@@ -696,6 +696,17 @@ async function publicCompanyBySlug(slug: string): Promise<{ company: CompanyRow;
 
 type Source = 'published' | 'working';
 
+/**
+ * F18-19B (F-06) · la vista PÚBLICA no lleva identificadores internos: ni el id secuencial de cada elemento (la
+ * interfaz usa el orden y, en la galería, la imagen, que es un nombre aleatorio) ni el `location_id` de la agencia
+ * (clave interna de `locations`; el público ya ve ciudad, dirección y coordenadas). La copia de trabajo del panel
+ * de la empresa y la moderación los conservan: allí sí hacen falta para editar.
+ */
+const PUBLIC_OMIT: Record<ItemEntity, readonly string[]> = { service: [], agency: ['location_id'], gallery: [] };
+function publicContent(entity: ItemEntity, content: Row): Row {
+  return Object.fromEntries(Object.entries(content).filter(([key]) => !PUBLIC_OMIT[entity].includes(key)));
+}
+
 async function visibleItems(entity: ItemEntity, companyId: number, source: Source, limit?: number, offset = 0): Promise<{ rows: Row[]; total: number }> {
   const filter = source === 'published'
     ? 'published_content IS NOT NULL AND suspended_at IS NULL AND is_active = 1 AND deleted_at IS NULL'
@@ -710,7 +721,7 @@ async function visibleItems(entity: ItemEntity, companyId: number, source: Sourc
     rows: rows.map((row) => {
       const content = source === 'published' ? (parseJson(row.published_content) as Row) : snapshotOf(entity, row);
       return source === 'published'
-        ? { id: row.id, ...content }
+        ? publicContent(entity, content)
         : { id: row.id, ...content, review_status: row.review_status, is_published: row.published_content !== null };
     }),
   };
@@ -768,7 +779,8 @@ export async function publicReviews(slug: string, page: number, limit: number): 
      ORDER BY rv.created_at DESC, rv.id DESC LIMIT ? OFFSET ?`,
     [company.id, limit, (page - 1) * limit],
   );
-  return { rows, total: Number(total?.total ?? 0) };
+  // F18-19B (F-06): el id de la reseña solo servía de clave de lista; no se publica.
+  return { rows: rows.map(({ id: _id, ...review }) => review), total: Number(total?.total ?? 0) };
 }
 
 /** Enlace del listado público: solo las empresas con perfil publicado tienen URL propia. */

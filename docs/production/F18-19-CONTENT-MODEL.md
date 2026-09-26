@@ -109,7 +109,7 @@ día. Una fecha especial no puede estar cerrada y tener franjas a la vez, ni rep
 | Agencias | instantáneas de `company_agencies` | agrupadas por ciudad. Horario semanal completo (7 filas; «Cerrado» / «No informado»), fechas especiales próximas y servicios de la agencia. El mapa de OpenStreetMap **solo se carga al pulsar «Ver en mapa»**. «Cómo llegar» usa la URL pública de navegación de Google Maps, sin clave. Enlaces `tel:` y WhatsApp |
 | Destinos | **derivado**: rutas activas de la empresa y ciudades con ficha en el CMS | enlace al buscador existente filtrado por empresa, origen y destino |
 | Flota | **derivado**: buses activos agrupados por tipo | tipo, capacidad y comodidades. **Nunca** placa, código interno ni marca |
-| Galería | instantáneas de `company_gallery_images` | filtro por categoría, 12 por página («Ver más»), visor ampliado |
+| Galería | instantáneas de `company_gallery_images` | 12 por página («Ver más»), en el orden definido por la empresa, y visor ampliado. **No hay filtro por categoría**: la categoría se guarda y se usa como texto alternativo de la imagen cuando no tiene título (corregido en F18-19B, F-04) |
 | Opiniones | **derivado**: reseñas aprobadas | se cargan al acercarse a la sección. Solo el nombre de pila del autor y la respuesta de la empresa |
 | Contacto | instantánea del perfil | teléfono, WhatsApp, correo, web, redes (solo https en su dominio) |
 

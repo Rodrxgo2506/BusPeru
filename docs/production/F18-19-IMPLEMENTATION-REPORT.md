@@ -23,7 +23,7 @@ Documentos de la fase:
 - Secciones con ancla y navegación fija:
   - Inicio, Nosotros, Servicios.
   - **Agencias:** por ciudad, con horario semanal, fechas especiales, servicios por agencia, mapa bajo demanda, «Cómo llegar», teléfono y WhatsApp.
-  - Destinos, Flota, Galería (filtro por categoría, paginada, visor ampliado), Opiniones (carga diferida), Contacto.
+  - Destinos, Flota, Galería (paginada de 12 en 12 con «Ver más» y visor ampliado; sin filtro por categoría, ver F18-19B F-04), Opiniones (carga diferida), Contacto.
 - **Derivados, sin duplicar datos:**
   - Destinos: rutas activas de la empresa, más las fichas de ciudad del CMS.
   - Flota: buses por tipo, sin placa, código ni marca.
@@ -100,7 +100,7 @@ Todas las rutas cuelgan de `/api`. El `company_id` sale del token: solo el ADMIN
 
 | Método y ruta | Quién |
 | --- | --- |
-| `GET /public/companies` (ahora con `slug` y `tagline`) · `GET /public/companies/:slug` · `GET …/:slug/gallery?page&category` · `GET …/:slug/reviews?page` | público |
+| `GET /public/companies` (ahora con `slug` y `tagline`) · `GET /public/companies/:slug` · `GET …/:slug/gallery?page` · `GET …/:slug/reviews?page` | público |
 | `GET /public/legal` (datos del proveedor, `null` si están pendientes) | público |
 | `POST /public/complaints` · `POST /public/complaints/lookup` (con límite de peticiones) | público; la sesión es opcional y solo sirve para enlazar una reserva propia |
 | `GET /company/profile` · `GET /company/profile/preview` · `GET /company/profile/:items(services\|agencies\|gallery)` | ADMIN, COMPANY_ADMIN, OPERATOR (`companies.view`) |
