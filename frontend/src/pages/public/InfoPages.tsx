@@ -6,6 +6,7 @@ import { companiesHeroImage, helpHeroImage, offersHeroImage } from '@/constants/
 import { useAsync } from '@/hooks/useAsync';
 import { usePageMeta } from '@/hooks/usePageMeta';
 import { publicService } from '@/services';
+import { companyCardActions } from '@/utils/company-links';
 import { formatCurrency, formatDate, todayIso } from '@/utils/format';
 
 export function CompaniesPage() {
@@ -52,8 +53,8 @@ export function CompaniesPage() {
               rating={company.rating}
               reviewsCount={company.reviews_count}
               routesCount={company.routes_count}
-              // F18-19: con perfil público aprobado, la tarjeta lleva al perfil; si no, al buscador como antes.
-              to={company.slug ? `/empresas/${company.slug}` : `/buscar?company_id=${company.id}&date=${todayIso()}`}
+              // F18-19D: «Ver perfil» solo con perfil público aprobado (slug del backend) y «Ver viajes» siempre.
+              actions={companyCardActions(company, todayIso())}
             />
           ))}
         </div>

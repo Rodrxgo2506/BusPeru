@@ -2,6 +2,7 @@ import { ArrowRight, BadgeCheck, Bus, Star } from 'lucide-react';
 import { Link } from 'react-router-dom';
 import { mediaUrl } from '@/services/api';
 import { cn } from '@/utils/cn';
+import type { CompanyCardActions } from '@/utils/company-links';
 
 /**
  * Tarjeta de empresa de transporte (composición revisada en F17C-UI-08).
@@ -21,7 +22,7 @@ export function CompanyCard({
   rating,
   reviewsCount,
   routesCount,
-  to,
+  actions,
 }: {
   name: string;
   description: string | null;
@@ -29,12 +30,21 @@ export function CompanyCard({
   rating: number | null;
   reviewsCount: number;
   routesCount: number;
-  to: string;
+  /** F18-19D: «Ver perfil» solo si hay perfil público aprobado (slug del backend); «Ver viajes» siempre. */
+  actions: CompanyCardActions;
 }) {
+  const { profile, trips } = actions;
   return (
     <article className="group flex flex-col rounded-card bg-white p-5 shadow-card ring-1 ring-black/5 transition duration-300 hover:-translate-y-1 hover:shadow-elevated sm:p-6">
       <div className="flex items-start justify-between gap-4">
-        <CompanyIdentity name={name} logoUrl={logoUrl} />
+        {/* El logo repite el destino del nombre: se deja fuera del orden de tabulación y de los lectores de pantalla. */}
+        {profile ? (
+          <Link to={profile.href} tabIndex={-1} aria-hidden className="rounded-control">
+            <CompanyIdentity name={name} logoUrl={logoUrl} />
+          </Link>
+        ) : (
+          <CompanyIdentity name={name} logoUrl={logoUrl} />
+        )}
         <RatingPill rating={rating} reviewsCount={reviewsCount} />
       </div>
 
@@ -45,7 +55,15 @@ export function CompanyCard({
         Empresa verificada
       </p>
 
-      <h2 className="mt-3 text-lg font-bold leading-snug text-ink">{name}</h2>
+      <h2 className="mt-3 text-lg font-bold leading-snug text-ink">
+        {profile ? (
+          <Link to={profile.href} className="rounded hover:text-brand-600 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-500">
+            {name}
+          </Link>
+        ) : (
+          name
+        )}
+      </h2>
       <p className="mt-1.5 line-clamp-3 text-sm text-slate-600">{description ?? 'Transporte interprovincial en el Perú.'}</p>
 
       <dl className="mt-4 flex items-center gap-2.5 border-t border-border pt-4 text-sm">
@@ -56,14 +74,30 @@ export function CompanyCard({
         </dd>
       </dl>
 
-      {/* `mt-auto`: con descripciones de distinto largo, el botón queda a la misma altura en toda la fila. */}
-      <div className="mt-auto pt-5">
+      {/* `mt-auto`: con descripciones de distinto largo, los botones quedan a la misma altura en toda la fila. */}
+      <div className={cn('mt-auto grid gap-2 pt-5', profile && 'grid-cols-2')}>
+        {profile && (
+          <Link
+            to={profile.href}
+            aria-label={profile.ariaLabel}
+            className="flex h-11 items-center justify-center gap-2 rounded-control bg-brand-500 px-4 text-sm font-semibold text-white transition-colors hover:bg-brand-600 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-2"
+          >
+            {profile.label}
+            <ArrowRight className="h-4 w-4" aria-hidden />
+          </Link>
+        )}
         <Link
-          to={to}
-          className="flex h-11 w-full items-center justify-center gap-2 rounded-control bg-brand-500 px-5 text-sm font-semibold text-white transition-colors hover:bg-brand-600 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-2 group-hover:bg-brand-600"
+          to={trips.href}
+          aria-label={trips.ariaLabel}
+          className={cn(
+            'flex h-11 items-center justify-center gap-2 rounded-control px-4 text-sm font-semibold transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-2',
+            profile
+              ? 'border border-brand-500 bg-white text-brand-600 hover:bg-brand-50'
+              : 'w-full bg-brand-500 text-white hover:bg-brand-600 group-hover:bg-brand-600',
+          )}
         >
-          Ver viajes
-          <ArrowRight className="h-4 w-4 transition-transform group-hover:translate-x-0.5" aria-hidden />
+          {trips.label}
+          {!profile && <ArrowRight className="h-4 w-4 transition-transform group-hover:translate-x-0.5" aria-hidden />}
         </Link>
       </div>
     </article>

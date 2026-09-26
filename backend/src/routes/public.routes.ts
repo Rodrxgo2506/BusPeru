@@ -52,7 +52,13 @@ router.get(
       `SELECT co.id, co.name, co.logo_url, co.description,
               (SELECT ROUND(AVG(rv.rating), 1) FROM reviews rv WHERE rv.company_id = co.id AND rv.status = 'PUBLISHED') AS rating,
               (SELECT COUNT(*) FROM reviews rv WHERE rv.company_id = co.id AND rv.status = 'PUBLISHED') AS reviews_count,
-              (SELECT COUNT(*) FROM routes r WHERE r.company_id = co.id AND r.status = 'ACTIVE') AS routes_count
+              (SELECT COUNT(*) FROM routes r WHERE r.company_id = co.id AND r.status = 'ACTIVE') AS routes_count,
+              -- F18-19D · fecha de la PRÓXIMA salida visible en la búsqueda pública (mismas condiciones que
+              -- searchTrips): «Ver viajes» abre el buscador en esa fecha, no en un día sin salidas.
+              (SELECT DATE_FORMAT(MIN(t.departure_datetime), '%Y-%m-%d')
+                 FROM trips t JOIN routes r ON r.id = t.route_id JOIN buses b ON b.id = t.bus_id
+                WHERE r.company_id = co.id AND r.status = 'ACTIVE'
+                  AND t.status IN ('SCHEDULED', 'BOARDING', 'DELAYED') AND t.departure_datetime >= NOW()) AS next_departure_date
        FROM companies co WHERE co.status = 'ACTIVE' ORDER BY co.name ASC`,
     );
     // F18-19 · solo las empresas con perfil publicado tienen URL propia (/empresas/<slug>).

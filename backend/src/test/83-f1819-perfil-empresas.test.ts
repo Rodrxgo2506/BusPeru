@@ -489,6 +489,23 @@ describe('F18-19 · perfil público de empresas', () => {
       const vista = (await get('/company/profile/preview', token('companyAdmin'))).body.data;
       assert.ok(vista.services.every((s: { id?: number }) => Number.isInteger(s.id)), 'la vista previa conserva los ids para editar');
     });
+
+    it('F18-19D · el listado trae la fecha de la próxima salida visible y el buscador la encuentra', async () => {
+      const viaje = await queryOne<{ salida: string }>("SELECT DATE_FORMAT(departure_datetime, '%Y-%m-%d') AS salida FROM trips WHERE id = ?", [ctx.fixtures.tripB]);
+      const empresaB = async () => ((await get('/public/companies')).body.data as Array<{ id: number; next_departure_date: string | null }>)
+        .find((c) => c.id === ctx.fixtures.companyB);
+      assert.equal((await empresaB())?.next_departure_date, viaje?.salida, 'la próxima salida de B es la de su único viaje');
+      const busqueda = await get(`/public/trips?company_id=${ctx.fixtures.companyB}&date=${viaje?.salida}`);
+      assert.ok((busqueda.body.data as Array<{ id: number }>).some((t) => t.id === ctx.fixtures.tripB), '«Ver viajes» con esa fecha muestra el viaje');
+
+      // Un viaje cancelado no cuenta: sin salidas visibles no hay fecha (la tarjeta usa hoy, como antes).
+      await execute("UPDATE trips SET status = 'CANCELLED' WHERE id = ?", [ctx.fixtures.tripB]);
+      try {
+        assert.equal((await empresaB())?.next_departure_date, null);
+      } finally {
+        await execute("UPDATE trips SET status = 'SCHEDULED' WHERE id = ?", [ctx.fixtures.tripB]);
+      }
+    });
   });
 
   // ======================================================================= supervisión ADMIN

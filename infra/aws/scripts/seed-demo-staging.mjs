@@ -15,6 +15,15 @@
 //   reutiliza. Los viajes se calculan respecto al momento de ejecución (hora de Lima): repetirlo el mismo día no crea
 //   nada; otro día añade las salidas futuras que falten.
 // · --execute: si algo falla, deshace por la API, en orden inverso, SOLO lo creado en esa ejecución.
+// · F18-19D: además deja PUBLICADO el perfil público de «BusPerú Demo» (/empresas/<slug>) con contenido explícitamente
+//   ficticio (servicios y agencias DEMO; sin teléfonos, redes, coordenadas ni imágenes: no hay imágenes propias en el
+//   proyecto y no se descargan de internet). Usa el flujo oficial: el ADMIN edita el perfil de la empresa
+//   (`?company_id=`, como en la pestaña «Editar» de moderación), lo envía a revisión y lo aprueba; así no hace falta
+//   conocer ni rotar la contraseña del COMPANY_ADMIN DEMO. El slug lo genera la aplicación, nunca este script.
+//   Idempotente: compara lo publicado con lo definido aquí y solo edita, envía y aprueba lo que falte o difiera.
+//   Un perfil no se puede borrar por la API: si una ejecución falla después de crearlo queda en borrador (no público).
+// · F18-19D: salidas durante los próximos 7 días (una diaria a las 20:00 más la de las 08:00 de pasado mañana), para
+//   que el DEMO siga teniendo viajes futuros aunque la siembra no se repita cada día.
 // · Contraseñas DEMO: aleatorias (crypto) y NUNCA impresas ni guardadas. --verify las rota a valores efímeros en
 //   memoria para probar cada rol. --entregar-credenciales las rota de nuevo y las muestra UNA vez en stdout: ejecútelo
 //   solo el propietario, en su terminal local.
@@ -61,8 +70,10 @@ const RUTAS = [
   { o: 'Lima', d: 'Arequipa', km: 1010, min: 960, precio: 70 },
   { o: 'Arequipa', d: 'Lima', km: 1010, min: 960, precio: 70 },
 ];
-// Salidas: [días desde hoy (hora de Lima), hora local]. Dos por ruta: 12 viajes en total.
-const SALIDAS = [[1, 20], [2, 8]];
+// Salidas: [días desde hoy (hora de Lima), hora local]. F18-10 creaba dos por ruta ([1, 20] y [2, 8]); F18-19D amplía el
+// horizonte a 7 días con una salida diaria a las 20:00. Como la clave es la fecha y hora exactas, repetir la siembra al
+// día siguiente reutiliza las que ya existen y solo añade las del nuevo último día (y la de las 08:00).
+const SALIDAS = [[1, 20], [2, 8], [2, 20], [3, 20], [4, 20], [5, 20], [6, 20], [7, 20]];
 const TIPO_BUS = { name: 'Demo · Semicama 40', description: 'Tipo de bus DEMO (ficticio)', default_capacity: 40 };
 const TIPO_ASIENTO = { name: 'Demo · Semicama', description: 'Tipo de asiento DEMO (ficticio)' };
 const BUS = { code: 'DEMO-01', plate_number: 'DEMO-001', brand: 'Demo', model: 'Semicama 40 (ficticio)', year: 2024, capacity: 40, status: 'ACTIVE' };
@@ -76,6 +87,37 @@ for (let fila = 1; fila <= 10; fila += 1) {
 }
 const ELEMENTOS = [{ element_type: 'BATHROOM', row_number: 11, column_number: 5, label: 'Baño' }];
 
+// F18-19D · perfil público DEMO. Todo el texto dice que es ficticio; ningún dato de contacto enlaza a algo real
+// (solo un correo del dominio reservado .invalid, que nunca entrega). Sin web, redes, teléfonos ni coordenadas.
+const AVISO_DEMO = 'Perfil DEMO de staging: toda la información mostrada es ficticia.';
+const PERFIL = {
+  tagline: `Servicio de transporte interprovincial — entorno DEMO. ${AVISO_DEMO}`,
+  about_title: 'Perfil DEMO de staging',
+  about_body: 'Este perfil pertenece exclusivamente al entorno DEMO de staging. Todos los datos son ficticios y no corresponden a una empresa real.\n\n'
+    + 'BusPerú Demo existe solo para mostrar cómo se ve el perfil público de una empresa de transporte en BusPerú. No presta servicios de transporte, no vende pasajes reales y no atiende al público.',
+  history: 'Historia ficticia (DEMO): BusPerú Demo se creó en el entorno de staging para probar la plataforma con rutas, viajes y un bus de demostración entre Lima, Pucallpa, Cusco y Arequipa.',
+  mission: 'Misión ficticia (DEMO): mostrar con claridad cómo una empresa de transporte presenta sus servicios, agencias y destinos a los pasajeros en BusPerú.',
+  vision: 'Visión ficticia (DEMO): servir de ejemplo del perfil público de empresas mientras la plataforma se prueba en staging.',
+  values_list: ['Datos 100 % ficticios (DEMO)', 'Seguridad', 'Puntualidad', 'Atención al pasajero'],
+  contact_email: `contacto${DOMINIO_DEMO}`,
+  main_address: 'Dirección ficticia (DEMO) · sin atención al público',
+};
+const SERVICIOS = [
+  { name: 'Viajes interprovinciales (DEMO)', description: 'Servicio ficticio de demostración: viajes de ejemplo entre Lima, Pucallpa, Cusco y Arequipa en el entorno de staging.', features: ['Bus semicama de 40 asientos (DEMO)', 'Salidas de ejemplo generadas por la siembra', 'Sin validez comercial'] },
+  { name: 'Venta y reserva de pasajes DEMO', description: 'La compra se prueba en staging con datos ficticios: no se venden pasajes reales.', features: ['Selección de asiento', 'Reserva de prueba', 'Sin cobros reales'] },
+  { name: 'Equipaje (DEMO)', description: 'Condiciones de equipaje de ejemplo, solo para demostración.', features: ['Equipaje de mano (ejemplo)', 'Equipaje en bodega (ejemplo)'] },
+  { name: 'Atención al pasajero (DEMO)', description: 'Canal de atención ficticio: los mensajes no llegan a ninguna empresa real.', features: ['Consultas de ejemplo', 'Libro de Reclamaciones de la plataforma'] },
+];
+const DIAS = (desde, hasta, rangos) => Object.fromEntries(Array.from({ length: hasta - desde + 1 }, (_, i) => [String(desde + i), rangos === 'cerrado' ? { closed: true } : { ranges: rangos }]));
+const AGENCIAS = [
+  { terminal: 'Lima', name: 'Agencia DEMO Lima', city: 'Lima', department: 'Lima', address: 'Dirección ficticia (DEMO) — Lima', reference: 'Agencia de demostración: sin atención al público',
+    services: ['TICKET_SALES', 'BOARDING', 'CUSTOMER_SERVICE'], weekly_hours: { ...DIAS(1, 6, [{ open: '06:00', close: '22:00' }]), ...DIAS(7, 7, 'cerrado') } },
+  { terminal: 'Pucallpa', name: 'Agencia DEMO Pucallpa', city: 'Pucallpa', department: 'Ucayali', address: 'Dirección ficticia (DEMO) — Pucallpa', reference: 'Agencia de demostración: sin atención al público',
+    services: ['TICKET_SALES', 'BOARDING', 'BAGGAGE_STORAGE'], weekly_hours: { ...DIAS(1, 5, [{ open: '07:00', close: '13:00' }, { open: '15:00', close: '20:00' }]), ...DIAS(6, 6, [{ open: '08:00', close: '12:00' }]), ...DIAS(7, 7, 'cerrado') } },
+  { terminal: 'Cusco', name: 'Agencia DEMO Cusco', city: 'Cusco', department: 'Cusco', address: 'Dirección ficticia (DEMO) — Cusco', reference: 'Agencia de demostración: sin atención al público',
+    services: ['BOARDING', 'PARCELS', 'WAITING_ROOM'], weekly_hours: DIAS(1, 7, [{ open: '05:00', close: '21:00' }]) },
+];
+
 // ------------------------------------------------------------------------------------------ utilidades
 const SECRETOS = [CLAVE_ADMIN];
 const limpiar = (t) => SECRETOS.reduce((s, x) => (x ? s.split(x).join('***') : s), String(t ?? ''));
@@ -83,6 +125,20 @@ const log = (...a) => console.log(...a.map(limpiar));
 class Alto extends Error {}
 const alto = (m) => { throw new Alto(m); };
 const filas = (d) => (Array.isArray(d) ? d : d?.items ?? d?.data ?? []);
+// F18-19D · comparación de contenido (la API normaliza igual que aquí: textos ya limpios, listas sin repetidos).
+const igual = (a, b) => JSON.stringify(a ?? null) === JSON.stringify(b ?? null);
+const difiere = (actual, deseado) => Object.entries(deseado).filter(([k, v]) => !igual(actual?.[k], v)).map(([k]) => k);
+const servicioDeseado = (sv) => ({ name: sv.name, description: sv.description, features: sv.features });
+const agenciaDeseada = (ag, terminal) => ({ name: ag.name, city: ag.city, department: ag.department, location_id: terminal ? Number(terminal.id) : null, address: ag.address,
+  reference: ag.reference, services: ag.services, weekly_hours: ag.weekly_hours });
+const publicado = (x) => Boolean(x && x.is_published && x.review_status === 'APPROVED' && !x.suspended_at && Number(x.is_active ?? 1) === 1);
+// Acción sobre un elemento del perfil: CREAR · ACTUALIZAR (contenido distinto) · PUBLICAR (igual, pero sin aprobar) · REUTILIZAR.
+function accionElemento(actual, deseado) {
+  if (!actual) return 'CREAR';
+  if (actual.suspended_at) alto(`«${actual.name}» está suspendido por moderación: revisarlo a mano`);
+  if (difiere(actual, deseado).length) return 'ACTUALIZAR';
+  return publicado(actual) ? 'REUTILIZAR' : 'PUBLICAR';
+}
 async function pedir(metodo, ruta, { token, cuerpo } = {}) {
   const h = {};
   if (token) h.Authorization = `Bearer ${token}`;
@@ -165,6 +221,14 @@ async function validarLocal() {
     if (a.seat_number) { if (numeros.has(a.seat_number)) alto(`asiento ${a.seat_number} repetido`); numeros.add(a.seat_number); }
   }
   if (numeros.size !== BUS.capacity) alto(`el layout tiene ${numeros.size} asientos y el bus ${BUS.capacity}`);
+  // F18-19D · perfil público DEMO con los esquemas reales de F18-19.
+  const cp = path.resolve(aqui, '../../../backend/dist/validators/company-profile.validators.js');
+  if (!fs.existsSync(cp)) { avisos.push('backend/dist sin los validadores del perfil público: se omite su validación'); return avisos; }
+  const w = createRequire(import.meta.url)(cp);
+  const probarPerfil = (esquema, datos, que) => { const r = w[esquema].safeParse(datos); if (!r.success) alto(`${que} no pasa ${esquema}: ${r.error.issues.map((i) => `${i.path.join('.')} ${i.message}`).join('; ')}`); };
+  probarPerfil('updateCompanyProfileSchema', PERFIL, 'perfil DEMO');
+  for (const sv of SERVICIOS) probarPerfil('createCompanyServiceSchema', sv, `servicio «${sv.name}»`);
+  for (const ag of AGENCIAS) probarPerfil('createCompanyAgencySchema', agenciaDeseada(ag, { id: 1 }), `agencia «${ag.name}»`);
   return avisos;
 }
 
@@ -206,6 +270,19 @@ async function estado(ctx) {
         e.viajes[`${r.o}>${r.d}@${salida}`] = ruta ? vs.find((v) => Number(v.route_id) === Number(ruta.id) && String(v.departure_datetime).slice(0, 19).replace('T', ' ') === salida) ?? null : null;
       }
     }
+    // F18-19D · perfil público. SOLO LECTURA: la cola de moderación y las listas no crean el perfil (abrirlo sí, por
+    // eso el dry-run no lo abre). El contenido publicado se lee de la API pública.
+    const cola = filas(exige(await pedir('GET', '/admin/company-profiles', { token: t }), 200, 'perfiles').datos);
+    const fila = cola.find((c) => Number(c.company_id) === Number(e.empresa.id));
+    e.perfil = fila?.slug ? { slug: fila.slug, estado: fila.profile_status, publicado: Boolean(fila.profile_published_at), suspendido: Boolean(fila.profile_suspended_at) } : null;
+    if (e.perfil?.suspendido) alto('el perfil DEMO está suspendido por moderación: revisarlo a mano');
+    e.perfilPublico = null;
+    if (e.perfil?.publicado) {
+      const pub = await pedir('GET', `/public/companies/${encodeURIComponent(e.perfil.slug)}`);
+      if (pub.estado === 200) e.perfilPublico = pub.datos.profile;
+    }
+    e.servicios = filas(exige(await pedir('GET', `/company/profile/services?company_id=${e.empresa.id}`, { token: t }), 200, 'servicios del perfil').datos);
+    e.agencias = filas(exige(await pedir('GET', `/company/profile/agencies?company_id=${e.empresa.id}`, { token: t }), 200, 'agencias del perfil').datos);
   }
   return e;
 }
@@ -221,6 +298,13 @@ function plan(e) {
   x(`layout publicado «${LAYOUT.name}»: 1 piso 11×5, ${ASIENTOS.length} asientos, ${ELEMENTOS.length} baño`, e.layout, e.layout ? `id ${e.layout.id} v${e.layout.version}` : '');
   for (const r of RUTAS) x(`ruta ${r.o} → ${r.d} (${r.km} km, ${r.min} min)`, e.rutas[`${r.o}>${r.d}`]);
   for (const r of RUTAS) for (const [dd, hh] of SALIDAS) { const s = fechaLima(dd, hh); x(`viaje ${r.o} → ${r.d} ${s} (Lima) · S/ ${r.precio.toFixed(2)}`, e.viajes[`${r.o}>${r.d}@${s}`]); }
+  // F18-19D · perfil público DEMO
+  const y = (que, accion, detalle = '') => p.push({ que, accion, detalle });
+  const accionPerfil = !e.perfil ? 'CREAR' : !e.perfil.publicado ? 'PUBLICAR' : difiere(e.perfilPublico, PERFIL).length ? 'ACTUALIZAR'
+    : e.perfil.estado !== 'APPROVED' ? 'PUBLICAR' : 'REUTILIZAR';
+  y('perfil público de la empresa DEMO (slug generado por la aplicación)', accionPerfil, e.perfil ? `slug ${e.perfil.slug} · ${e.perfil.estado}${e.perfil.publicado ? ' · publicado' : ''}` : '');
+  for (const sv of SERVICIOS) { const a = (e.servicios ?? []).find((z) => z.name === sv.name); y(`servicio «${sv.name}»`, accionElemento(a, servicioDeseado(sv)), a ? `id ${a.id} · ${a.review_status}` : ''); }
+  for (const ag of AGENCIAS) { const a = (e.agencias ?? []).find((z) => z.name === ag.name); y(`agencia «${ag.name}» (${ag.city})`, accionElemento(a, agenciaDeseada(ag, e.terminales[ag.terminal])), a ? `id ${a.id} · ${a.review_status}` : ''); }
   return p;
 }
 
@@ -278,6 +362,50 @@ async function crearTodo(ctx, e) {
           base_price: r.precio, status: 'SCHEDULED', boarding_notes: 'Viaje DEMO de staging (ficticio).',
         }, `viaje ${r.o}→${r.d} ${salida}`, (id) => `/trips/${id}`);
       }
+    }
+
+    // ---- F18-19D · perfil público DEMO: el ADMIN edita el perfil de la empresa, lo envía a revisión y lo aprueba.
+    const q = `?company_id=${empresa.id}`;
+    const publicar = async (rutaEnvio, entity, id, estadoActual, que) => {
+      if (estadoActual === 'DRAFT' || estadoActual === 'REJECTED') exige(await pedir('POST', rutaEnvio, { token: t }), 200, `enviar a revisión ${que}`);
+      exige(await pedir('POST', `/admin/company-profiles/${empresa.id}/moderation`, { token: t, cuerpo: { entity, action: 'approve', ...(id ? { id } : {}) } }), 200, `aprobar ${que}`);
+      log(`  ✓ ${que}: enviado a revisión y aprobado (publicado)`);
+    };
+    // Abrir el perfil lo crea en borrador si no existe; el slug lo genera la aplicación a partir del nombre.
+    const perfil = exige(await pedir('GET', `/company/profile${q}`, { token: t }), 200, 'perfil').datos;
+    if (!e.perfil) log(`  + perfil público creado en borrador por la aplicación · slug ${perfil.slug}`);
+    if (perfil.suspended_at) alto('el perfil DEMO está suspendido por moderación: revisarlo a mano');
+    let estadoPerfil = perfil.review_status;
+    const cambiosPerfil = difiere(perfil, PERFIL);
+    if (cambiosPerfil.length) {
+      const r = exige(await pedir('PUT', `/company/profile${q}`, { token: t, cuerpo: PERFIL }), 200, 'editar perfil');
+      estadoPerfil = (r.datos.profile ?? r.datos).review_status;
+      log(`  ~ perfil ${perfil.slug}: ${cambiosPerfil.join(', ')}`);
+    }
+    if (estadoPerfil !== 'APPROVED' || !perfil.is_published) await publicar(`/company/profile/submit${q}`, 'profile', null, estadoPerfil, `perfil ${perfil.slug}`);
+
+    const elementos = [
+      ...SERVICIOS.map((sv) => ({ tipo: 'services', entity: 'service', que: `servicio «${sv.name}»`, actual: (e.servicios ?? []).find((z) => z.name === sv.name), deseado: servicioDeseado(sv), cuerpo: sv })),
+      ...AGENCIAS.map((ag) => {
+        const deseado = agenciaDeseada(ag, term[ag.terminal]);
+        return { tipo: 'agencies', entity: 'agency', que: `agencia «${ag.name}»`, actual: (e.agencias ?? []).find((z) => z.name === ag.name), deseado, cuerpo: deseado };
+      }),
+    ];
+    for (const el of elementos) {
+      const accion = accionElemento(el.actual, el.deseado);
+      if (accion === 'REUTILIZAR') continue;
+      let id = el.actual?.id; let estadoEl = el.actual?.review_status;
+      if (accion === 'CREAR') {
+        const r = exige(await pedir('POST', `/company/profile/${el.tipo}${q}`, { token: t, cuerpo: el.cuerpo }), 201, `crear ${el.que}`);
+        id = r.datos.id; estadoEl = r.datos.review_status;
+        creados.push([el.que, id, `/company/profile/${el.tipo}/${id}${q}`]);
+        log(`  + ${el.que} → id ${id}`);
+      } else if (accion === 'ACTUALIZAR') {
+        const r = exige(await pedir('PUT', `/company/profile/${el.tipo}/${id}${q}`, { token: t, cuerpo: el.cuerpo }), 200, `editar ${el.que}`);
+        estadoEl = r.datos.review_status; log(`  ~ ${el.que}: ${difiere(el.actual, el.deseado).join(', ')}`);
+      }
+      if (Number(el.actual?.is_active ?? 1) !== 1) exige(await pedir('PATCH', `/company/profile/${el.tipo}/${id}/active${q}`, { token: t, cuerpo: { is_active: true } }), 200, `activar ${el.que}`);
+      await publicar(`/company/profile/${el.tipo}/${id}/submit${q}`, el.entity, id, estadoEl, el.que);
     }
     return creados;
   } catch (error) {
@@ -459,15 +587,15 @@ async function verificar(ctx, e) {
   }
 
   const p = plan(e);
-  const crearN = p.filter((x) => x.accion === 'CREAR').length;
-  log(`\nPlan (${p.length} elementos: ${crearN} a crear, ${p.length - crearN} a reutilizar):`);
+  const crearN = p.filter((x) => x.accion !== 'REUTILIZAR').length;
+  log(`\nPlan (${p.length} elementos: ${crearN} a crear, actualizar o publicar; ${p.length - crearN} a reutilizar):`);
   for (const x of p) log(`  ${x.accion.padEnd(10)} ${x.que}${x.detalle ? ` [${x.detalle}]` : ''}`);
   if (MODO === '--dry-run') { log('\nDRY-RUN: no se ha modificado nada.'); await pedir('POST', '/auth/logout', { token: ctx.token }); return; }
 
   log('\nEjecutando…');
   const creados = await crearTodo(ctx, e);
   e = await estado(ctx);
-  const faltan = plan(e).filter((x) => x.accion === 'CREAR');
+  const faltan = plan(e).filter((x) => x.accion !== 'REUTILIZAR');
   if (faltan.length) alto(`tras ejecutar aún faltan: ${faltan.map((x) => x.que).join(' | ')}`);
   log(`\nEJECUTADO: ${creados.length} recurso(s) creado(s) (más asientos y elementos del layout); ${p.length - crearN} reutilizado(s). Estado final completo.`);
   log('Contraseñas DEMO: aleatorias y no mostradas. Entréguelas con --entregar-credenciales en su terminal.');

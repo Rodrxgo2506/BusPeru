@@ -81,7 +81,7 @@ export const publicService = {
   cities: () => apiData(api.get<Array<{ city: string; department: string | null; terminals: number }>>('/public/cities')),
   terminals: (city?: string) => apiData(api.get<Location[]>('/public/terminals', { city })),
   // F18-19: `slug` solo existe si la empresa tiene un perfil público aprobado (/empresas/<slug>).
-  companies: () => apiData(api.get<Array<Company & { rating: number | null; reviews_count: number; routes_count: number; slug: string | null; tagline: string | null }>>('/public/companies')),
+  companies: () => apiData(api.get<Array<Company & { rating: number | null; reviews_count: number; routes_count: number; slug: string | null; tagline: string | null; next_departure_date: string | null }>>('/public/companies')),
   searchTrips: (params: QueryParams) => api.get<PublicTrip[]>('/public/trips', params),
   /**
    * Búsqueda de itinerarios de varios tramos: ida y vuelta y multidestino.
