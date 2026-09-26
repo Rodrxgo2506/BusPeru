@@ -238,8 +238,6 @@ export function isBrandingAsset(value: unknown): value is BrandingAsset {
 export type PublicImageTarget =
   | { kind: 'destination'; destinationId: number }
   | { kind: 'company'; companyId: number }
-  /** F18-19 · perfil público y galería: misma carpeta que el logotipo, fotografías de hasta 5 MB. */
-  | { kind: 'company-media'; companyId: number }
   | { kind: 'branding'; asset: BrandingAsset };
 
 /**
@@ -263,11 +261,11 @@ export function storePublicImage(file: UploadedFile, target: PublicImageTarget):
       formatsLabel: 'una imagen JPG, PNG o WebP',
     });
   }
-  if (target.kind === 'company' || target.kind === 'company-media') {
+  if (target.kind === 'company') {
     if (!Number.isInteger(target.companyId) || target.companyId <= 0) throw ApiError.badRequest('Empresa inválida');
     return storeWithProfile(file, {
       types: IMAGE_TYPES,
-      maxBytes: target.kind === 'company' ? MAX_LOGO_BYTES : MAX_IMAGE_BYTES,
+      maxBytes: MAX_LOGO_BYTES,
       folder: path.posix.join('public', 'companies', String(target.companyId)),
       formatsLabel: 'una imagen JPG, PNG o WebP',
     });

@@ -372,7 +372,8 @@ infra/aws/scripts/qa-staging.sh purgar ./.qa-staging/qa-manifest-*-<sello>.json 
 **F18-19B · datos de F18-19.** La purga también cubre lo que cuelga de las empresas y usuarios del manifiesto:
 
 - **Perfil público:** perfil, servicios, agencias (con sus horarios y servicios por agencia) y galería, más sus
-  imágenes bajo `public/companies/<id>/`.
+  imágenes bajo `public/companies/<id>/`. La aplicación ya no crea estos datos (perfiles públicos retirados), pero la
+  purga sigue limpiando los que existan en las tablas de la `020`.
 - **Libro de Reclamaciones:** hojas ligadas a una empresa, un usuario o una reserva del conjunto, y sus eventos. Cada
   hoja debe ser de un consumidor `@busperu-staging.example`; una hoja real ligada a una empresa sintética **aborta** la
   purga, porque las hojas se conservan 2 años. El contador de un año solo se retira si todas sus hojas son del conjunto.

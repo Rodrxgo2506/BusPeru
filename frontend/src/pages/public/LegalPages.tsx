@@ -20,9 +20,9 @@ import { helpHeroImage } from '@/constants/images';
 import { useAsync } from '@/hooks/useAsync';
 import { usePageMeta } from '@/hooks/usePageMeta';
 import { ApiError } from '@/services/api';
-import { complaintService } from '@/services/company-profile';
+import { complaintService } from '@/services/complaint-book';
 import { publicService } from '@/services';
-import type { ComplaintForm, ComplaintLookup, ComplaintReceipt, LegalInfo } from '@/types/company-profile';
+import type { ComplaintForm, ComplaintLookup, ComplaintReceipt, LegalInfo } from '@/types/complaint-book';
 import { formatDate, formatDateTime } from '@/utils/format';
 
 /**

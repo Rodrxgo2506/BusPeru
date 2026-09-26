@@ -10,9 +10,8 @@ import { findPublicDestination, listPublicDestinations, readBranding } from '../
 import { readPublicFile } from '../services/file-storage.service';
 import { readPublicSettings } from '../services/settings.service';
 import { findPublicTrip, getTripLayout, searchTrips, seatMap } from '../services/trip.service';
-import { publicGallery, publicProfile, publicReviews, publicSlugs } from '../services/company-profile.service';
 import { createComplaint, legalInfo, lookupComplaint } from '../services/complaint-book.service';
-import { createComplaintSchema, lookupComplaintSchema } from '../validators/company-profile.validators';
+import { createComplaintSchema, lookupComplaintSchema } from '../validators/complaint-book.validators';
 import { ApiError } from '../utils/ApiError';
 import { asyncHandler, sendList, sendSuccess } from '../utils/http';
 import { buildPagination, parseListQuery, parseId } from '../utils/query';
@@ -48,7 +47,7 @@ router.get(
 router.get(
   '/companies',
   asyncHandler(async (_req, res) => {
-    const companies = await query<Record<string, unknown> & { id: number }>(
+    const companies = await query(
       `SELECT co.id, co.name, co.logo_url, co.description,
               (SELECT ROUND(AVG(rv.rating), 1) FROM reviews rv WHERE rv.company_id = co.id AND rv.status = 'PUBLISHED') AS rating,
               (SELECT COUNT(*) FROM reviews rv WHERE rv.company_id = co.id AND rv.status = 'PUBLISHED') AS reviews_count,
@@ -61,39 +60,7 @@ router.get(
                   AND t.status IN ('SCHEDULED', 'BOARDING', 'DELAYED') AND t.departure_datetime >= NOW()) AS next_departure_date
        FROM companies co WHERE co.status = 'ACTIVE' ORDER BY co.name ASC`,
     );
-    // F18-19 · solo las empresas con perfil publicado tienen URL propia (/empresas/<slug>).
-    const slugs = await publicSlugs();
-    sendSuccess(
-      res,
-      companies.map((company) => ({ ...company, slug: slugs.get(Number(company.id))?.slug ?? null, tagline: slugs.get(Number(company.id))?.tagline ?? null })),
-    );
-  }),
-);
-
-/** F18-19 · perfil público de una empresa: solo contenido APROBADO y visible. Sin perfil publicado → 404. */
-router.get(
-  '/companies/:slug',
-  asyncHandler(async (req, res) => {
-    sendSuccess(res, await publicProfile(String(req.params.slug)));
-  }),
-);
-
-router.get(
-  '/companies/:slug/gallery',
-  asyncHandler(async (req, res) => {
-    const page = Math.max(1, Number(req.query.page) || 1);
-    const { rows, total, limit } = await publicGallery(String(req.params.slug), page);
-    sendList(res, rows, buildPagination(total, page, limit));
-  }),
-);
-
-router.get(
-  '/companies/:slug/reviews',
-  asyncHandler(async (req, res) => {
-    const listQuery = parseListQuery(req.query as Record<string, unknown>);
-    const limit = Math.min(listQuery.limit, 20);
-    const { rows, total } = await publicReviews(String(req.params.slug), listQuery.page, limit);
-    sendList(res, rows, buildPagination(total, listQuery.page, limit));
+    sendSuccess(res, companies);
   }),
 );
 

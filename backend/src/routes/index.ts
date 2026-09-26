@@ -4,7 +4,7 @@ import { auditRouter } from './audit.routes';
 import bankAccountRoutes from './bank-account.routes';
 import companyDocumentRoutes from './company-document.routes';
 import companyLogoRoutes from './company-logo.routes';
-import { adminCompanyProfileRouter, adminComplaintRouter, companyComplaintRouter, companyProfileRouter } from './company-profile.routes';
+import { adminComplaintRouter, companyComplaintRouter } from './complaint-book.routes';
 import driverRoutes from './driver.routes';
 import authRoutes from './auth.routes';
 import oauthRoutes from './oauth.routes';
@@ -49,10 +49,8 @@ router.use('/auth', authRoutes);
 router.use('/company/bank-accounts', bankAccountRoutes);
 router.use('/company/documents', companyDocumentRoutes);
 router.use('/company/logo', companyLogoRoutes);
-// F18-19 · perfil público de la empresa (panel) y Libro de Reclamaciones.
-router.use('/company/profile', companyProfileRouter);
+// F18-19 · Libro de Reclamaciones (gestión).
 router.use('/company/complaints', companyComplaintRouter);
-router.use('/admin/company-profiles', adminCompanyProfileRouter);
 router.use('/admin/complaints', adminComplaintRouter);
 router.use('/company/drivers', driverRoutes);
 router.use('/company/integrations', companyIntegrationRouter);

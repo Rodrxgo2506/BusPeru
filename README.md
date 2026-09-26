@@ -97,8 +97,10 @@ La aplicación guarda el número de cuenta y el CCI cifrados (AES-256-GCM con `I
 últimos en claro para el enmascarado. No borra nada: en una base con cuentas ya guardadas hay que cifrarlas después con
 `npm run bank:encrypt` (ver `PRODUCCION.md`). Con ella el esquema queda en **49 tablas y 496 columnas**
 (referencia de F18-07).
-`020` (F18-19) crea `company_profiles`, `company_services`, `company_agencies` y `company_gallery_images`: el perfil
-público de cada empresa (`/empresas/:slug`), editable por la empresa y publicado solo tras la moderación de ADMIN.
+`020` (F18-19) crea `company_profiles`, `company_services`, `company_agencies` y `company_gallery_images`: eran el
+perfil público de cada empresa (`/empresas/:slug`). **El perfil público se retiró** (ver
+`docs/production/COMPANY-PROFILE-ROLLBACK-REPORT.md`): la aplicación ya no usa estas tablas, que se conservan con sus
+datos (sin `DROP`) como parte del esquema de referencia.
 `021` (F18-19) crea `complaint_book_counters`, `complaint_book_entries` y `complaint_book_events` (Libro de
 Reclamaciones virtual) y las claves `legal.*` de `system_settings` **en `NULL`** (datos del proveedor pendientes). Con
 ellas el esquema queda en **56 tablas y 645 columnas** (`infra/aws/scripts/schema-reference.json`).
@@ -125,7 +127,8 @@ ellas el esquema queda en **56 tablas y 645 columnas** (`infra/aws/scripts/schem
 
 > **Estado de `020` y `021`:** creadas en F18-19 y aplicadas solo en `busperu_test` y en la validación sobre MariaDB
 > 10.11 (la suite las aplica). **No se han aplicado a `busperu`, `busperu_staging` ni producción.** Son obligatorias antes
-> de desplegar el código de F18-19: el perfil público, `/api/public/companies` y el Libro de Reclamaciones las consultan.
+> de desplegar el código de F18-19: el Libro de Reclamaciones y los datos legales las consultan, y la verificación del
+> esquema de referencia las espera (las de la `020` ya no las usa la aplicación).
 
 `010` a `021` son reejecutables (`017` y `018` consultan `information_schema`; `019` usa `ADD COLUMN IF NOT EXISTS`; `020` y `021` usan `CREATE TABLE IF NOT EXISTS` e `INSERT IGNORE`; ninguna hace nada si ya está aplicada).
 F18-18 lo comprobó reaplicando las 19 sobre una base 10.11 ya migrada: 19/19 sin error y la misma huella de esquema.

@@ -1,37 +1,14 @@
 /**
- * F18-19D · acciones de la tarjeta de empresa del listado público (/empresas).
+ * Enlace «Ver viajes» de la tarjeta de empresa en /empresas: el buscador existente filtrado por la empresa.
  *
- * - «Ver perfil» SOLO si el backend entrega el slug de un perfil público aprobado (`slug` ≠ null). El slug nunca
- *   se construye en el frontend a partir del nombre: una URL inventada llevaría a «Empresa no encontrada».
- * - «Ver viajes» siempre, con el mismo destino que antes de F18-19 (el buscador filtrado por la empresa), en la fecha de
- *   su PRÓXIMA salida visible si el backend la conoce (`next_departure_date`); si no, en la fecha indicada (hoy).
+ * F18-19D · la fecha es la de la próxima salida visible si el backend la conoce (`next_departure_date`); si no, la
+ * indicada (hoy). Así «Ver viajes» no abre un día sin salidas. Se conserva aunque se retiraron los perfiles públicos:
+ * no depende de ellos.
  */
-export interface CompanyCardAction {
-  href: string;
-  label: string;
-  /** Nombre accesible completo: dice a qué empresa lleva el enlace (varias tarjetas repiten el mismo texto). */
-  ariaLabel: string;
-}
+const ISO_DATE = /^\d{4}-\d{2}-\d{2}$/;
 
-export interface CompanyCardActions {
-  profile: CompanyCardAction | null;
-  trips: CompanyCardAction;
-}
-
-export function companyCardActions(
-  company: { id: number; name: string; slug?: string | null; next_departure_date?: string | null },
-  fallbackDate: string,
-): CompanyCardActions {
-  const slug = typeof company.slug === 'string' && company.slug.trim() !== '' ? company.slug.trim() : null;
-  const date = typeof company.next_departure_date === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(company.next_departure_date) ? company.next_departure_date : fallbackDate;
-  return {
-    profile: slug
-      ? { href: `/empresas/${encodeURIComponent(slug)}`, label: 'Ver perfil', ariaLabel: `Ver el perfil de ${company.name}` }
-      : null,
-    trips: {
-      href: `/buscar?company_id=${encodeURIComponent(String(company.id))}&date=${encodeURIComponent(date)}`,
-      label: 'Ver viajes',
-      ariaLabel: `Ver los viajes de ${company.name}`,
-    },
-  };
+export function companyTripsHref(company: { id: number; next_departure_date?: string | null }, fallbackDate: string): string {
+  const next = company.next_departure_date;
+  const date = next && ISO_DATE.test(next) ? next : fallbackDate;
+  return `/buscar?company_id=${company.id}&date=${date}`;
 }

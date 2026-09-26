@@ -4,7 +4,7 @@ import { RouteSuspense } from '@/components/common/RouteSuspense';
 import { AdminLayout, CompanyLayout, CustomerLayout, PublicLayout } from '@/layouts';
 import { GuestRoute, PermissionRoute, ProtectedRoute, RoleRoute } from '@/guards';
 import { CheckoutProvider } from '@/pages/public/checkout/CheckoutContext';
-import { loadAdminManagementPages, loadDestinationsAdminPage, loadPublicContentAdminPages, loadSalesPages, loadSystemPages, loadTripPages } from './admin-chunks';
+import { loadAdminManagementPages, loadComplaintsAdminPage, loadDestinationsAdminPage, loadSalesPages, loadSystemPages, loadTripPages } from './admin-chunks';
 
 const HomePage = lazy(() => import('@/pages/public/HomePage').then((module) => ({ default: module.HomePage })));
 const SearchResultsPage = lazy(() => import('@/pages/public/SearchResultsPage').then((module) => ({ default: module.SearchResultsPage })));
@@ -14,8 +14,7 @@ const CompaniesPublicPage = lazy(() => import('@/pages/public/InfoPages').then((
 const OffersPage = lazy(() => import('@/pages/public/InfoPages').then((module) => ({ default: module.OffersPage })));
 const HelpPage = lazy(() => import('@/pages/public/InfoPages').then((module) => ({ default: module.HelpPage })));
 const NotFoundPage = lazy(() => import('@/pages/public/InfoPages').then((module) => ({ default: module.NotFoundPage })));
-// F18-19 · perfil público de empresas e «Información útil».
-const CompanyPublicPage = lazy(() => import('@/pages/public/CompanyProfilePage').then((module) => ({ default: module.CompanyProfilePage })));
+// F18-19 · «Información útil» y Libro de Reclamaciones.
 const InfoHubPage = lazy(() => import('@/pages/public/LegalPages').then((module) => ({ default: module.InfoHubPage })));
 const TermsPage = lazy(() => import('@/pages/public/LegalPages').then((module) => ({ default: module.TermsPage })));
 const PrivacyPage = lazy(() => import('@/pages/public/LegalPages').then((module) => ({ default: module.PrivacyPage })));
@@ -23,10 +22,8 @@ const CookiesPage = lazy(() => import('@/pages/public/LegalPages').then((module)
 const BookingPolicyPage = lazy(() => import('@/pages/public/LegalPages').then((module) => ({ default: module.BookingPolicyPage })));
 const PaymentsInfoPage = lazy(() => import('@/pages/public/LegalPages').then((module) => ({ default: module.PaymentsInfoPage })));
 const ComplaintBookPage = lazy(() => import('@/pages/public/LegalPages').then((module) => ({ default: module.ComplaintBookPage })));
-const CompanyPublicProfileEditor = lazy(() => import('@/pages/company/CompanyPublicProfilePage').then((module) => ({ default: module.CompanyPublicProfilePage })));
 const CompanyComplaintsPage = lazy(() => import('@/pages/company/CompanyComplaintsPage').then((module) => ({ default: module.CompanyComplaintsPage })));
-const CompanyProfilesAdminPage = lazy(() => loadPublicContentAdminPages().then((module) => ({ default: module.CompanyProfilesAdminPage })));
-const ComplaintsAdminPage = lazy(() => loadPublicContentAdminPages().then((module) => ({ default: module.ComplaintsAdminPage })));
+const ComplaintsAdminPage = lazy(() => loadComplaintsAdminPage().then((module) => ({ default: module.ComplaintsAdminPage })));
 
 const SeatSelectionPage = lazy(() => import('@/pages/public/checkout/SeatSelectionPage').then((module) => ({ default: module.SeatSelectionPage })));
 const PassengerPage = lazy(() => import('@/pages/public/checkout/PassengerPage').then((module) => ({ default: module.PassengerPage })));
@@ -177,7 +174,6 @@ export function AppRoutes() {
           <Route path="destinos" element={<DestinationsPage />} />
           <Route path="destinos/:slug" element={<DestinationDetailPage />} />
           <Route path="empresas" element={<CompaniesPublicPage />} />
-          <Route path="empresas/:slug" element={<CompanyPublicPage />} />
           <Route path="ofertas" element={<OffersPage />} />
           <Route path="ayuda" element={<HelpPage />} />
           <Route path="informacion" element={<InfoHubPage />} />
@@ -391,14 +387,6 @@ export function AppRoutes() {
             element={
               <PermissionRoute permission="companies.view">
                 <CompanyProfilePage />
-              </PermissionRoute>
-            }
-          />
-          <Route
-            path="profile"
-            element={
-              <PermissionRoute permission="companies.view">
-                <CompanyPublicProfileEditor />
               </PermissionRoute>
             }
           />
@@ -625,15 +613,7 @@ export function AppRoutes() {
               </PermissionRoute>
             }
           />
-          {/* F18-19 · supervisión del perfil público de las empresas y Libro de Reclamaciones (la API exige rol ADMIN). */}
-          <Route
-            path="company-profiles"
-            element={
-              <PermissionRoute permission="companies.update">
-                <CompanyProfilesAdminPage />
-              </PermissionRoute>
-            }
-          />
+          {/* F18-19 · Libro de Reclamaciones (la API exige rol ADMIN). */}
           <Route
             path="complaints"
             element={

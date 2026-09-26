@@ -202,7 +202,7 @@ Obligatorias para el código actual, porque se consultan en cada petición o en 
 | `015-destinations-content-branding.sql` y `016-destination-enhancements.sql` | Tablas y columnas de destinos | La portada y `/destinos/:slug` |
 | **`017-users-sessions-valid-from.sql`** | Columna **`users.sessions_valid_from`** (`DATETIME NULL`): terminar las sesiones de una cuenta al suspenderla (F17C-SEC-10) | El middleware de autenticación la lee en **cada** petición autenticada: sin ella, **todas** fallan. **No se puede saltar** |
 | **`019-bank-accounts-encryption.sql`** | Columnas `*_encrypted` y `*_last4` en `company_bank_accounts`; `account_number` admite `NULL` (F18-07) | El código escribe los datos bancarios cifrados: sin las columnas, crear o editar una cuenta bancaria falla |
-| **`020-company-public-profiles.sql`** y **`021-complaint-book.sql`** | Perfil público de empresas (4 tablas) y Libro de Reclamaciones (3 tablas + claves `legal.*` en `NULL`) (F18-19) | `/api/public/companies`, `/empresas/:slug`, el portal de empresa y el Libro de Reclamaciones responden 500 |
+| **`020-company-public-profiles.sql`** y **`021-complaint-book.sql`** | Perfil público de empresas (4 tablas) y Libro de Reclamaciones (3 tablas + claves `legal.*` en `NULL`) (F18-19) | El Libro de Reclamaciones (público y bandejas) y `/api/public/legal` responden 500 y la verificación del esquema falla. Las tablas de la `020` ya no las usa la aplicación (perfiles públicos retirados) pero forman parte del esquema de referencia |
 
 `001` no toca el esquema: concede `reviews.update` al rol `COMPANY_ADMIN`, sin el cual las empresas no pueden moderar
 reseñas. Las migraciones `001` y de la `010` a la `021` son **reejecutables** (comprueban antes de actuar: `017`

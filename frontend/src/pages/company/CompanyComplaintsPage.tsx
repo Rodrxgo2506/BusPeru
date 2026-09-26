@@ -5,9 +5,9 @@ import { useToast } from '@/context/ToastContext';
 import { useAsync } from '@/hooks/useAsync';
 import { useList } from '@/hooks/useList';
 import { ApiError } from '@/services/api';
-import { complaintService } from '@/services/company-profile';
-import type { ComplaintDetail, ComplaintRow } from '@/types/company-profile';
-import { complaintEventLabel } from '@/utils/company-profile';
+import { complaintService } from '@/services/complaint-book';
+import type { ComplaintDetail, ComplaintRow } from '@/types/complaint-book';
+import { complaintEventLabel } from '@/utils/complaint-book';
 import { formatDate, formatDateTime } from '@/utils/format';
 
 /**
