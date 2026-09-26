@@ -5,7 +5,7 @@ import path from 'node:path';
 import { after, before, describe, it } from 'node:test';
 import { del, get, patch, post, put, testBaseUrl } from './helpers/api';
 import { at, freeSeats } from './helpers/fixtures';
-import { execute, queryOne } from '../config/database';
+import { execute, query, queryOne } from '../config/database';
 import { env } from '../config/env';
 import { prepareSuite, teardownSuite, type SuiteContext } from './helpers/suite';
 
@@ -504,6 +504,40 @@ describe('F18-19 · perfil público de empresas', () => {
         assert.equal((await empresaB())?.next_departure_date, null);
       } finally {
         await execute("UPDATE trips SET status = 'SCHEDULED' WHERE id = ?", [ctx.fixtures.tripB]);
+      }
+    });
+
+    it('F18-20 · el perfil público trae la próxima salida de la empresa y de cada destino; el buscador la encuentra', async () => {
+      const pub = (await get('/public/companies/empresa-a')).body.data;
+      const listado = ((await get('/public/companies')).body.data as Array<{ id: number; next_departure_date: string | null }>).find((c) => c.id === ctx.fixtures.companyA);
+      assert.match(String(pub.next_departure_date), /^\d{4}-\d{2}-\d{2}$/);
+      assert.equal(pub.next_departure_date, listado?.next_departure_date, 'misma regla que la tarjeta del listado (F18-19D)');
+
+      const huanuco = pub.destinations.find((d: { city: string }) => d.city === 'Huánuco');
+      const esperado = await queryOne<{ salida: string }>(
+        `SELECT DATE_FORMAT(MIN(t.departure_datetime), '%Y-%m-%d') AS salida FROM trips t JOIN routes r ON r.id = t.route_id
+         JOIN locations d ON d.id = r.destination_location_id
+         WHERE r.company_id = ? AND r.status = 'ACTIVE' AND d.city = 'Huánuco' AND t.status IN ('SCHEDULED', 'BOARDING', 'DELAYED') AND t.departure_datetime >= NOW()`,
+        [ctx.fixtures.companyA],
+      );
+      assert.equal(huanuco.next_departure_date, esperado?.salida);
+      assert.equal(huanuco.origins[0].next_departure_date, esperado?.salida, 'cada origen trae su propia próxima salida');
+      const busqueda = await get(`/public/trips?origin=${encodeURIComponent(huanuco.origins[0].city)}&destination=Hu%C3%A1nuco&company_id=${ctx.fixtures.companyA}&date=${huanuco.next_departure_date}`);
+      assert.ok((busqueda.body.data as unknown[]).length >= 1, '«Ver viajes» del destino abre un día con salidas');
+
+      // Sin salidas visibles no hay fecha (el sitio usa hoy, como antes): se cancelan un momento y se restauran.
+      const visibles = await query<{ id: number; status: string }>(
+        `SELECT t.id, t.status FROM trips t JOIN routes r ON r.id = t.route_id
+         WHERE r.company_id = ? AND t.status IN ('SCHEDULED', 'BOARDING', 'DELAYED') AND t.departure_datetime >= NOW()`,
+        [ctx.fixtures.companyA],
+      );
+      await execute(`UPDATE trips SET status = 'CANCELLED' WHERE id IN (${visibles.map(() => '?').join(',')})`, visibles.map((t) => t.id));
+      try {
+        const sinSalidas = (await get('/public/companies/empresa-a')).body.data;
+        assert.equal(sinSalidas.next_departure_date, null);
+        assert.ok(sinSalidas.destinations.every((d: { next_departure_date: string | null }) => d.next_departure_date === null));
+      } finally {
+        for (const t of visibles) await execute('UPDATE trips SET status = ? WHERE id = ?', [t.status, t.id]);
       }
     });
   });

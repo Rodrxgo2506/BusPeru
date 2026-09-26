@@ -111,7 +111,9 @@ export interface CompanyDestinationCard {
   destination: { slug: string; name: string; subtitle: string | null; image: string | null } | null;
   upcoming_trips: number;
   min_price: number | null;
-  origins: Array<{ city: string; upcoming_trips: number }>;
+  /** F18-20 · AAAA-MM-DD de la próxima salida visible en el buscador (null si no hay). */
+  next_departure_date?: string | null;
+  origins: Array<{ city: string; upcoming_trips: number; next_departure_date?: string | null }>;
 }
 
 export interface FleetGroup {
@@ -141,6 +143,8 @@ export interface PublicCompanyProfile {
   gallery: { items: Array<GalleryContent & { id?: number; review_status?: ReviewStatus }>; total: number; page_size: number };
   destinations: CompanyDestinationCard[];
   fleet: FleetGroup[];
+  /** F18-20 · próxima salida de la empresa (misma regla que el listado); solo en la vista pública. */
+  next_departure_date?: string | null;
   preview?: boolean;
   profile_status?: ReviewStatus;
   is_published?: boolean;

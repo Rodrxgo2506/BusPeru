@@ -593,12 +593,30 @@ export async function profileAudit(companyId: number, page: number, limit: numbe
 }
 
 // =============================================================================== datos derivados (reutilizados)
+/** Estados de viaje que ofrece la búsqueda pública (`/public/trips`): la «próxima salida» usa la misma regla. */
+const SEARCHABLE_TRIP_STATUSES = "'SCHEDULED', 'BOARDING', 'DELAYED'";
+
+/**
+ * F18-20 · fecha (AAAA-MM-DD) de la próxima salida de la empresa, con la misma regla que el listado `/public/companies`
+ * (F18-19D): así «Buscar viajes» del sitio de la empresa abre un día con salidas. `null` si no hay ninguna.
+ */
+export async function nextDepartureDate(companyId: number): Promise<string | null> {
+  const row = await queryOne<{ next_departure_date: string | null }>(
+    `SELECT DATE_FORMAT(MIN(t.departure_datetime), '%Y-%m-%d') AS next_departure_date
+     FROM trips t JOIN routes r ON r.id = t.route_id JOIN buses b ON b.id = t.bus_id
+     WHERE r.company_id = ? AND r.status = 'ACTIVE' AND t.status IN (${SEARCHABLE_TRIP_STATUSES}) AND t.departure_datetime >= NOW()`,
+    [companyId],
+  );
+  return row?.next_departure_date ? String(row.next_departure_date) : null;
+}
+
 /** Destinos de la empresa a partir de sus rutas ACTIVAS; imagen y ficha si existe un destino editorial. */
 export async function companyDestinations(companyId: number): Promise<Row[]> {
   const rows = await query<Row>(
     `SELECT dl.city AS city, dl.department AS department, ol.city AS origin_city,
             COUNT(DISTINCT CASE WHEN t.status = 'SCHEDULED' AND t.departure_datetime >= NOW() THEN t.id END) AS upcoming_trips,
-            MIN(CASE WHEN t.status = 'SCHEDULED' AND t.departure_datetime >= NOW() THEN t.base_price END) AS min_price
+            MIN(CASE WHEN t.status = 'SCHEDULED' AND t.departure_datetime >= NOW() THEN t.base_price END) AS min_price,
+            DATE_FORMAT(MIN(CASE WHEN t.status IN (${SEARCHABLE_TRIP_STATUSES}) AND t.departure_datetime >= NOW() THEN t.departure_datetime END), '%Y-%m-%d') AS next_departure_date
      FROM routes r
      JOIN locations ol ON ol.id = r.origin_location_id
      JOIN locations dl ON dl.id = r.destination_location_id
@@ -627,12 +645,15 @@ export async function companyDestinations(companyId: number): Promise<Row[]> {
         : null,
       upcoming_trips: 0,
       min_price: null as number | null,
+      next_departure_date: null as string | null,
       origins: [] as Row[],
     };
     card.upcoming_trips = Number(card.upcoming_trips) + Number(row.upcoming_trips ?? 0);
     const price = row.min_price === null || row.min_price === undefined ? null : Number(row.min_price);
     if (price !== null && (card.min_price === null || price < Number(card.min_price))) card.min_price = price;
-    card.origins.push({ city: row.origin_city, upcoming_trips: Number(row.upcoming_trips ?? 0) });
+    const next = row.next_departure_date ? String(row.next_departure_date) : null;
+    if (next && (!card.next_departure_date || next < String(card.next_departure_date))) card.next_departure_date = next;
+    card.origins.push({ city: row.origin_city, upcoming_trips: Number(row.upcoming_trips ?? 0), next_departure_date: next });
     grouped.set(key, card);
   }
   return [...grouped.values()].sort((a, b) => Number(b.upcoming_trips) - Number(a.upcoming_trips) || String(a.city).localeCompare(String(b.city), 'es'));
@@ -743,6 +764,7 @@ async function assemble(company: CompanyRow, profileContent: Row, slug: string, 
     gallery: { items: gallery.rows, total: gallery.total, page_size: PUBLIC_GALLERY_PAGE },
     destinations: await companyDestinations(company.id),
     fleet: await companyFleet(company.id),
+    next_departure_date: await nextDepartureDate(company.id),
   };
 }
 

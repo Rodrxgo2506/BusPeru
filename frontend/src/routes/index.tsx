@@ -14,8 +14,19 @@ const CompaniesPublicPage = lazy(() => import('@/pages/public/InfoPages').then((
 const OffersPage = lazy(() => import('@/pages/public/InfoPages').then((module) => ({ default: module.OffersPage })));
 const HelpPage = lazy(() => import('@/pages/public/InfoPages').then((module) => ({ default: module.HelpPage })));
 const NotFoundPage = lazy(() => import('@/pages/public/InfoPages').then((module) => ({ default: module.NotFoundPage })));
-// F18-19 · perfil público de empresas e «Información útil».
-const CompanyPublicPage = lazy(() => import('@/pages/public/CompanyProfilePage').then((module) => ({ default: module.CompanyProfilePage })));
+// F18-20 · sitio público de cada empresa: un armazón y una ruta por sección, todo en un único fragmento.
+const loadCompanySite = () => import('@/pages/public/company-site');
+const CompanySiteLayout = lazy(() => loadCompanySite().then((module) => ({ default: module.CompanySiteLayout })));
+const CompanyHomePage = lazy(() => loadCompanySite().then((module) => ({ default: module.CompanyHomePage })));
+const CompanyAboutPage = lazy(() => loadCompanySite().then((module) => ({ default: module.CompanyAboutPage })));
+const CompanyServicesPage = lazy(() => loadCompanySite().then((module) => ({ default: module.CompanyServicesPage })));
+const CompanyAgenciesPage = lazy(() => loadCompanySite().then((module) => ({ default: module.CompanyAgenciesPage })));
+const CompanyDestinationsPage = lazy(() => loadCompanySite().then((module) => ({ default: module.CompanyDestinationsPage })));
+const CompanyFleetPage = lazy(() => loadCompanySite().then((module) => ({ default: module.CompanyFleetPage })));
+const CompanyReviewsPage = lazy(() => loadCompanySite().then((module) => ({ default: module.CompanyReviewsPage })));
+const CompanyContactPage = lazy(() => loadCompanySite().then((module) => ({ default: module.CompanyContactPage })));
+const CompanySiteNotFoundPage = lazy(() => loadCompanySite().then((module) => ({ default: module.CompanySiteNotFoundPage })));
+// F18-19 · «Información útil».
 const InfoHubPage = lazy(() => import('@/pages/public/LegalPages').then((module) => ({ default: module.InfoHubPage })));
 const TermsPage = lazy(() => import('@/pages/public/LegalPages').then((module) => ({ default: module.TermsPage })));
 const PrivacyPage = lazy(() => import('@/pages/public/LegalPages').then((module) => ({ default: module.PrivacyPage })));
@@ -177,7 +188,18 @@ export function AppRoutes() {
           <Route path="destinos" element={<DestinationsPage />} />
           <Route path="destinos/:slug" element={<DestinationDetailPage />} />
           <Route path="empresas" element={<CompaniesPublicPage />} />
-          <Route path="empresas/:slug" element={<CompanyPublicPage />} />
+          {/* F18-20 · cada sección es una ruta propia; la galería vive en Nosotros (no tiene ruta). */}
+          <Route path="empresas/:slug" element={<CompanySiteLayout />}>
+            <Route index element={<CompanyHomePage />} />
+            <Route path="nosotros" element={<CompanyAboutPage />} />
+            <Route path="servicios" element={<CompanyServicesPage />} />
+            <Route path="agencias" element={<CompanyAgenciesPage />} />
+            <Route path="destinos" element={<CompanyDestinationsPage />} />
+            <Route path="flota" element={<CompanyFleetPage />} />
+            <Route path="opiniones" element={<CompanyReviewsPage />} />
+            <Route path="contacto" element={<CompanyContactPage />} />
+            <Route path="*" element={<CompanySiteNotFoundPage />} />
+          </Route>
           <Route path="ofertas" element={<OffersPage />} />
           <Route path="ayuda" element={<HelpPage />} />
           <Route path="informacion" element={<InfoHubPage />} />
