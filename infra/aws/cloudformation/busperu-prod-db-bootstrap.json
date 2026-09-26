@@ -1,0 +1,199 @@
+{
+  "AWSTemplateFormatVersion": "2010-09-09",
+  "Description": "BusPeru PRODUCCION (F18-18, B-10): rol TEMPORAL y minimo para crear los usuarios de la base. Se borra al terminar.",
+  "Parameters": {
+    "MasterSecretArn": {
+      "Type": "String",
+      "AllowedPattern": "^arn:aws:secretsmanager:sa-east-1:[0-9]{12}:secret:rds![a-z0-9-]+$",
+      "Description": "Salida DatabaseMasterSecretArn de busperu-prod (secreto maestro gestionado por RDS)"
+    },
+    "AppInstanceId": {
+      "Type": "String",
+      "AllowedPattern": "^i-[0-9a-f]{8,17}$",
+      "Description": "Salida AppInstanceId de busperu-prod"
+    }
+  },
+  "Resources": {
+    "DbBootstrapRole": {
+      "Type": "AWS::IAM::Role",
+      "Properties": {
+        "RoleName": "busperu-prod-db-bootstrap",
+        "Description": "TEMPORAL (B-10): leer el maestro de busperu-prod-db y abrir un tunel a RDS. Borrar la pila al terminar.",
+        "MaxSessionDuration": 3600,
+        "AssumeRolePolicyDocument": {
+          "Version": "2012-10-17",
+          "Statement": [
+            {
+              "Sid": "SoloElAdministradorConMfaYSesionFija",
+              "Effect": "Allow",
+              "Principal": {
+                "AWS": {
+                  "Fn::Sub": "arn:aws:iam::${AWS::AccountId}:user/Rodrigo"
+                }
+              },
+              "Action": "sts:AssumeRole",
+              "Condition": {
+                "Bool": {
+                  "aws:MultiFactorAuthPresent": "true"
+                },
+                "NumericLessThan": {
+                  "aws:MultiFactorAuthAge": "3600"
+                },
+                "StringEquals": {
+                  "sts:RoleSessionName": "busperu-db-bootstrap"
+                }
+              }
+            }
+          ]
+        },
+        "Policies": [
+          {
+            "PolicyName": "busperu-prod-db-bootstrap-minimo",
+            "PolicyDocument": {
+              "Version": "2012-10-17",
+              "Statement": [
+                {
+                  "Sid": "SoloElSecretoMaestro",
+                  "Effect": "Allow",
+                  "Action": [
+                    "secretsmanager:GetSecretValue",
+                    "secretsmanager:DescribeSecret",
+                    "secretsmanager:RotateSecret"
+                  ],
+                  "Resource": {
+                    "Ref": "MasterSecretArn"
+                  }
+                },
+                {
+                  "Sid": "DescifrarSoloViaSecretsManager",
+                  "Effect": "Allow",
+                  "Action": [
+                    "kms:Decrypt"
+                  ],
+                  "Resource": {
+                    "Fn::Sub": "arn:aws:kms:${AWS::Region}:${AWS::AccountId}:key/*"
+                  },
+                  "Condition": {
+                    "StringEquals": {
+                      "kms:ViaService": {
+                        "Fn::Sub": "secretsmanager.${AWS::Region}.amazonaws.com"
+                      }
+                    }
+                  }
+                },
+                {
+                  "Sid": "TunelSoloPorLaInstanciaDeProduccion",
+                  "Effect": "Allow",
+                  "Action": [
+                    "ssm:StartSession"
+                  ],
+                  "Resource": [
+                    {
+                      "Fn::Sub": "arn:aws:ec2:${AWS::Region}:${AWS::AccountId}:instance/${AppInstanceId}"
+                    },
+                    {
+                      "Fn::Sub": "arn:aws:ssm:${AWS::Region}::document/AWS-StartPortForwardingSessionToRemoteHost"
+                    }
+                  ],
+                  "Condition": {
+                    "BoolIfExists": {
+                      "ssm:SessionDocumentAccessCheck": "true"
+                    }
+                  }
+                },
+                {
+                  "Sid": "SusPropiasSesiones",
+                  "Effect": "Allow",
+                  "Action": [
+                    "ssm:TerminateSession",
+                    "ssm:ResumeSession"
+                  ],
+                  "Resource": {
+                    "Fn::Sub": "arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:session/busperu-db-bootstrap-*"
+                  }
+                },
+                {
+                  "Sid": "LecturasMinimas",
+                  "Effect": "Allow",
+                  "Action": [
+                    "ssm:DescribeSessions",
+                    "ssm:GetConnectionStatus",
+                    "ec2:DescribeInstances",
+                    "rds:DescribeDBInstances",
+                    "sts:GetCallerIdentity"
+                  ],
+                  "Resource": "*",
+                  "Condition": {
+                    "StringEquals": {
+                      "aws:RequestedRegion": "sa-east-1"
+                    }
+                  }
+                },
+                {
+                  "Sid": "NadaMas",
+                  "Effect": "Deny",
+                  "Resource": "*",
+                  "NotAction": [
+                    "secretsmanager:GetSecretValue",
+                    "secretsmanager:DescribeSecret",
+                    "secretsmanager:RotateSecret",
+                    "kms:Decrypt",
+                    "ssm:StartSession",
+                    "ssm:TerminateSession",
+                    "ssm:ResumeSession",
+                    "ssm:DescribeSessions",
+                    "ssm:GetConnectionStatus",
+                    "ec2:DescribeInstances",
+                    "rds:DescribeDBInstances",
+                    "sts:GetCallerIdentity"
+                  ]
+                },
+                {
+                  "Sid": "NiEscribirNiBorrarSecretos",
+                  "Effect": "Deny",
+                  "Resource": "*",
+                  "Action": [
+                    "secretsmanager:PutSecretValue",
+                    "secretsmanager:UpdateSecret",
+                    "secretsmanager:DeleteSecret",
+                    "secretsmanager:RestoreSecret",
+                    "secretsmanager:PutResourcePolicy"
+                  ]
+                }
+              ]
+            }
+          }
+        ],
+        "Tags": [
+          {
+            "Key": "Name",
+            "Value": "busperu-prod-db-bootstrap"
+          },
+          {
+            "Key": "Project",
+            "Value": "busperu"
+          },
+          {
+            "Key": "Environment",
+            "Value": "prod"
+          },
+          {
+            "Key": "Temporal",
+            "Value": "borrar-tras-el-bootstrap"
+          }
+        ]
+      }
+    }
+  },
+  "Outputs": {
+    "DbBootstrapRoleArn": {
+      "Value": {
+        "Fn::GetAtt": [
+          "DbBootstrapRole",
+          "Arn"
+        ]
+      },
+      "Description": "Asumir con --role-session-name busperu-db-bootstrap y MFA"
+    }
+  }
+}

@@ -1,0 +1,21 @@
+# F18-18 · finales de línea del repositorio.
+#
+# Todo el texto se guarda en LF en el índice (ya lo estaba) y se extrae en LF en cualquier sistema, aunque la
+# instalación tenga `core.autocrlf=true`, como la de Git para Windows. Así los scripts que viajan a la EC2
+# Linux (`*.sh`, `*.mjs`, `*.cjs`, la unidad systemd) y los JSON de CloudFormation que comparan los checkers son
+# idénticos en Windows y en Linux. Un CRLF en un `.sh` rompe bash (`$'\r': command not found`).
+* text=auto eol=lf
+
+# Binarios: nunca se convierten.
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.ico binary
+*.webp binary
+*.pdf binary
+*.zip binary
+*.gz binary
+*.tgz binary
+*.woff binary
+*.woff2 binary

@@ -4,7 +4,7 @@
 #   bash infra/aws/scripts/make-release.sh <version> [directorio de salida]
 #
 # Compila el backend y crea busperu-<version>.tar.gz (+ .sha256) con: backend/dist, package.json,
-# package-lock.json, database/ (dump y migraciones), infra/aws y el runbook. Nunca incluye .env,
+# package-lock.json, database/ (dump y migraciones), infra/aws y los runbooks. Nunca incluye .env,
 # node_modules, storage ni tests: el paquete se revisa antes de escribirlo.
 set -euo pipefail
 VERSION="${1:?uso: make-release.sh <version> [salida]}"
@@ -19,7 +19,7 @@ LISTA=(
   backend/dist backend/package.json backend/package-lock.json
   database/schema database/migrations
   infra/aws/scripts infra/aws/systemd infra/aws/cloudwatch
-  docs/production/STAGING-RUNBOOK.md
+  docs/production/STAGING-RUNBOOK.md docs/production/PRODUCTION-RUNBOOK.md docs/production/MIGRATIONS.md
 )
 ARCHIVO="${SALIDA}/busperu-${VERSION}.tar.gz"
 tar -czf "${ARCHIVO}" -C "${RAIZ}" --exclude='*.map' --exclude='backend/dist/test' "${LISTA[@]}"

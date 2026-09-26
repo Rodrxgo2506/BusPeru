@@ -68,10 +68,11 @@ mysql -u root -p busperu < database/migrations/015-destinations-content-branding
 mysql -u root -p busperu < database/migrations/016-destination-enhancements.sql
 mysql -u root -p busperu < database/migrations/017-users-sessions-valid-from.sql
 mysql -u root -p busperu < database/migrations/018-fk-on-update-restrict-mariadb-1011.sql
+mysql -u root -p busperu < database/migrations/019-bank-accounts-encryption.sql
 ```
 
-**La cadena actual va de la `001` a la `018`** y se aplica completa, en orden y sin saltarse ninguna. La suite de
-tests aplica de la `002` a la `018` sobre `busperu_test` y reproduce en su preparación el cambio de datos de `001`.
+**La cadena actual va de la `001` a la `019`** y se aplica completa, en orden y sin saltarse ninguna. La suite de
+tests aplica de la `002` a la `019` sobre `busperu_test` y reproduce en su preparación el cambio de datos de `001`.
 Hasta la `014`, la base tiene **46 tablas**:
 `012` elimina los índices `idx_bookings_code` e `idx_coupons_code`, duplicados de sus índices únicos (auditoría H-19);
 `013` pone UNIQUE sobre `settlement_items.financial_transaction_id` —un movimiento no puede estar en dos
@@ -88,6 +89,12 @@ antes de la suspensión no vuelve a servir. `NULL` significa «nunca suspendida�
 RESTRICT`, que es como las crean ahora 009 y 010. Es lo que permite instalar el esquema en MariaDB 10.11 (producción),
 que rechaza una columna generada STORED sobre una columna con clave ajena `ON UPDATE CASCADE`. El borrado en cascada no
 cambia y ninguna clave primaria se actualiza nunca.
+`019` (F18-07) no crea tablas: añade a `company_bank_accounts` las columnas `account_number_encrypted`,
+`account_number_last4`, `interbank_code_encrypted` e `interbank_code_last4` y deja `account_number` admitiendo `NULL`.
+La aplicación guarda el número de cuenta y el CCI cifrados (AES-256-GCM con `INTEGRATIONS_ENCRYPTION_KEY`) y solo los 4
+últimos en claro para el enmascarado. No borra nada: en una base con cuentas ya guardadas hay que cifrarlas después con
+`npm run bank:encrypt` (ver `PRODUCCION.md`). Con ella el esquema queda en **49 tablas y 496 columnas**
+(`infra/aws/scripts/schema-reference.json`).
 
 > **Estado de `012`, `013` y `014`:** la suite las aplica en `busperu_test` y **ya están aplicadas en la base
 > `busperu`** de este equipo (46 tablas, FASE 13, con backup previo). Cualquier otra base —en particular la de
@@ -106,7 +113,11 @@ cambia y ninguna clave primaria se actualiza nunca.
 > **Estado de `018`:** creada en F18-02B, aplicada en `busperu_test` y en la validación sobre MariaDB 10.11. **No se
 > ha aplicado a `busperu`.** En 10.4 no es imprescindible para funcionar, pero deja el esquema igual al de producción.
 
-`010` a `018` son reejecutables (`017` y `018` consultan `information_schema` y no hacen nada si ya están aplicadas).
+> **Estado de `019`:** creada en F18-07, aplicada en `busperu_test`, en MariaDB 10.11 y en `busperu_staging`. Cualquier
+> otra base la necesita antes del código actual, que ya escribe los datos bancarios cifrados.
+
+`010` a `019` son reejecutables (`017` y `018` consultan `information_schema`; `019` usa `ADD COLUMN IF NOT EXISTS`; ninguna hace nada si ya está aplicada).
+F18-18 lo comprobó reaplicando las 19 sobre una base 10.11 ya migrada: 19/19 sin error y la misma huella de esquema.
 `001-permiso-resenas-company-admin.sql` es distinta: no cambia el esquema, concede `reviews.update` al rol
 `COMPANY_ADMIN` en `role_permissions` (también es idempotente), y la suite no ejecuta el archivo sino que reproduce ese
 cambio en su preparación. Qué añade cada migración y en

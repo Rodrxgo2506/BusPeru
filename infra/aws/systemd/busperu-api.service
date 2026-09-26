@@ -23,6 +23,9 @@ Group=busperu
 WorkingDirectory=/opt/busperu/current/backend
 RuntimeDirectory=busperu
 RuntimeDirectoryMode=0750
+# F18-18: el entorno (staging | prod) lo fija bootstrap-ec2.sh --env en /etc/busperu/env (BUSPERU_ENV=…). Sin ese
+# archivo, render-env.sh usa staging, y en una instancia de producción se niega a arrancar (comprueba el perfil).
+EnvironmentFile=-/etc/busperu/env
 ExecStartPre=+/opt/busperu/bin/render-env.sh /run/busperu/api.env
 # F18-04: el "-" es imprescindible. systemd lee EnvironmentFile antes de CADA orden, también antes del
 # ExecStartPre que lo genera; sin "-", la primera vez falla con "unavailable resources". ExecStart lo lee

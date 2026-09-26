@@ -1,0 +1,276 @@
+{
+  "AWSTemplateFormatVersion": "2010-09-09",
+  "Description": "BusPeru PRODUCCION (F18-18): filtros de métrica y alarmas de la aplicación, presupuesto mensual",
+  "Parameters": {
+    "MonthlyBudgetUsd": {
+      "Type": "Number",
+      "Default": 150,
+      "MinValue": 10,
+      "MaxValue": 5000,
+      "Description": "Presupuesto mensual de la cuenta en USD (decisión del propietario)"
+    },
+    "BudgetEmail": {
+      "Type": "String",
+      "AllowedPattern": "^[^@\\s]+@[^@\\s]+\\.[^@\\s]+$",
+      "Description": "Buzón del propietario para los avisos de coste"
+    }
+  },
+  "Resources": {
+    "MonthlyBudget": {
+      "Type": "AWS::Budgets::Budget",
+      "Properties": {
+        "Budget": {
+          "BudgetName": "busperu-prod-mensual",
+          "BudgetType": "COST",
+          "TimeUnit": "MONTHLY",
+          "BudgetLimit": {
+            "Amount": {
+              "Ref": "MonthlyBudgetUsd"
+            },
+            "Unit": "USD"
+          }
+        },
+        "NotificationsWithSubscribers": [
+          {
+            "Notification": {
+              "NotificationType": "ACTUAL",
+              "ComparisonOperator": "GREATER_THAN",
+              "Threshold": 80,
+              "ThresholdType": "PERCENTAGE"
+            },
+            "Subscribers": [
+              {
+                "SubscriptionType": "EMAIL",
+                "Address": {
+                  "Ref": "BudgetEmail"
+                }
+              }
+            ]
+          },
+          {
+            "Notification": {
+              "NotificationType": "FORECASTED",
+              "ComparisonOperator": "GREATER_THAN",
+              "Threshold": 100,
+              "ThresholdType": "PERCENTAGE"
+            },
+            "Subscribers": [
+              {
+                "SubscriptionType": "EMAIL",
+                "Address": {
+                  "Ref": "BudgetEmail"
+                }
+              }
+            ]
+          }
+        ]
+      }
+    },
+    "FiltroErroresApp": {
+      "Type": "AWS::Logs::MetricFilter",
+      "Properties": {
+        "LogGroupName": "/busperu/prod/app",
+        "FilterName": "busperu-prod-erroresapp",
+        "FilterPattern": "{ $.level = \"error\" }",
+        "MetricTransformations": [
+          {
+            "MetricNamespace": "BusPeru/App",
+            "MetricName": "ErroresApp",
+            "MetricValue": "1",
+            "DefaultValue": 0
+          }
+        ]
+      }
+    },
+    "AlarmaErroresApp": {
+      "Type": "AWS::CloudWatch::Alarm",
+      "Properties": {
+        "AlarmName": "busperu-prod-app-errores-app",
+        "AlarmDescription": "Errores de la API (500) en 5 min",
+        "Namespace": "BusPeru/App",
+        "MetricName": "ErroresApp",
+        "Statistic": "Sum",
+        "Period": 300,
+        "EvaluationPeriods": 1,
+        "Threshold": 5,
+        "ComparisonOperator": "GreaterThanThreshold",
+        "TreatMissingData": "notBreaching",
+        "AlarmActions": [
+          {
+            "Fn::Sub": "arn:aws:sns:${AWS::Region}:${AWS::AccountId}:busperu-prod-alarms"
+          }
+        ],
+        "OKActions": [
+          {
+            "Fn::Sub": "arn:aws:sns:${AWS::Region}:${AWS::AccountId}:busperu-prod-alarms"
+          }
+        ]
+      }
+    },
+    "FiltroFatal": {
+      "Type": "AWS::Logs::MetricFilter",
+      "Properties": {
+        "LogGroupName": "/busperu/prod/app",
+        "FilterName": "busperu-prod-fatal",
+        "FilterPattern": "{ $.level = \"fatal\" }",
+        "MetricTransformations": [
+          {
+            "MetricNamespace": "BusPeru/App",
+            "MetricName": "Fatal",
+            "MetricValue": "1",
+            "DefaultValue": 0
+          }
+        ]
+      }
+    },
+    "AlarmaFatal": {
+      "Type": "AWS::CloudWatch::Alarm",
+      "Properties": {
+        "AlarmName": "busperu-prod-app-fatal",
+        "AlarmDescription": "Excepción no controlada: el proceso se cerró",
+        "Namespace": "BusPeru/App",
+        "MetricName": "Fatal",
+        "Statistic": "Sum",
+        "Period": 60,
+        "EvaluationPeriods": 1,
+        "Threshold": 0,
+        "ComparisonOperator": "GreaterThanThreshold",
+        "TreatMissingData": "notBreaching",
+        "AlarmActions": [
+          {
+            "Fn::Sub": "arn:aws:sns:${AWS::Region}:${AWS::AccountId}:busperu-prod-alarms"
+          }
+        ],
+        "OKActions": [
+          {
+            "Fn::Sub": "arn:aws:sns:${AWS::Region}:${AWS::AccountId}:busperu-prod-alarms"
+          }
+        ]
+      }
+    },
+    "FiltroExpiracion": {
+      "Type": "AWS::Logs::MetricFilter",
+      "Properties": {
+        "LogGroupName": "/busperu/prod/app",
+        "FilterName": "busperu-prod-expiracion",
+        "FilterPattern": "{ $.level = \"error\" && $.message = \"*expirar*\" }",
+        "MetricTransformations": [
+          {
+            "MetricNamespace": "BusPeru/App",
+            "MetricName": "Expiracion",
+            "MetricValue": "1",
+            "DefaultValue": 0
+          }
+        ]
+      }
+    },
+    "AlarmaExpiracion": {
+      "Type": "AWS::CloudWatch::Alarm",
+      "Properties": {
+        "AlarmName": "busperu-prod-app-expiracion",
+        "AlarmDescription": "Fallo del job de expiración de reservas",
+        "Namespace": "BusPeru/App",
+        "MetricName": "Expiracion",
+        "Statistic": "Sum",
+        "Period": 300,
+        "EvaluationPeriods": 1,
+        "Threshold": 0,
+        "ComparisonOperator": "GreaterThanThreshold",
+        "TreatMissingData": "notBreaching",
+        "AlarmActions": [
+          {
+            "Fn::Sub": "arn:aws:sns:${AWS::Region}:${AWS::AccountId}:busperu-prod-alarms"
+          }
+        ],
+        "OKActions": [
+          {
+            "Fn::Sub": "arn:aws:sns:${AWS::Region}:${AWS::AccountId}:busperu-prod-alarms"
+          }
+        ]
+      }
+    },
+    "FiltroCorreo": {
+      "Type": "AWS::Logs::MetricFilter",
+      "Properties": {
+        "LogGroupName": "/busperu/prod/app",
+        "FilterName": "busperu-prod-correo",
+        "FilterPattern": "{ $.level = \"error\" && $.message = \"No se pudo enviar un correo\" }",
+        "MetricTransformations": [
+          {
+            "MetricNamespace": "BusPeru/App",
+            "MetricName": "Correo",
+            "MetricValue": "1",
+            "DefaultValue": 0
+          }
+        ]
+      }
+    },
+    "AlarmaCorreo": {
+      "Type": "AWS::CloudWatch::Alarm",
+      "Properties": {
+        "AlarmName": "busperu-prod-app-correo",
+        "AlarmDescription": "Fallos de envío de correo (Resend)",
+        "Namespace": "BusPeru/App",
+        "MetricName": "Correo",
+        "Statistic": "Sum",
+        "Period": 900,
+        "EvaluationPeriods": 1,
+        "Threshold": 3,
+        "ComparisonOperator": "GreaterThanThreshold",
+        "TreatMissingData": "notBreaching",
+        "AlarmActions": [
+          {
+            "Fn::Sub": "arn:aws:sns:${AWS::Region}:${AWS::AccountId}:busperu-prod-alarms"
+          }
+        ],
+        "OKActions": [
+          {
+            "Fn::Sub": "arn:aws:sns:${AWS::Region}:${AWS::AccountId}:busperu-prod-alarms"
+          }
+        ]
+      }
+    },
+    "FiltroWebhookCulqi": {
+      "Type": "AWS::Logs::MetricFilter",
+      "Properties": {
+        "LogGroupName": "/busperu/prod/app",
+        "FilterName": "busperu-prod-webhookculqi",
+        "FilterPattern": "{ $.provider = \"CULQI\" && ($.outcome = \"unauthorized\" || $.outcome = \"not_correlated\" || $.outcome = \"marked_failed\" || $.outcome = \"compensated\") }",
+        "MetricTransformations": [
+          {
+            "MetricNamespace": "BusPeru/App",
+            "MetricName": "WebhookCulqi",
+            "MetricValue": "1",
+            "DefaultValue": 0
+          }
+        ]
+      }
+    },
+    "AlarmaWebhookCulqi": {
+      "Type": "AWS::CloudWatch::Alarm",
+      "Properties": {
+        "AlarmName": "busperu-prod-app-webhook-culqi",
+        "AlarmDescription": "Webhook de Culqi rechazado o con cargo compensado: revisar pagos",
+        "Namespace": "BusPeru/App",
+        "MetricName": "WebhookCulqi",
+        "Statistic": "Sum",
+        "Period": 300,
+        "EvaluationPeriods": 1,
+        "Threshold": 0,
+        "ComparisonOperator": "GreaterThanThreshold",
+        "TreatMissingData": "notBreaching",
+        "AlarmActions": [
+          {
+            "Fn::Sub": "arn:aws:sns:${AWS::Region}:${AWS::AccountId}:busperu-prod-alarms"
+          }
+        ],
+        "OKActions": [
+          {
+            "Fn::Sub": "arn:aws:sns:${AWS::Region}:${AWS::AccountId}:busperu-prod-alarms"
+          }
+        ]
+      }
+    }
+  },
+  "Outputs": {}
+}

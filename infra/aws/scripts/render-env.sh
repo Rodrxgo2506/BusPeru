@@ -12,9 +12,14 @@ umask 077
 
 DESTINO="${1:?uso: render-env.sh <archivo destino>}"
 ENTORNO="${BUSPERU_ENV:-staging}"
+case "${ENTORNO}" in staging|prod) ;; *) echo "render-env: BUSPERU_ENV no válido" >&2; exit 1 ;; esac
 RUTA="/busperu/${ENTORNO}/app/"
-REGION="$(TOKEN=$(curl -sS -X PUT http://169.254.169.254/latest/api/token -H 'X-aws-ec2-metadata-token-ttl-seconds: 60') \
-  && curl -sS -H "X-aws-ec2-metadata-token: ${TOKEN}" http://169.254.169.254/latest/meta-data/placement/region)"
+TOKEN="$(curl -sS -X PUT http://169.254.169.254/latest/api/token -H 'X-aws-ec2-metadata-token-ttl-seconds: 60')"
+REGION="$(curl -sS -H "X-aws-ec2-metadata-token: ${TOKEN}" http://169.254.169.254/latest/meta-data/placement/region)"
+# F18-18: una instancia solo lee los parámetros de SU entorno (perfil busperu-<env>-…). Así una EC2 de producción
+# sin /etc/busperu/env no arranca con la configuración de staging, ni al revés.
+PERFIL="$(curl -sS -H "X-aws-ec2-metadata-token: ${TOKEN}" http://169.254.169.254/latest/meta-data/iam/info | jq -r .InstanceProfileArn)"
+[[ "${PERFIL##*/}" == busperu-${ENTORNO}-* ]] || { echo "render-env: el perfil de la instancia no es de ${ENTORNO}" >&2; exit 1; }
 
 TMP="$(mktemp "${DESTINO}.XXXXXX")"
 trap 'rm -f "${TMP}"' EXIT

@@ -1,0 +1,495 @@
+{
+  "AWSTemplateFormatVersion": "2010-09-09",
+  "Description": "BusPeru PRODUCCION (F18-18): frontend S3 privado + CloudFront (OAC, CSP) y la API por CloudFront hacia el ALB de busperu-prod",
+  "Parameters": {
+    "WebCertificateArn": {
+      "Type": "String",
+      "AllowedPattern": "^arn:aws:acm:us-east-1:[0-9]{12}:certificate/[0-9a-f-]{36}$",
+      "Description": "Certificado ACM en us-east-1 (ISSUED) con busperuonline.pe, www.busperuonline.pe y api.busperuonline.pe"
+    },
+    "AlbDnsName": {
+      "Type": "String",
+      "AllowedPattern": "^busperu-prod-alb-[0-9]+\\.sa-east-1\\.elb\\.amazonaws\\.com$",
+      "Description": "Salida LoadBalancerDns de busperu-prod"
+    },
+    "OriginVerifySecret": {
+      "Type": "String",
+      "NoEcho": true,
+      "AllowedPattern": "^[0-9a-f]{64}$",
+      "Description": "La misma cabecera secreta de origen que en busperu-prod"
+    },
+    "ViewerAccess": {
+      "Type": "String",
+      "AllowedValues": [
+        "operators",
+        "public"
+      ],
+      "Default": "operators",
+      "Description": "operators: solo ViewerAllowedIps (humo previo al go-live); public: abierto (go-live)"
+    },
+    "ViewerAllowedIps": {
+      "Type": "CommaDelimitedList",
+      "Default": "",
+      "Description": "IPv4 exactas del operador cuando ViewerAccess=operators (vacía = nadie pasa)"
+    }
+  },
+  "Resources": {
+    "FrontendBucket": {
+      "Type": "AWS::S3::Bucket",
+      "DeletionPolicy": "Retain",
+      "UpdateReplacePolicy": "Retain",
+      "Properties": {
+        "BucketName": {
+          "Fn::Sub": "busperu-prod-web-${AWS::AccountId}"
+        },
+        "PublicAccessBlockConfiguration": {
+          "BlockPublicAcls": true,
+          "BlockPublicPolicy": true,
+          "IgnorePublicAcls": true,
+          "RestrictPublicBuckets": true
+        },
+        "OwnershipControls": {
+          "Rules": [
+            {
+              "ObjectOwnership": "BucketOwnerEnforced"
+            }
+          ]
+        },
+        "BucketEncryption": {
+          "ServerSideEncryptionConfiguration": [
+            {
+              "ServerSideEncryptionByDefault": {
+                "SSEAlgorithm": "AES256"
+              }
+            }
+          ]
+        },
+        "VersioningConfiguration": {
+          "Status": "Enabled"
+        },
+        "LifecycleConfiguration": {
+          "Rules": [
+            {
+              "Id": "versiones-antiguas",
+              "Status": "Enabled",
+              "NoncurrentVersionExpiration": {
+                "NoncurrentDays": 90
+              }
+            }
+          ]
+        },
+        "Tags": [
+          {
+            "Key": "Name",
+            "Value": "busperu-prod-web"
+          },
+          {
+            "Key": "Project",
+            "Value": "busperu"
+          },
+          {
+            "Key": "Environment",
+            "Value": "prod"
+          }
+        ]
+      }
+    },
+    "FrontendBucketPolicy": {
+      "Type": "AWS::S3::BucketPolicy",
+      "Properties": {
+        "Bucket": {
+          "Ref": "FrontendBucket"
+        },
+        "PolicyDocument": {
+          "Version": "2012-10-17",
+          "Statement": [
+            {
+              "Sid": "SoloLaDistribucionWebLee",
+              "Effect": "Allow",
+              "Principal": {
+                "Service": "cloudfront.amazonaws.com"
+              },
+              "Action": "s3:GetObject",
+              "Resource": {
+                "Fn::Sub": "arn:${AWS::Partition}:s3:::${FrontendBucket}/*"
+              },
+              "Condition": {
+                "StringEquals": {
+                  "AWS:SourceArn": {
+                    "Fn::Sub": "arn:${AWS::Partition}:cloudfront::${AWS::AccountId}:distribution/${WebDistribution}"
+                  }
+                }
+              }
+            },
+            {
+              "Sid": "SoloTls",
+              "Effect": "Deny",
+              "Principal": "*",
+              "Action": "s3:*",
+              "Resource": [
+                {
+                  "Fn::Sub": "arn:${AWS::Partition}:s3:::${FrontendBucket}"
+                },
+                {
+                  "Fn::Sub": "arn:${AWS::Partition}:s3:::${FrontendBucket}/*"
+                }
+              ],
+              "Condition": {
+                "Bool": {
+                  "aws:SecureTransport": "false"
+                }
+              }
+            }
+          ]
+        }
+      }
+    },
+    "FrontendOac": {
+      "Type": "AWS::CloudFront::OriginAccessControl",
+      "Properties": {
+        "OriginAccessControlConfig": {
+          "Name": "busperu-prod-web-oac",
+          "Description": "BusPeru prod: CloudFront firma las lecturas del bucket del frontend",
+          "OriginAccessControlOriginType": "s3",
+          "SigningBehavior": "always",
+          "SigningProtocol": "sigv4"
+        }
+      }
+    },
+    "ViewerFunction": {
+      "Type": "AWS::CloudFront::Function",
+      "Properties": {
+        "Name": "busperu-prod-viewer",
+        "AutoPublish": true,
+        "FunctionConfig": {
+          "Comment": "BusPeru prod: www a dominio raiz y lista de IP antes del go-live",
+          "Runtime": "cloudfront-js-2.0"
+        },
+        "FunctionCode": {
+          "Fn::Sub": [
+            "function handler(event) {\n  var req = event.request;\n  if (req.headers.host && req.headers.host.value === 'www.busperuonline.pe') {\n    return { statusCode: 301, statusDescription: 'Moved Permanently', headers: { location: { value: 'https://busperuonline.pe' + req.uri } } };\n  }\n  if ('${Modo}' === 'operators' && ['${Lista}'].indexOf(event.viewer.ip) === -1) {\n    return { statusCode: 403, statusDescription: 'Forbidden' };\n  }\n  return req;\n}",
+            {
+              "Modo": {
+                "Ref": "ViewerAccess"
+              },
+              "Lista": {
+                "Fn::Join": [
+                  "','",
+                  {
+                    "Ref": "ViewerAllowedIps"
+                  }
+                ]
+              }
+            }
+          ]
+        }
+      }
+    },
+    "WebSecurityHeaders": {
+      "Type": "AWS::CloudFront::ResponseHeadersPolicy",
+      "Properties": {
+        "ResponseHeadersPolicyConfig": {
+          "Name": "busperu-prod-web-security",
+          "Comment": "BusPeru prod: CSP, HSTS y cabeceras de seguridad del SPA",
+          "SecurityHeadersConfig": {
+            "ContentSecurityPolicy": {
+              "ContentSecurityPolicy": "default-src 'self'; script-src 'self' https://checkout.culqi.com; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data: https://api.busperuonline.pe https://*.wikimedia.org https://*.culqi.com; connect-src 'self' https://api.busperuonline.pe; frame-src https://checkout.culqi.com https://checkoutview.culqi.com; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'; upgrade-insecure-requests",
+              "Override": true
+            },
+            "StrictTransportSecurity": {
+              "AccessControlMaxAgeSec": 31536000,
+              "IncludeSubdomains": true,
+              "Preload": false,
+              "Override": true
+            },
+            "ContentTypeOptions": {
+              "Override": true
+            },
+            "FrameOptions": {
+              "FrameOption": "DENY",
+              "Override": true
+            },
+            "ReferrerPolicy": {
+              "ReferrerPolicy": "strict-origin-when-cross-origin",
+              "Override": true
+            }
+          },
+          "CustomHeadersConfig": {
+            "Items": [
+              {
+                "Header": "Permissions-Policy",
+                "Value": "camera=(), microphone=(), geolocation=(), usb=()",
+                "Override": true
+              }
+            ]
+          }
+        }
+      }
+    },
+    "ApiCachePolicy": {
+      "Type": "AWS::CloudFront::CachePolicy",
+      "Properties": {
+        "CachePolicyConfig": {
+          "Name": "busperu-prod-api-sin-cache",
+          "Comment": "La API no se cachea (TTL 0, tope 1 s); Authorization llega al origen",
+          "MinTTL": 0,
+          "DefaultTTL": 0,
+          "MaxTTL": 1,
+          "ParametersInCacheKeyAndForwardedToOrigin": {
+            "EnableAcceptEncodingGzip": true,
+            "EnableAcceptEncodingBrotli": true,
+            "HeadersConfig": {
+              "HeaderBehavior": "whitelist",
+              "Headers": [
+                "Authorization"
+              ]
+            },
+            "CookiesConfig": {
+              "CookieBehavior": "none"
+            },
+            "QueryStringsConfig": {
+              "QueryStringBehavior": "all"
+            }
+          }
+        }
+      }
+    },
+    "WebDistribution": {
+      "Type": "AWS::CloudFront::Distribution",
+      "Properties": {
+        "DistributionConfig": {
+          "Enabled": true,
+          "Comment": "busperu-prod-web (SPA)",
+          "Aliases": [
+            "busperuonline.pe",
+            "www.busperuonline.pe"
+          ],
+          "PriceClass": "PriceClass_All",
+          "HttpVersion": "http2and3",
+          "IPV6Enabled": true,
+          "DefaultRootObject": "index.html",
+          "Origins": [
+            {
+              "Id": "frontend-s3",
+              "DomainName": {
+                "Fn::GetAtt": [
+                  "FrontendBucket",
+                  "RegionalDomainName"
+                ]
+              },
+              "OriginAccessControlId": {
+                "Fn::GetAtt": [
+                  "FrontendOac",
+                  "Id"
+                ]
+              },
+              "S3OriginConfig": {
+                "OriginAccessIdentity": ""
+              }
+            }
+          ],
+          "DefaultCacheBehavior": {
+            "TargetOriginId": "frontend-s3",
+            "ViewerProtocolPolicy": "redirect-to-https",
+            "AllowedMethods": [
+              "GET",
+              "HEAD"
+            ],
+            "CachedMethods": [
+              "GET",
+              "HEAD"
+            ],
+            "CachePolicyId": "658327ea-f89d-4fab-a63d-7e88639e58f6",
+            "ResponseHeadersPolicyId": {
+              "Ref": "WebSecurityHeaders"
+            },
+            "Compress": true,
+            "FunctionAssociations": [
+              {
+                "EventType": "viewer-request",
+                "FunctionARN": {
+                  "Fn::GetAtt": [
+                    "ViewerFunction",
+                    "FunctionARN"
+                  ]
+                }
+              }
+            ]
+          },
+          "CustomErrorResponses": [
+            {
+              "ErrorCode": 403,
+              "ResponseCode": 200,
+              "ResponsePagePath": "/index.html",
+              "ErrorCachingMinTTL": 0
+            },
+            {
+              "ErrorCode": 404,
+              "ResponseCode": 200,
+              "ResponsePagePath": "/index.html",
+              "ErrorCachingMinTTL": 0
+            }
+          ],
+          "ViewerCertificate": {
+            "AcmCertificateArn": {
+              "Ref": "WebCertificateArn"
+            },
+            "SslSupportMethod": "sni-only",
+            "MinimumProtocolVersion": "TLSv1.2_2021"
+          }
+        },
+        "Tags": [
+          {
+            "Key": "Name",
+            "Value": "busperu-prod-web-cdn"
+          },
+          {
+            "Key": "Project",
+            "Value": "busperu"
+          },
+          {
+            "Key": "Environment",
+            "Value": "prod"
+          }
+        ]
+      }
+    },
+    "ApiDistribution": {
+      "Type": "AWS::CloudFront::Distribution",
+      "Properties": {
+        "DistributionConfig": {
+          "Enabled": true,
+          "Comment": "busperu-prod-api (ALB)",
+          "Aliases": [
+            "api.busperuonline.pe"
+          ],
+          "PriceClass": "PriceClass_All",
+          "HttpVersion": "http2and3",
+          "IPV6Enabled": true,
+          "Origins": [
+            {
+              "Id": "api-alb",
+              "DomainName": {
+                "Ref": "AlbDnsName"
+              },
+              "CustomOriginConfig": {
+                "HTTPSPort": 443,
+                "OriginProtocolPolicy": "https-only",
+                "OriginSSLProtocols": [
+                  "TLSv1.2"
+                ],
+                "OriginReadTimeout": 30,
+                "OriginKeepaliveTimeout": 55
+              },
+              "OriginCustomHeaders": [
+                {
+                  "HeaderName": "X-BusPeru-Origin",
+                  "HeaderValue": {
+                    "Ref": "OriginVerifySecret"
+                  }
+                }
+              ]
+            }
+          ],
+          "DefaultCacheBehavior": {
+            "TargetOriginId": "api-alb",
+            "ViewerProtocolPolicy": "https-only",
+            "AllowedMethods": [
+              "GET",
+              "HEAD",
+              "OPTIONS",
+              "PUT",
+              "PATCH",
+              "POST",
+              "DELETE"
+            ],
+            "CachedMethods": [
+              "GET",
+              "HEAD"
+            ],
+            "CachePolicyId": {
+              "Ref": "ApiCachePolicy"
+            },
+            "OriginRequestPolicyId": "216adef6-5c7f-47e4-b989-5492eafa07d3",
+            "Compress": true,
+            "FunctionAssociations": [
+              {
+                "EventType": "viewer-request",
+                "FunctionARN": {
+                  "Fn::GetAtt": [
+                    "ViewerFunction",
+                    "FunctionARN"
+                  ]
+                }
+              }
+            ]
+          },
+          "ViewerCertificate": {
+            "AcmCertificateArn": {
+              "Ref": "WebCertificateArn"
+            },
+            "SslSupportMethod": "sni-only",
+            "MinimumProtocolVersion": "TLSv1.2_2021"
+          }
+        },
+        "Tags": [
+          {
+            "Key": "Name",
+            "Value": "busperu-prod-api-cdn"
+          },
+          {
+            "Key": "Project",
+            "Value": "busperu"
+          },
+          {
+            "Key": "Environment",
+            "Value": "prod"
+          }
+        ]
+      }
+    }
+  },
+  "Outputs": {
+    "WebUrl": {
+      "Description": "FRONTEND_URL",
+      "Value": "https://busperuonline.pe"
+    },
+    "ApiUrl": {
+      "Description": "VITE_API_URL del build",
+      "Value": "https://api.busperuonline.pe/api"
+    },
+    "FrontendBucketName": {
+      "Value": {
+        "Ref": "FrontendBucket"
+      }
+    },
+    "WebDistributionId": {
+      "Value": {
+        "Ref": "WebDistribution"
+      }
+    },
+    "ApiDistributionId": {
+      "Value": {
+        "Ref": "ApiDistribution"
+      }
+    },
+    "WebDistributionDomain": {
+      "Value": {
+        "Fn::GetAtt": [
+          "WebDistribution",
+          "DomainName"
+        ]
+      },
+      "Description": "Destino de los alias A/AAAA de busperuonline.pe y www"
+    },
+    "ApiDistributionDomain": {
+      "Value": {
+        "Fn::GetAtt": [
+          "ApiDistribution",
+          "DomainName"
+        ]
+      },
+      "Description": "Destino de los alias A/AAAA de api.busperuonline.pe"
+    }
+  }
+}

@@ -33,7 +33,7 @@ Plantillas sin valores reales:
 - Registros saneados y cierre ordenado con `SIGTERM`/`SIGINT`.
 - Alta segura del **primer administrador** por consola: `npm run admin:bootstrap` (sección 3, F18-02).
 - Comprobación de disponibilidad `GET /api/ready`, separada de `GET /api/health` (sección 3, F18-02).
-- **MariaDB 10.11 + modo estricto VALIDATED** (F18-02B): instalación limpia 001→018 y batería completa 3/3 sobre un MariaDB 10.11.19 real (sección 3, *Modo SQL*).
+- **MariaDB 10.11 + modo estricto VALIDATED** (F18-02B): instalación limpia 001→018 y batería completa 3/3 sobre un MariaDB 10.11.19 real (sección 3, *Modo SQL*). F18-07 añadió `019` y la referencia de esquema pasó a 001→019 (49 tablas, 496 columnas).
 
 **Pendiente: requiere decisión de infraestructura o una fase propia**
 
@@ -188,9 +188,10 @@ VITE_API_URL=https://api.tu-dominio/api npm run build   # o definirla en fronten
 
 1. Importar `database/schema/Dump20260831.sql`.
 2. **Hacer un backup** antes de migrar (sección 9).
-3. Aplicar **todas** las migraciones de `database/migrations/`, **de la `001` a la `018`, una detrás de otra y en ese
+3. Aplicar **todas** las migraciones de `database/migrations/`, **de la `001` a la `019`, una detrás de otra y en ese
    orden**, sin saltarse ninguna. La lista con los comandos está en el README (sección *Migraciones*). La última es
-   `018-fk-on-update-restrict-mariadb-1011.sql`.
+   `019-bank-accounts-encryption.sql`. En AWS se hace con `infra/aws/scripts/apply-migrations.sh` (base vacía) o
+   `apply-one-migration.sh` (base existente); inventario completo en `docs/production/MIGRATIONS.md`.
 4. **Verificar el esquema resultante** antes de arrancar el backend (ver abajo).
 
 Obligatorias para el código actual, porque se consultan en cada petición o en páginas públicas:
@@ -200,9 +201,10 @@ Obligatorias para el código actual, porque se consultan en cada petición o en 
 | `014-revoked-sessions.sql` | Tabla `revoked_sessions` (cierre de sesión, F12-07) | El middleware de autenticación la consulta en **cada** petición autenticada |
 | `015-destinations-content-branding.sql` y `016-destination-enhancements.sql` | Tablas y columnas de destinos | La portada y `/destinos/:slug` |
 | **`017-users-sessions-valid-from.sql`** | Columna **`users.sessions_valid_from`** (`DATETIME NULL`): terminar las sesiones de una cuenta al suspenderla (F17C-SEC-10) | El middleware de autenticación la lee en **cada** petición autenticada: sin ella, **todas** fallan. **No se puede saltar** |
+| **`019-bank-accounts-encryption.sql`** | Columnas `*_encrypted` y `*_last4` en `company_bank_accounts`; `account_number` admite `NULL` (F18-07) | El código escribe los datos bancarios cifrados: sin las columnas, crear o editar una cuenta bancaria falla |
 
 `001` no toca el esquema: concede `reviews.update` al rol `COMPANY_ADMIN`, sin el cual las empresas no pueden moderar
-reseñas. Las migraciones `001` y de la `010` a la `018` son **reejecutables** (comprueban antes de actuar: `017`
+reseñas. Las migraciones `001` y de la `010` a la `019` son **reejecutables** (comprueban antes de actuar: `017`
 consulta `information_schema` y no hace nada si la columna ya existe); aun así, cada una debe aplicarse una sola vez y
 en orden.
 
@@ -212,6 +214,7 @@ en orden.
 SHOW COLUMNS FROM users LIKE 'sessions_valid_from';   -- debe devolver una fila: datetime, NULL
 SHOW TABLES LIKE 'revoked_sessions';                   -- debe existir
 SHOW TABLES LIKE 'destinations';                       -- debe existir
+SHOW COLUMNS FROM company_bank_accounts LIKE '%_last4';  -- debe devolver 2 filas (019)
 ```
 
 `017` no rellena nada: `NULL` significa «esta cuenta nunca se ha suspendido» y no restringe ninguna sesión, así que
@@ -456,7 +459,7 @@ las comprobaciones— está en `docs/production/STAGING-RUNBOOK.md` (F18-03).
 2. **Configurar los secretos** en el gestor del despliegue (sección 2). Nunca en el repositorio.
 3. **Preparar la base**: importar el dump y crear el usuario de la aplicación con privilegios mínimos (sección 5).
 4. **Hacer un backup** (sección 9).
-5. **Aplicar las migraciones `001` a `018` en orden** (sección 3, *Base de datos*).
+5. **Aplicar las migraciones `001` a `019` en orden** (sección 3, *Base de datos*).
 6. **Verificar el esquema**, en particular `users.sessions_valid_from` (sección 3).
 7. **Configurar y arrancar el backend** con `NODE_ENV=production`: si falta o sobra algo, la guarda lo impide y lo dice.
    `GET /api/ready` debe responder `200`.

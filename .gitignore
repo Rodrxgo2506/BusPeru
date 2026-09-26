@@ -18,3 +18,6 @@ coverage/
 *.tsbuildinfo
 # F18-11B: paquetes que genera infra/aws/scripts/make-release.sh (se suben a S3; nunca se versionan).
 infra/aws/.releases/
+
+# F18-18: manifiestos locales de infra/aws/scripts/publish-web.mjs
+web-releases/

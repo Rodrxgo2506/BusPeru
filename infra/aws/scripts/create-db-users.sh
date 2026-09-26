@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# BusPerú · F18-03 · crea la base de staging y los dos usuarios de la aplicación (idempotente).
+# BusPerú · F18-03 · crea la base del entorno (BUSPERU_ENV: staging | prod) y los dos usuarios de la aplicación (idempotente).
 #
 #   DB_HOST=<endpoint RDS> MASTER_SECRET_ARN=<arn> bash create-db-users.sh
 #
@@ -11,10 +11,12 @@
 #   busperu_app       SELECT, INSERT, UPDATE, DELETE → lo único que usa la API en ejecución
 #                     (GET_LOCK, usado por los pagos, no requiere privilegio)
 #
-# Ambos, solo sobre `${DB_NAME}`.* y solo desde la VPC (DB_USER_HOST, por defecto 10.20.%). Una
+# Ambos, solo sobre `${DB_NAME}`.* y solo desde la VPC (DB_USER_HOST; por defecto la VPC de la plantilla de cada
+# entorno: 10.20.% en staging y 10.30.% en producción). Una
 # segunda ejecución re-sincroniza contraseñas y permisos sin duplicar nada.
 source "$(dirname "$0")/db-common.sh"
-DB_USER_HOST="${DB_USER_HOST:-10.20.%}"
+case "${BUSPERU_ENV}" in prod) VPC_POR_DEFECTO="10.30.%" ;; *) VPC_POR_DEFECTO="10.20.%" ;; esac
+DB_USER_HOST="${DB_USER_HOST:-${VPC_POR_DEFECTO}}"
 [[ "${DB_USER_HOST}" =~ ^[0-9.%]+$|^localhost$|^127\.0\.0\.1$ ]] || { echo "DB_USER_HOST no válido" >&2; exit 1; }
 
 temporal; MAESTRO="${REPLY}"; credencial_maestra "${MAESTRO}"
@@ -44,4 +46,8 @@ for U in busperu_migrator busperu_app; do
   "${MARIADB}" --defaults-extra-file="$(ruta_cliente "${MAESTRO}")" -N -B -e "SHOW GRANTS FOR '${U}'@'${DB_USER_HOST}'" \
     | sed -E "s/IDENTIFIED BY PASSWORD '[^']*'/IDENTIFIED BY PASSWORD '***'/"
 done
-echo "✔ base ${DB_NAME} y usuarios listos. Volver a poner AllowMasterSecretAccess=false (runbook §7)."
+if [ "${BUSPERU_ENV}" = prod ]; then
+  echo "✔ base ${DB_NAME} y usuarios listos (producción: prod-db-bootstrap.sh guarda las contraseñas y rota el maestro)."
+else
+  echo "✔ base ${DB_NAME} y usuarios listos. Volver a poner AllowMasterSecretAccess=false (runbook §4)."
+fi
