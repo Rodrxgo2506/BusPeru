@@ -6,7 +6,6 @@ import { companiesHeroImage, helpHeroImage, offersHeroImage } from '@/constants/
 import { useAsync } from '@/hooks/useAsync';
 import { usePageMeta } from '@/hooks/usePageMeta';
 import { publicService } from '@/services';
-import { companyTripsHref } from '@/utils/company-links';
 import { formatCurrency, formatDate, todayIso } from '@/utils/format';
 
 export function CompaniesPage() {
@@ -53,8 +52,7 @@ export function CompaniesPage() {
               rating={company.rating}
               reviewsCount={company.reviews_count}
               routesCount={company.routes_count}
-              // «Ver viajes»: buscador de la empresa en la fecha de su próxima salida (F18-19D) o, si no la hay, hoy.
-              to={companyTripsHref(company, todayIso())}
+              to={`/buscar?company_id=${company.id}&date=${todayIso()}`}
             />
           ))}
         </div>

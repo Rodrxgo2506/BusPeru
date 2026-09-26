@@ -2,18 +2,18 @@ import './helpers/testEnv';
 import assert from 'node:assert/strict';
 import { after, before, describe, it } from 'node:test';
 import { get, post, put } from './helpers/api';
-import { execute, queryOne } from '../config/database';
 import { prepareSuite, teardownSuite, type SuiteContext } from './helpers/suite';
 
 /**
  * Listado público de empresas (/empresas) tras retirar los perfiles públicos de F18-19: cada empresa se muestra con
- * sus datos básicos y la acción «Ver viajes». No hay perfil público, ni panel de edición, ni moderación de perfiles.
+ * sus datos básicos y la acción «Ver viajes» (buscador de la empresa en la fecha de hoy, como antes de F18-19). No hay
+ * perfil público, ni panel de edición, ni moderación de perfiles.
  * Las tablas de la migración 020 siguen en la base de datos (no se borra nada), pero ningún endpoint las usa.
  */
 describe('Listado público de empresas (sin perfiles públicos)', () => {
   let ctx: SuiteContext;
   const token = (role: keyof SuiteContext['sessions']) => ctx.sessions[role].token;
-  type Company = { id: number; name: string; description: string | null; logo_url: string | null; routes_count: number; next_departure_date: string | null };
+  type Company = { id: number; name: string; description: string | null; logo_url: string | null; routes_count: number };
   const empresas = async () => (await get('/public/companies')).body.data as Company[];
 
   before(async () => {
@@ -42,20 +42,10 @@ describe('Listado público de empresas (sin perfiles públicos)', () => {
     }
   });
 
-  it('«Ver viajes»: la fecha de la próxima salida visible, que el buscador encuentra (F18-19D)', async () => {
-    const viaje = await queryOne<{ salida: string }>("SELECT DATE_FORMAT(departure_datetime, '%Y-%m-%d') AS salida FROM trips WHERE id = ?", [ctx.fixtures.tripB]);
-    const empresaB = async () => (await empresas()).find((c) => c.id === ctx.fixtures.companyB);
-    assert.equal((await empresaB())?.next_departure_date, viaje?.salida, 'la próxima salida de B es la de su único viaje');
-    const busqueda = await get(`/public/trips?company_id=${ctx.fixtures.companyB}&date=${viaje?.salida}`);
-    assert.ok((busqueda.body.data as Array<{ id: number }>).some((t) => t.id === ctx.fixtures.tripB), '«Ver viajes» con esa fecha muestra el viaje');
-
-    // Un viaje cancelado no cuenta: sin salidas visibles no hay fecha (la tarjeta usa hoy).
-    await execute("UPDATE trips SET status = 'CANCELLED' WHERE id = ?", [ctx.fixtures.tripB]);
-    try {
-      assert.equal((await empresaB())?.next_departure_date, null);
-    } finally {
-      await execute("UPDATE trips SET status = 'SCHEDULED' WHERE id = ?", [ctx.fixtures.tripB]);
-    }
+  it('el listado vuelve a ser el de antes de F18-19: sin fecha de próxima salida («Ver viajes» usa la fecha de hoy)', async () => {
+    const lista = await empresas();
+    assert.ok(lista.length > 0);
+    for (const empresa of lista) assert.equal('next_departure_date' in empresa, false);
   });
 
   it('no existe el perfil público de una empresa ni sus subrecursos', async () => {
