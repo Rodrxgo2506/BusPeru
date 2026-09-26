@@ -283,18 +283,34 @@ describe('F18-02B · compatibilidad con MariaDB 10.11', () => {
   describe('Columnas JSON: llegan como texto en cualquier motor', () => {
     // En MariaDB 10.5+ el servidor marca estas columnas con el formato `json` y el driver las
     // devolvía ya convertidas en objeto; el código espera texto (lo que da 10.4).
-    it('las nueve columnas JSON del esquema se leen como cadena, también con prepared statements', async () => {
+    it('las diecinueve columnas JSON del esquema se leen como cadena, también con prepared statements', async () => {
       const columnas = await query<{ tabla: string; columna: string }>(
         `SELECT table_name AS tabla, SUBSTRING_INDEX(SUBSTRING_INDEX(check_clause, '\`', 2), '\`', -1) AS columna
          FROM information_schema.check_constraints
          WHERE constraint_schema = DATABASE() AND check_clause LIKE 'json_valid%' ORDER BY 1, 2`,
       );
-      assert.equal(columnas.length, 9);
+      // 9 hasta la 019 + 10 de la 020 (perfil público de empresas, F18-19). La 021 no añade ninguna.
+      assert.equal(columnas.length, 19);
+      assert.deepEqual(
+        columnas.filter((c) => c.tabla.startsWith('company_') && c.tabla !== 'company_integrations').map((c) => `${c.tabla}.${c.columna}`),
+        [
+          'company_agencies.published_content', 'company_agencies.services', 'company_agencies.special_hours', 'company_agencies.weekly_hours',
+          'company_gallery_images.published_content',
+          'company_profiles.published_content', 'company_profiles.social_links', 'company_profiles.values_list',
+          'company_services.features', 'company_services.published_content',
+        ],
+      );
 
       await execute("UPDATE buses SET amenities = '{\"wifi\":true}' WHERE id = ?", [ctx.fixtures.busA]);
       const texto = await queryOne<{ a: unknown }>('SELECT amenities AS a FROM buses WHERE id = ?', [ctx.fixtures.busA]);
       assert.equal(typeof texto?.a, 'string');
       assert.deepEqual(JSON.parse(String(texto?.a)), { wifi: true });
+
+      // Las de la 020 también: el servicio del perfil hace JSON.parse de texto.
+      await execute("INSERT INTO company_profiles (company_id, slug, values_list) VALUES (?, 'json-1011', '[\"Puntualidad\"]')", [ctx.fixtures.companyA]);
+      const perfil = await queryOne<{ v: unknown }>('SELECT values_list AS v FROM company_profiles WHERE company_id = ?', [ctx.fixtures.companyA]);
+      assert.equal(typeof perfil?.v, 'string');
+      assert.deepEqual(JSON.parse(String(perfil?.v)), ['Puntualidad']);
     });
 
     it('fusionar payment_data conserva lo que ya había guardado en la base', async () => {

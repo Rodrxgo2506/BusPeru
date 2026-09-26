@@ -4,7 +4,7 @@
 #   DB_HOST=<endpoint RDS> bash apply-migrations.sh [raíz del proyecto]
 #
 # Aplica el dump (sin sus líneas CREATE DATABASE/USE, que apuntarían a `busperu`) y las migraciones
-# 001 → 019 EN ORDEN, sin --force: se detiene en el primer error y lo muestra tal cual. Se niega a
+# 001 → 021 EN ORDEN, sin --force: se detiene en el primer error y lo muestra tal cual. Se niega a
 # importar el dump sobre una base que ya tenga tablas (el dump hace DROP TABLE IF EXISTS).
 # Para una base que ya existe, aplicar solo las migraciones pendientes a mano (runbook §8).
 source "$(dirname "$0")/db-common.sh"
@@ -24,7 +24,7 @@ echo "base destino: ${DB_NAME} (vacía) · usuario: busperu_migrator"
 grep -vE '^\s*(CREATE DATABASE|USE)\b' "${DUMP}" | m "${DB_NAME}"
 printf '%-52s OK\n' "dump $(basename "${DUMP}")"
 
-ESPERADAS=19
+ESPERADAS=21  # F18-19: 020 (perfiles públicos de empresas) y 021 (Libro de Reclamaciones)
 APLICADAS=0
 for f in "${MIGRACIONES}"/0[0-9][0-9]-*.sql; do
   if ! salida="$(m "${DB_NAME}" < "${f}" 2>&1)"; then

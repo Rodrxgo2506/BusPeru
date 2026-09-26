@@ -1,9 +1,9 @@
 {
-  "origen": "F18-07 · MariaDB 10.11.19 · dump Dump20260831.sql + migraciones 001→019 (019 = cifrado de datos bancarios: +4 columnas, account_number admite NULL). Referencia anterior (001→018, F18-02B): columnas 492 [78d67d18a072]",
+  "origen": "F18-19 · MariaDB 10.11.19 · dump Dump20260831.sql + migraciones 001→021 (020 = perfiles públicos de empresas: +4 tablas; 021 = Libro de Reclamaciones: +3 tablas y 5 ajustes legal.* en NULL). Referencia anterior (001→019, F18-07): tablas 49 · columnas 496 [13a439ac3096] · índices 221 [8cecf83a85ba] · fks 81 [dd9f630fb43f] · checks 12 [e598da78a1e9]",
   "sql_mode": "STRICT_TRANS_TABLES,ERROR_FOR_DIVISION_BY_ZERO,NO_AUTO_CREATE_USER,NO_ENGINE_SUBSTITUTION",
-  "tablas": 49,
-  "columnas": {"total": 496, "huella": "13a439ac3096"},
-  "indices": {"total": 221, "huella": "8cecf83a85ba"},
-  "fks": {"total": 81, "huella": "dd9f630fb43f"},
-  "checks": {"total": 12, "huella": "e598da78a1e9"}
+  "tablas": 56,
+  "columnas": {"total": 645, "huella": "e970d1328474"},
+  "indices": {"total": 253, "huella": "0ab3681cfa99"},
+  "fks": {"total": 96, "huella": "5fc422fb71e2"},
+  "checks": {"total": 25, "huella": "7087d7d9c88d"}
 }

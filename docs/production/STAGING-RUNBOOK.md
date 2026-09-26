@@ -169,7 +169,7 @@ ni leer otras bases ni `mysql.user`; `busperu_migrator` tampoco puede crear base
 
 ---
 
-## 5. Esquema: dump y migraciones 001 → 019
+## 5. Esquema: dump y migraciones 001 → 021
 
 ```bash
 sudo DB_HOST=<DatabaseEndpoint> bash /opt/busperu/current/infra/aws/scripts/apply-migrations.sh
@@ -177,9 +177,9 @@ sudo DB_HOST=<DatabaseEndpoint> bash /opt/busperu/current/infra/aws/scripts/appl
 
 Se ejecuta como `busperu_migrator`, **sin `--force`**, y se detiene en el primer error. Antes
 comprueba que el servidor sea MariaDB 10.11 con el modo estricto esperado y que la base esté vacía.
-Resultado esperado: dump + 19 migraciones OK y 49 tablas.
+Resultado esperado: dump + 21 migraciones OK y 56 tablas (F18-19; eran 19 y 49 hasta F18-18).
 
-Verificación obligatoria frente a la referencia (`schema-reference.json`, validada en MariaDB 10.11.19 en F18-07):
+Verificación obligatoria frente a la referencia (`schema-reference.json`, regenerada en MariaDB 10.11.19 en F18-19):
 
 ```bash
 umask 077; f=$(mktemp)
@@ -190,11 +190,15 @@ DB_HOST=<endpoint> DB_USER=busperu_migrator DB_PASSWORD_FILE="$f" DB_NAME=busper
 shred -u "$f"
 ```
 
-Compara columnas, índices, claves ajenas y CHECKs con `schema-reference.json` (496 / 221 / 81 / 12; eran 492 columnas
-hasta la 018: la 019 añade las 4 del cifrado bancario) y
+Compara columnas, índices, claves ajenas y CHECKs con `schema-reference.json` (645 / 253 / 96 / 25 desde F18-19; con
+001→019 eran 496 / 221 / 81 / 12, y 492 columnas hasta la 018) y
 comprueba las reglas de F18-02B: columnas generadas STORED, `ON UPDATE RESTRICT` en
 `fk_integrations_company` y `fk_bus_layouts_bus`, colación `utf8mb4_unicode_ci` y columnas JSON como
 texto. Cualquier diferencia detiene el despliegue.
+
+> **`busperu_staging` existente (F18-19):** está en 001→019. Antes de desplegar el código de F18-19 hay que aplicarle
+> `020-company-public-profiles.sql` y después `021-complaint-book.sql` con `apply-one-migration.sh` (una por una, con
+> snapshot previo) y pasar la huella. Hasta entonces, la huella nueva da diferencias: es lo esperado.
 
 ### 5.1 Base que ya existe: migración 019 y cifrado de los datos bancarios (F18-07)
 
@@ -456,7 +460,7 @@ Ensayado contra un **MariaDB 10.11.19 real** (instancia portable aislada) con la
 | --- | --- |
 | `create-db-users.sh` (dos veces) | usuarios y permisos correctos e idempotentes |
 | Privilegios mínimos | `busperu_app` no puede CREATE/ALTER/DROP/TRUNCATE ni leer otras bases |
-| `apply-migrations.sh` | dump + 001→019 sin `--force`; se niega si la base ya tiene tablas (019 validada en 10.11.19 en F18-07) |
+| `apply-migrations.sh` | dump + 001→021 sin `--force`; se niega si la base ya tiene tablas (019 validada en 10.11.19 en F18-07; 020–021 en F18-19) |
 | `apply-one-migration.sh` | UNA migración nombrada sobre una base existente de 49 tablas, repitiendo el nombre de la base (F18-07A, §5.1) |
 | `schema-fingerprint.cjs` | idéntico a la referencia de F18-02B |
 | Arranque con configuración de producción | todas las guardas pasan; `/api/ready` 200 |

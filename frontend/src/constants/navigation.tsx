@@ -2,6 +2,7 @@ import {
   Armchair,
   BadgeCheck,
   Bell,
+  BookOpen,
   Bus,
   Building2,
   CalendarClock,
@@ -23,6 +24,7 @@ import {
   ScrollText,
   Settings,
   ShieldCheck,
+  Store,
   Star,
   Ticket,
   TicketCheck,
@@ -79,6 +81,9 @@ export const COMPANY_NAV: NavItem[] = [
   { label: 'Notificaciones', to: '/company/notifications', icon: <Bell {...iconProps} />, section: 'Gestión' },
   { label: 'Soporte', to: '/company/support', icon: <Headphones {...iconProps} />, section: 'Gestión' },
   { label: 'Configuración', to: '/company/settings', icon: <Settings {...iconProps} />, permissions: ['companies.view'], section: 'Gestión' },
+  // F18-19 · «Mi empresa → Perfil público» y hojas del Libro de Reclamaciones relacionadas con la empresa.
+  { label: 'Perfil público', to: '/company/profile', icon: <Store {...iconProps} />, permissions: ['companies.view'], section: 'Mi empresa' },
+  { label: 'Libro de reclamaciones', to: '/company/complaints', icon: <BookOpen {...iconProps} />, permissions: ['companies.update'], section: 'Mi empresa' },
 ];
 
 export const ADMIN_NAV: NavItem[] = [
@@ -101,6 +106,8 @@ export const ADMIN_NAV: NavItem[] = [
   { label: 'Finanzas', to: '/admin/financial', icon: <Receipt {...iconProps} />, permissions: ['reports.view'], section: 'Gestión principal' },
 
   { label: 'Destinos', to: '/admin/destinations', icon: <MapPinned {...iconProps} />, permissions: ['settings.view'], section: 'Contenido' },
+  { label: 'Perfiles públicos', to: '/admin/company-profiles', icon: <Store {...iconProps} />, permissions: ['companies.update'], section: 'Contenido' },
+  { label: 'Libro de reclamaciones', to: '/admin/complaints', icon: <BookOpen {...iconProps} />, permissions: ['settings.view'], section: 'Contenido' },
 
   { label: 'Reportes', to: '/admin/reports', icon: <FileText {...iconProps} />, permissions: ['reports.view'], section: 'Configuración' },
   { label: 'Promociones', to: '/admin/promotions', icon: <Megaphone {...iconProps} />, permissions: ['promotions.view'], section: 'Configuración' },

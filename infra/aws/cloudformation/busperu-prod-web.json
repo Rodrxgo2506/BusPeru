@@ -193,7 +193,7 @@
           "Comment": "BusPeru prod: CSP, HSTS y cabeceras de seguridad del SPA",
           "SecurityHeadersConfig": {
             "ContentSecurityPolicy": {
-              "ContentSecurityPolicy": "default-src 'self'; script-src 'self' https://checkout.culqi.com; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data: https://api.busperuonline.pe https://*.wikimedia.org https://*.culqi.com; connect-src 'self' https://api.busperuonline.pe; frame-src https://checkout.culqi.com https://checkoutview.culqi.com; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'; upgrade-insecure-requests",
+              "ContentSecurityPolicy": "default-src 'self'; script-src 'self' https://checkout.culqi.com; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data: https://api.busperuonline.pe https://*.wikimedia.org https://*.culqi.com; connect-src 'self' https://api.busperuonline.pe; frame-src https://checkout.culqi.com https://checkoutview.culqi.com https://www.openstreetmap.org; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'; upgrade-insecure-requests",
               "Override": true
             },
             "StrictTransportSecurity": {

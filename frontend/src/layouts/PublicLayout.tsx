@@ -1,4 +1,4 @@
-import { Bell, Gift, Home, Menu, Search, Ticket, User, X } from 'lucide-react';
+import { Bell, BookOpen, Gift, Home, Menu, Search, Ticket, User, X } from 'lucide-react';
 import { useState } from 'react';
 import { Link, NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom';
 import { RouteSuspense } from '@/components/common/RouteSuspense';
@@ -211,7 +211,7 @@ function PublicFooter() {
       */}
       <AndesSilhouette />
 
-      <div className="mx-auto grid max-w-7xl gap-8 px-4 py-9 sm:px-6 md:grid-cols-2 lg:grid-cols-4 lg:px-8 lg:py-10">
+      <div className="mx-auto grid max-w-7xl gap-8 px-4 py-9 sm:px-6 md:grid-cols-2 lg:grid-cols-5 lg:px-8 lg:py-10">
         <div className="lg:pr-6">
           <Logo />
           <p className="mt-3 max-w-xs text-sm leading-relaxed text-muted">
@@ -241,6 +241,30 @@ function PublicFooter() {
             { label: 'Registrar mi empresa', to: '/empresa/registro' },
           ]}
         />
+        <FooterColumn
+          title="Información útil"
+          links={[
+            { label: 'Términos y condiciones', to: '/terminos' },
+            { label: 'Política de privacidad', to: '/privacidad' },
+            { label: 'Política de cookies', to: '/cookies' },
+            { label: 'Reservas y cancelaciones', to: '/reservas-y-cancelaciones' },
+            { label: 'Información de pagos', to: '/pagos' },
+            { label: 'Toda la información', to: '/informacion' },
+          ]}
+        />
+      </div>
+      {/* Aviso del Libro de Reclamaciones (DS 011-2011-PCM, art. 9): visible y accesible desde todo el sitio. */}
+      <div className="mx-auto max-w-7xl px-4 pb-6 sm:px-6 lg:px-8">
+        <Link
+          to="/libro-de-reclamaciones"
+          className="inline-flex items-center gap-3 rounded-card bg-white px-4 py-3 text-sm shadow-card ring-1 ring-black/5 transition hover:ring-brand-300"
+        >
+          <BookOpen className="h-6 w-6 text-brand-600" aria-hidden />
+          <span>
+            <strong className="block text-ink">Libro de Reclamaciones</strong>
+            <span className="text-xs text-muted">Conforme al Código de Protección y Defensa del Consumidor, contamos con un Libro de Reclamaciones virtual.</span>
+          </span>
+        </Link>
       </div>
       <div className="border-t border-border">
         <p className="mx-auto max-w-7xl px-4 py-3.5 text-center text-xs text-muted sm:px-6 lg:px-8">

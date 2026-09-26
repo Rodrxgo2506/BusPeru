@@ -1,4 +1,6 @@
 import { Router, type Response } from 'express';
+import rateLimit from 'express-rate-limit';
+import { env } from '../config/env';
 import { validate } from '../middleware/validate.middleware';
 import { searchItinerarySchema } from '../validators/itinerary.validators';
 import { query, queryOne } from '../config/database';
@@ -8,6 +10,9 @@ import { findPublicDestination, listPublicDestinations, readBranding } from '../
 import { readPublicFile } from '../services/file-storage.service';
 import { readPublicSettings } from '../services/settings.service';
 import { findPublicTrip, getTripLayout, searchTrips, seatMap } from '../services/trip.service';
+import { publicGallery, publicProfile, publicReviews, publicSlugs } from '../services/company-profile.service';
+import { createComplaint, legalInfo, lookupComplaint } from '../services/complaint-book.service';
+import { createComplaintSchema, lookupComplaintSchema } from '../validators/company-profile.validators';
 import { ApiError } from '../utils/ApiError';
 import { asyncHandler, sendList, sendSuccess } from '../utils/http';
 import { buildPagination, parseListQuery, parseId } from '../utils/query';
@@ -43,14 +48,84 @@ router.get(
 router.get(
   '/companies',
   asyncHandler(async (_req, res) => {
-    const companies = await query(
+    const companies = await query<Record<string, unknown> & { id: number }>(
       `SELECT co.id, co.name, co.logo_url, co.description,
               (SELECT ROUND(AVG(rv.rating), 1) FROM reviews rv WHERE rv.company_id = co.id AND rv.status = 'PUBLISHED') AS rating,
               (SELECT COUNT(*) FROM reviews rv WHERE rv.company_id = co.id AND rv.status = 'PUBLISHED') AS reviews_count,
               (SELECT COUNT(*) FROM routes r WHERE r.company_id = co.id AND r.status = 'ACTIVE') AS routes_count
        FROM companies co WHERE co.status = 'ACTIVE' ORDER BY co.name ASC`,
     );
-    sendSuccess(res, companies);
+    // F18-19 · solo las empresas con perfil publicado tienen URL propia (/empresas/<slug>).
+    const slugs = await publicSlugs();
+    sendSuccess(
+      res,
+      companies.map((company) => ({ ...company, slug: slugs.get(Number(company.id))?.slug ?? null, tagline: slugs.get(Number(company.id))?.tagline ?? null })),
+    );
+  }),
+);
+
+/** F18-19 · perfil público de una empresa: solo contenido APROBADO y visible. Sin perfil publicado → 404. */
+router.get(
+  '/companies/:slug',
+  asyncHandler(async (req, res) => {
+    sendSuccess(res, await publicProfile(String(req.params.slug)));
+  }),
+);
+
+router.get(
+  '/companies/:slug/gallery',
+  asyncHandler(async (req, res) => {
+    const page = Math.max(1, Number(req.query.page) || 1);
+    const { rows, total, limit } = await publicGallery(String(req.params.slug), page);
+    sendList(res, rows, buildPagination(total, page, limit));
+  }),
+);
+
+router.get(
+  '/companies/:slug/reviews',
+  asyncHandler(async (req, res) => {
+    const listQuery = parseListQuery(req.query as Record<string, unknown>);
+    const limit = Math.min(listQuery.limit, 20);
+    const { rows, total } = await publicReviews(String(req.params.slug), listQuery.page, limit);
+    sendList(res, rows, buildPagination(total, listQuery.page, limit));
+  }),
+);
+
+/** Datos del proveedor para el Libro de Reclamaciones y los textos legales (null = PENDIENTE). */
+router.get(
+  '/legal',
+  asyncHandler(async (_req, res) => {
+    sendSuccess(res, await legalInfo());
+  }),
+);
+
+/**
+ * F18-19 · Libro de Reclamaciones virtual. Público (con o sin sesión) y con su propio límite de peticiones:
+ * cada hoja genera un correlativo y un correo, así que no se deja inundar.
+ */
+const complaintLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  limit: env.rateLimit.auth,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { success: false, message: 'Demasiadas solicitudes. Vuelve a intentarlo en unos minutos.' },
+});
+
+router.post(
+  '/complaints',
+  complaintLimiter,
+  validate(createComplaintSchema),
+  asyncHandler(async (req, res) => {
+    sendSuccess(res, await createComplaint(req, req.body), 201);
+  }),
+);
+
+router.post(
+  '/complaints/lookup',
+  complaintLimiter,
+  validate(lookupComplaintSchema),
+  asyncHandler(async (req, res) => {
+    sendSuccess(res, await lookupComplaint(req.body.code, req.body.document_number));
   }),
 );
 

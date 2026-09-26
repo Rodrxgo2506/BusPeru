@@ -44,12 +44,13 @@ export function CompaniesPage() {
             <CompanyCard
               key={company.id}
               name={company.name}
-              description={company.description}
+              description={company.tagline ?? company.description}
               logoUrl={company.logo_url}
               rating={company.rating}
               reviewsCount={company.reviews_count}
               routesCount={company.routes_count}
-              to={`/buscar?company_id=${company.id}&date=${todayIso()}`}
+              // F18-19: con perfil público aprobado, la tarjeta lleva al perfil; si no, al buscador como antes.
+              to={company.slug ? `/empresas/${company.slug}` : `/buscar?company_id=${company.id}&date=${todayIso()}`}
             />
           ))}
         </div>

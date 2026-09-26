@@ -9,7 +9,7 @@
     "preview": "vite preview",
     "typecheck": "tsc --noEmit",
     "lint": "eslint . --max-warnings 0",
-    "test": "node --test src/config/api-url.test.ts src/utils/search-helpers.test.ts src/services/response-cache.test.ts src/services/refresh-status.test.ts"
+    "test": "node --test src/config/api-url.test.ts src/utils/search-helpers.test.ts src/services/response-cache.test.ts src/services/refresh-status.test.ts src/utils/company-profile.test.ts"
   },
   "dependencies": {
     "lucide-react": "^0.469.0",

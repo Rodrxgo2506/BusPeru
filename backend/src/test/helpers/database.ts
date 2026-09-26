@@ -119,7 +119,7 @@ export async function setupTestDatabase(databaseName: string): Promise<void> {
     // Migraciones aplicadas sobre el dump. La base de pruebas debe tener el mismo esquema
     // que la real, incluida la tabla de recuperación de contraseña (migración 002).
     const migrationsDir = path.resolve(__dirname, '../../../../database/migrations');
-    for (const file of ['002-password-reset-tokens.sql', '003-company-bank-accounts.sql', '004-drivers.sql', '005-booking-groups.sql', '006-company-documents.sql', '007-users-oauth.sql', '008-oauth-flows.sql', '009-company-integrations.sql', '010-bus-layout-versioning.sql', '011-trip-seat-type-prices-restrict.sql', '012-drop-redundant-code-indexes.sql', '013-settlement-item-unique-transaction.sql', '014-revoked-sessions.sql', '015-destinations-content-branding.sql', '016-destination-enhancements.sql', '017-users-sessions-valid-from.sql', '018-fk-on-update-restrict-mariadb-1011.sql', '019-bank-accounts-encryption.sql']) {
+    for (const file of ['002-password-reset-tokens.sql', '003-company-bank-accounts.sql', '004-drivers.sql', '005-booking-groups.sql', '006-company-documents.sql', '007-users-oauth.sql', '008-oauth-flows.sql', '009-company-integrations.sql', '010-bus-layout-versioning.sql', '011-trip-seat-type-prices-restrict.sql', '012-drop-redundant-code-indexes.sql', '013-settlement-item-unique-transaction.sql', '014-revoked-sessions.sql', '015-destinations-content-branding.sql', '016-destination-enhancements.sql', '017-users-sessions-valid-from.sql', '018-fk-on-update-restrict-mariadb-1011.sql', '019-bank-accounts-encryption.sql', '020-company-public-profiles.sql', '021-complaint-book.sql']) {
       const migration = path.join(migrationsDir, file);
       if (!fs.existsSync(migration)) throw new Error(`Falta la migración ${file}`);
       for (const statement of splitStatements(fs.readFileSync(migration, 'utf8'))) {
@@ -146,6 +146,9 @@ export async function truncateOperationalData(databaseName: string): Promise<voi
 
   const tables = [
     // Migración 015: los hijos antes que el destino (TRUNCATE no arrastra en cascada).
+    // F18-19 · perfil público de empresas y Libro de Reclamaciones.
+    'company_gallery_images', 'company_agencies', 'company_services', 'company_profiles',
+    'complaint_book_events', 'complaint_book_entries', 'complaint_book_counters',
     'destination_festivities', 'destination_attractions', 'destinations',
     'settlement_items', 'settlements', 'financial_transactions', 'refunds', 'payments',
     'booking_groups',

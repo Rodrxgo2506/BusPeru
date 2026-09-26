@@ -263,6 +263,9 @@ function separacion(nombre, t) {
   if (!commons || !permitido('img-src', commons)) fallo(`CSP: img-src no permite las fotos de Commons (${commons})`);
   for (const h of hojas) if (!permitido('style-src', h)) fallo(`CSP: style-src no permite ${h}`);
   if (!precon.some((u) => permitido('font-src', u))) fallo('CSP: font-src no permite el origen de las fuentes');
+  // F18-19 · el mapa embebido del perfil de empresa (iframe) debe estar permitido en frame-src.
+  const mapa = leer(`${raiz}src/utils/company-profile.ts`).match(/return `(https:\/\/[a-z0-9.-]+)\/export\/embed\.html/)?.[1];
+  if (!mapa || !permitido('frame-src', mapa)) fallo(`CSP: frame-src no permite el mapa embebido (${mapa})`);
   const externos = [...leer(`${raiz}src/services/culqi.ts`).matchAll(/https:\/\/[a-z0-9.-]+/g), ...html.matchAll(/https:\/\/[a-z0-9.-]+/g)].map((m) => new URL(m[0]).host);
   for (const h of new Set(externos)) {
     if (!['checkout.culqi.com', 'fonts.googleapis.com', 'fonts.gstatic.com'].includes(h)) fallo(`CSP: origen externo nuevo en el código sin revisar (${h})`);

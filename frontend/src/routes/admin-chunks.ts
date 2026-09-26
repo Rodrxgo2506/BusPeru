@@ -18,6 +18,8 @@ export const loadFinancePages = () => import('@/pages/modules/FinancePages');
 export const loadMarketingPages = () => import('@/pages/modules/MarketingPages');
 export const loadIntegrationsPage = () => import('@/pages/modules/IntegrationsPage');
 export const loadBrandingPage = () => import('@/pages/admin/BrandingPage');
+/** F18-19 · perfiles públicos de empresas y Libro de Reclamaciones. */
+export const loadPublicContentAdminPages = () => import('@/pages/admin/PublicContentAdminPages');
 
 /** Chunk que necesita cada entrada del menú ADMIN (misma lista que `ADMIN_NAV`). */
 export const ADMIN_ROUTE_CHUNKS: Readonly<Record<string, () => Promise<unknown>>> = {
@@ -40,6 +42,8 @@ export const ADMIN_ROUTE_CHUNKS: Readonly<Record<string, () => Promise<unknown>>
   '/admin/financial': loadFinancePages,
   '/admin/reports': loadFinancePages,
   '/admin/destinations': loadDestinationsAdminPage,
+  '/admin/company-profiles': loadPublicContentAdminPages,
+  '/admin/complaints': loadPublicContentAdminPages,
   '/admin/promotions': loadMarketingPages,
   '/admin/coupons': loadMarketingPages,
   '/admin/reviews': loadMarketingPages,

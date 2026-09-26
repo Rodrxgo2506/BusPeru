@@ -50,6 +50,7 @@ export const API_ORIGIN = `https://api.${DOMINIO}`;
  * CSP del SPA. Cada origen externo está justificado por el código:
  *   · script-src  checkout.culqi.com         → Culqi Checkout v4 (frontend/src/services/culqi.ts)
  *   · frame-src   checkout[view].culqi.com   → ventana de pago de Culqi (iframe checkoutview)
+ *                 www.openstreetmap.org     → mapa de agencias del perfil de empresa (F18-19), solo al pulsar «Ver en mapa»
  *   · style-src   fonts.googleapis.com, 'unsafe-inline' → hoja de Google Fonts (index.html) y estilos que
  *                 inyectan Culqi y las bibliotecas de gráficos. Solo estilos: los scripts en línea siguen bloqueados.
  *   · font-src    fonts.gstatic.com          → fuente Inter
@@ -65,7 +66,7 @@ export const CSP = [
   "font-src 'self' https://fonts.gstatic.com",
   `img-src 'self' data: ${API_ORIGIN} https://*.wikimedia.org https://*.culqi.com`,
   `connect-src 'self' ${API_ORIGIN}`,
-  'frame-src https://checkout.culqi.com https://checkoutview.culqi.com',
+  'frame-src https://checkout.culqi.com https://checkoutview.culqi.com https://www.openstreetmap.org',
   "object-src 'none'",
   "base-uri 'self'",
   "form-action 'self'",

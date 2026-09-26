@@ -4,7 +4,7 @@ import { RouteSuspense } from '@/components/common/RouteSuspense';
 import { AdminLayout, CompanyLayout, CustomerLayout, PublicLayout } from '@/layouts';
 import { GuestRoute, PermissionRoute, ProtectedRoute, RoleRoute } from '@/guards';
 import { CheckoutProvider } from '@/pages/public/checkout/CheckoutContext';
-import { loadAdminManagementPages, loadDestinationsAdminPage, loadSalesPages, loadSystemPages, loadTripPages } from './admin-chunks';
+import { loadAdminManagementPages, loadDestinationsAdminPage, loadPublicContentAdminPages, loadSalesPages, loadSystemPages, loadTripPages } from './admin-chunks';
 
 const HomePage = lazy(() => import('@/pages/public/HomePage').then((module) => ({ default: module.HomePage })));
 const SearchResultsPage = lazy(() => import('@/pages/public/SearchResultsPage').then((module) => ({ default: module.SearchResultsPage })));
@@ -14,6 +14,19 @@ const CompaniesPublicPage = lazy(() => import('@/pages/public/InfoPages').then((
 const OffersPage = lazy(() => import('@/pages/public/InfoPages').then((module) => ({ default: module.OffersPage })));
 const HelpPage = lazy(() => import('@/pages/public/InfoPages').then((module) => ({ default: module.HelpPage })));
 const NotFoundPage = lazy(() => import('@/pages/public/InfoPages').then((module) => ({ default: module.NotFoundPage })));
+// F18-19 · perfil público de empresas e «Información útil».
+const CompanyPublicPage = lazy(() => import('@/pages/public/CompanyProfilePage').then((module) => ({ default: module.CompanyProfilePage })));
+const InfoHubPage = lazy(() => import('@/pages/public/LegalPages').then((module) => ({ default: module.InfoHubPage })));
+const TermsPage = lazy(() => import('@/pages/public/LegalPages').then((module) => ({ default: module.TermsPage })));
+const PrivacyPage = lazy(() => import('@/pages/public/LegalPages').then((module) => ({ default: module.PrivacyPage })));
+const CookiesPage = lazy(() => import('@/pages/public/LegalPages').then((module) => ({ default: module.CookiesPage })));
+const BookingPolicyPage = lazy(() => import('@/pages/public/LegalPages').then((module) => ({ default: module.BookingPolicyPage })));
+const PaymentsInfoPage = lazy(() => import('@/pages/public/LegalPages').then((module) => ({ default: module.PaymentsInfoPage })));
+const ComplaintBookPage = lazy(() => import('@/pages/public/LegalPages').then((module) => ({ default: module.ComplaintBookPage })));
+const CompanyPublicProfileEditor = lazy(() => import('@/pages/company/CompanyPublicProfilePage').then((module) => ({ default: module.CompanyPublicProfilePage })));
+const CompanyComplaintsPage = lazy(() => import('@/pages/company/CompanyComplaintsPage').then((module) => ({ default: module.CompanyComplaintsPage })));
+const CompanyProfilesAdminPage = lazy(() => loadPublicContentAdminPages().then((module) => ({ default: module.CompanyProfilesAdminPage })));
+const ComplaintsAdminPage = lazy(() => loadPublicContentAdminPages().then((module) => ({ default: module.ComplaintsAdminPage })));
 
 const SeatSelectionPage = lazy(() => import('@/pages/public/checkout/SeatSelectionPage').then((module) => ({ default: module.SeatSelectionPage })));
 const PassengerPage = lazy(() => import('@/pages/public/checkout/PassengerPage').then((module) => ({ default: module.PassengerPage })));
@@ -164,8 +177,16 @@ export function AppRoutes() {
           <Route path="destinos" element={<DestinationsPage />} />
           <Route path="destinos/:slug" element={<DestinationDetailPage />} />
           <Route path="empresas" element={<CompaniesPublicPage />} />
+          <Route path="empresas/:slug" element={<CompanyPublicPage />} />
           <Route path="ofertas" element={<OffersPage />} />
           <Route path="ayuda" element={<HelpPage />} />
+          <Route path="informacion" element={<InfoHubPage />} />
+          <Route path="terminos" element={<TermsPage />} />
+          <Route path="privacidad" element={<PrivacyPage />} />
+          <Route path="cookies" element={<CookiesPage />} />
+          <Route path="reservas-y-cancelaciones" element={<BookingPolicyPage />} />
+          <Route path="pagos" element={<PaymentsInfoPage />} />
+          <Route path="libro-de-reclamaciones" element={<ComplaintBookPage />} />
 
           <Route path="viaje/:tripId/asientos" element={<SeatSelectionPage />} />
           <Route path="reserva/pasajeros" element={<PassengerPage />} />
@@ -370,6 +391,22 @@ export function AppRoutes() {
             element={
               <PermissionRoute permission="companies.view">
                 <CompanyProfilePage />
+              </PermissionRoute>
+            }
+          />
+          <Route
+            path="profile"
+            element={
+              <PermissionRoute permission="companies.view">
+                <CompanyPublicProfileEditor />
+              </PermissionRoute>
+            }
+          />
+          <Route
+            path="complaints"
+            element={
+              <PermissionRoute permission="companies.update">
+                <CompanyComplaintsPage />
               </PermissionRoute>
             }
           />
@@ -585,6 +622,23 @@ export function AppRoutes() {
             element={
               <PermissionRoute permission="settings.view">
                 <SettingsPage scope="admin" />
+              </PermissionRoute>
+            }
+          />
+          {/* F18-19 · supervisión del perfil público de las empresas y Libro de Reclamaciones (la API exige rol ADMIN). */}
+          <Route
+            path="company-profiles"
+            element={
+              <PermissionRoute permission="companies.update">
+                <CompanyProfilesAdminPage />
+              </PermissionRoute>
+            }
+          />
+          <Route
+            path="complaints"
+            element={
+              <PermissionRoute permission="settings.view">
+                <ComplaintsAdminPage />
               </PermissionRoute>
             }
           />

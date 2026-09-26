@@ -7,7 +7,9 @@
 # (p. ej. 019 sobre busperu_staging, instalada con 001 → 018). Con el usuario migrador, sin --force: se
 # detiene en el primer error y lo muestra tal cual. Se niega si:
 #   · la base repetida no coincide con DB_NAME (una orden pegada contra otra base no hace nada);
-#   · la base no tiene las 49 tablas del esquema (no es una instalación de BusPerú);
+#   · la base no tiene un número de tablas de una instalación de BusPerú conocida: 49 (001 → 019),
+#     53 (+020, perfiles públicos) o 56 (+021, Libro de Reclamaciones). 020 y 021 son idempotentes
+#     (CREATE TABLE IF NOT EXISTS / INSERT IGNORE), así que repetirlas no cambia nada;
 #   · el archivo no es una migración numerada del propio paquete.
 # Imprime solo nombres, recuentos y el resultado de las comprobaciones del script (sin datos).
 source "$(dirname "$0")/db-common.sh"
@@ -25,7 +27,7 @@ verificar_servidor "${MIGRADOR}"
 m() { "${MARIADB}" --defaults-extra-file="$(ruta_cliente "${MIGRADOR}")" "$@"; }
 
 TABLAS="$(m -N -B -e "SELECT COUNT(*) FROM information_schema.TABLES WHERE TABLE_SCHEMA='${DB_NAME}'")"
-[ "${TABLAS}" = 49 ] || { echo "ABORTADO: ${DB_NAME} tiene ${TABLAS} tablas y se esperaban 49" >&2; exit 1; }
+case "${TABLAS}" in 49|53|56) ;; *) echo "ABORTADO: ${DB_NAME} tiene ${TABLAS} tablas y se esperaban 49, 53 o 56" >&2; exit 1 ;; esac
 echo "base destino: ${DB_NAME} (${TABLAS} tablas) · usuario: busperu_migrator · migración: ${ARCHIVO}"
 
 if ! salida="$(m "${DB_NAME}" < "${MIGRACION}" 2>&1)"; then
