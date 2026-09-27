@@ -168,7 +168,18 @@ function CatalogHero({ cities }: { cities: string[] }) {
   return (
     <>
       <section className="relative isolate flex h-[220px] items-end overflow-hidden bg-slate-800 sm:h-[260px] lg:h-[300px]">
-        <img src={destinationsHeroImage} alt="" aria-hidden className="absolute inset-0 -z-10 h-full w-full object-cover" style={{ objectPosition: '30% 58%' }} />
+        <img
+          src={destinationsHeroImage.src}
+          srcSet={destinationsHeroImage.srcSet}
+          sizes="100vw"
+          width={destinationsHeroImage.width}
+          height={destinationsHeroImage.height}
+          alt=""
+          aria-hidden
+          className="absolute inset-0 -z-10 h-full w-full object-cover"
+          style={{ objectPosition: '30% 58%' }}
+          {...{ fetchpriority: 'high' }}
+        />
         <span className="absolute inset-0 -z-10 bg-gradient-to-r from-black/70 via-black/40 to-black/20" aria-hidden />
 
         <div className="mx-auto w-full max-w-7xl px-4 pb-10 text-white sm:px-6 lg:px-8 lg:pb-14">

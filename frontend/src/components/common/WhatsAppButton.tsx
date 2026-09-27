@@ -13,6 +13,7 @@
  */
 
 import { useState } from 'react';
+import { useLocation } from 'react-router-dom';
 import { cn } from '@/utils/cn';
 
 /** Número de pruebas. Sin espacios ni signos: `wa.me` solo admite dígitos. */
@@ -24,11 +25,15 @@ const HREF = `https://wa.me/${PHONE}?text=${encodeURIComponent(MESSAGE)}`;
 
 export function WhatsAppButton() {
   const [open, setOpen] = useState(false);
+  // La pantalla de asientos tiene en móvil una barra fija con «Continuar» sobre la navegación
+  // inferior: ahí el botón sube por encima de esa barra para no tapar la acción principal.
+  const { pathname } = useLocation();
+  const conBarraDeCompra = /^\/viaje\/[^/]+\/asientos/.test(pathname);
 
   return (
     /* En móvil sube por encima de la barra de navegación inferior para no taparla. */
     <div
-      className="group fixed bottom-[5.5rem] right-4 z-40 lg:bottom-5 lg:right-5"
+      className={cn('group fixed right-4 z-40 lg:bottom-5 lg:right-5', conBarraDeCompra ? 'bottom-[10.5rem]' : 'bottom-[5.5rem]')}
       onMouseEnter={() => setOpen(true)}
       onMouseLeave={() => setOpen(false)}
       onFocus={() => setOpen(true)}

@@ -21,7 +21,7 @@
 //      - assets/ con `Cache-Control: public,max-age=31536000,immutable`;
 //      - el resto (index.html) con `no-cache`, después de los assets;
 //      - sin --delete: los chunks de versiones anteriores se conservan para las pestañas ya abiertas;
-//      - verificación: tamaño y MD5 (ETag) de cada objeto y Content-Type de index.html, JS y CSS;
+//      - verificación: tamaño y MD5 (ETag) de cada objeto y Content-Type de index.html, JS, CSS y WebP;
 //      - invalidación de `/` y `/index.html`, esperando a que termine. Los assets llevan hash y son
 //        inmutables, así que no se invalidan.
 //
@@ -48,7 +48,7 @@ const SECRETOS = [
   ['clave privada PEM', /-----BEGIN [A-Z ]*PRIVATE KEY-----/],
   ['JWT', /eyJ[A-Za-z0-9_-]{10,}\.eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}/],
 ];
-const TIPOS = { '.html': 'text/html', '.js': 'text/javascript', '.css': 'text/css', '.json': 'application/json', '.svg': 'image/svg+xml' };
+const TIPOS = { '.html': 'text/html', '.js': 'text/javascript', '.css': 'text/css', '.json': 'application/json', '.svg': 'image/svg+xml', '.webp': 'image/webp' };
 
 const args = process.argv.slice(2);
 const opcion = (n) => { const i = args.indexOf(`--${n}`); return i >= 0 ? args[i + 1] : undefined; };
@@ -137,7 +137,9 @@ if (!EJECUTAR) {
 }
 
 // ------------------------------------------------------------------ 6. publicación
-aws('s3', 'sync', path.join(DIST, 'assets'), `s3://${BUCKET}/assets`, '--cache-control', 'public,max-age=31536000,immutable', '--only-show-errors');
+aws('s3', 'sync', path.join(DIST, 'assets'), `s3://${BUCKET}/assets`, '--exclude', '*.webp', '--cache-control', 'public,max-age=31536000,immutable', '--only-show-errors');
+// Las fotos WebP con su tipo explícito: la CLI lo deduce del sistema y en Windows puede caer en binary/octet-stream.
+aws('s3', 'sync', path.join(DIST, 'assets'), `s3://${BUCKET}/assets`, '--exclude', '*', '--include', '*.webp', '--content-type', 'image/webp', '--cache-control', 'public,max-age=31536000,immutable', '--only-show-errors');
 aws('s3', 'sync', DIST, `s3://${BUCKET}`, '--exclude', 'assets/*', '--cache-control', 'no-cache', '--only-show-errors');
 const remotos = new Map();
 let token;
@@ -153,7 +155,7 @@ const distintos = manifiesto.filter((m) => {
   return !etag.includes('-') && etag !== m.md5;
 });
 if (distintos.length) parar(`objetos ausentes o distintos en S3: ${distintos.slice(0, 10).map((m) => m.ruta)}`);
-const revisar = manifiesto.filter((m) => m.ruta === 'index.html' || /\.(js|css)$/.test(m.ruta));
+const revisar = manifiesto.filter((m) => m.ruta === 'index.html' || /\.(js|css|webp)$/.test(m.ruta));
 for (const m of revisar) {
   const h = aws('s3api', 'head-object', '--bucket', BUCKET, '--key', m.ruta);
   const esperado = TIPOS[path.extname(m.ruta)];

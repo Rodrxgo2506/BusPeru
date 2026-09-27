@@ -1,7 +1,7 @@
 import { ArrowRight, Headphones, MapPin, Route, ShieldCheck, type LucideIcon } from 'lucide-react';
 import { useState } from 'react';
 import { Link } from 'react-router-dom';
-import { destinationImage, fallbackDestinationImage, heroImages } from '@/constants/images';
+import { DESTINATION_CARD_SIZES, destinationImage, fallbackDestinationImage, heroImages } from '@/constants/images';
 import { cn } from '@/utils/cn';
 import { formatCurrency } from '@/utils/format';
 
@@ -38,16 +38,19 @@ export function HomeHero({ children }: { children: React.ReactNode }) {
         una banda de cielo, y el texto descansa sobre blanco limpio.
       */}
       <div className="pointer-events-none absolute inset-0 -z-10 lg:left-[38%]">
-        <picture>
-          <source media="(max-width: 640px)" srcSet={heroImages.mainSmall} />
-          <img
-            src={heroImages.main}
-            alt="El nevado Huascarán, en la Cordillera Blanca de los Andes peruanos"
-            className="h-full w-full object-cover object-center"
-            loading="eager"
-            decoding="async"
-          />
-        </picture>
+        {/* Imagen LCP de la portada: alojada en BusPerú, en el ancho justo (`srcSet` + `sizes`) y con
+            prioridad alta de red. En escritorio ocupa el 62 % derecho; en móvil, todo el ancho. */}
+        <img
+          src={heroImages.main.src}
+          srcSet={heroImages.main.srcSet}
+          sizes="(min-width: 1024px) 62vw, 100vw"
+          width={heroImages.main.width}
+          height={heroImages.main.height}
+          alt="El nevado Huascarán, en la Cordillera Blanca de los Andes peruanos"
+          className="h-full w-full object-cover object-center"
+          loading="eager"
+          {...{ fetchpriority: 'high' }}
+        />
 
         {/* Velo para que el titular se lea cuando el texto va encima de la foto. */}
         <div className="absolute inset-0 bg-gradient-to-b from-white/85 via-white/75 to-white/90 lg:hidden" aria-hidden />
@@ -132,7 +135,11 @@ export function DestinationCard({ city, minPrice, to }: { city: string; minPrice
     >
       <div className="relative aspect-[16/10] overflow-hidden bg-slate-100">
         <img
-          src={src}
+          src={src.src}
+          srcSet={src.srcSet || undefined}
+          sizes={DESTINATION_CARD_SIZES}
+          width={src.width}
+          height={src.height}
           alt={`Vista de ${city}`}
           loading="lazy"
           decoding="async"

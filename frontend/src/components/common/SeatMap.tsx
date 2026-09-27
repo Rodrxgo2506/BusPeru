@@ -1,7 +1,8 @@
-import { Armchair, DoorOpen, Footprints, Square, Users } from 'lucide-react';
-import { useMemo } from 'react';
+import { Armchair, Check, DoorOpen, Footprints, Square, Users } from 'lucide-react';
+import { useMemo, useRef, type KeyboardEvent } from 'react';
 import type { LayoutElementType, SeatAvailability, TripLayoutDeck } from '@/types';
 import { formatCurrency } from '@/utils/format';
+import { deckLabel, seatCategories } from '@/utils/seat-map';
 import { cn } from '@/utils/cn';
 
 /**
@@ -9,10 +10,8 @@ import { cn } from '@/utils/cn';
  *
  * LA GEOMETRÍA VIENE DEL BACKEND. `deck.row_count` y `deck.column_count` dan la rejilla, y
  * cada asiento y cada elemento se coloca en su `row_number`/`column_number` con `gridRow` y
- * `gridColumn` explícitos. Antes esta pantalla partía las filas en dos con
- * `Math.floor(columnas / 2)` y daba por supuestas cuatro columnas; con eso, un bus de tres
- * columnas o con el pasillo a un lado se dibujaba mal y nadie se enteraba. El pasillo no se
- * calcula: es una columna donde la empresa no puso nada.
+ * `gridColumn` explícitos. El pasillo no se calcula: es una columna donde la empresa no puso
+ * nada. Nada está pensado para un bus concreto: cualquier número de filas, columnas y pisos.
  *
  * SIN PISO NO HAY ELEMENTOS. `deck` es opcional para que la ficha de viaje del portal de
  * empresa —que solo consulta asientos— siga funcionando igual: sin piso, la rejilla se
@@ -39,38 +38,19 @@ const ELEMENT_LABELS: Record<LayoutElementType, string> = {
 };
 
 const ELEMENT_TONES: Record<LayoutElementType, string> = {
-  BATHROOM: 'border-purple-300 bg-purple-100 text-purple-700',
-  STAIRS: 'border-slate-300 bg-slate-200 text-slate-600',
-  DRIVER: 'border-warning-500 bg-warning-50 text-warning-700',
-  DOOR: 'border-info-400 bg-info-50 text-info-600',
-  EMPTY: 'border-dashed border-slate-300 bg-white text-slate-400',
+  BATHROOM: 'border-sky-200 bg-sky-50 text-sky-600',
+  STAIRS: 'border-slate-300 bg-slate-100 text-slate-600',
+  DRIVER: 'border-ink/15 bg-ink/5 text-ink',
+  DOOR: 'border-emerald-200 bg-emerald-50 text-emerald-600',
+  EMPTY: 'border-dashed border-slate-200 bg-transparent text-slate-300',
 };
 
 /**
- * Tonos por categoría de asiento.
- *
- * El catálogo `seat_types` lo administra cada empresa, así que no se puede escribir aquí
- * «Cama 180° es naranja»: mañana hay una categoría más y se quedaría sin color. Se reparten
- * por orden alfabético de la categoría, que es estable entre pisos y entre recargas.
+ * Marcador de categoría (solo cuando el viaje tiene varias). El catálogo `seat_types` lo
+ * administra cada empresa, así que los colores se reparten por orden alfabético de la
+ * categoría: es estable entre pisos y entre recargas, y no depende de ninguna empresa.
  */
-const SEAT_TONES = [
-  'border-info-500 bg-info-50 text-info-700 hover:border-info-600',
-  'border-brand-500 bg-brand-100 text-brand-700 hover:border-brand-600',
-  'border-brand-300 bg-brand-50 text-brand-600 hover:border-brand-500',
-  'border-success-500 bg-success-50 text-success-700 hover:border-success-600',
-  'border-warning-500 bg-warning-50 text-warning-700 hover:border-warning-600',
-  'border-purple-300 bg-purple-50 text-purple-700 hover:border-purple-400',
-];
-
-/** Categorías presentes, en el orden en que se reparten los tonos. */
-function seatTypeOrder(seats: SeatAvailability[]): string[] {
-  return [...new Set(seats.map((seat) => seat.seat_type_name ?? 'Estándar'))].sort((a, b) => a.localeCompare(b, 'es'));
-}
-
-function toneForSeat(seat: SeatAvailability, order: string[]): string {
-  const indice = order.indexOf(seat.seat_type_name ?? 'Estándar');
-  return SEAT_TONES[(indice < 0 ? 0 : indice) % SEAT_TONES.length]!;
-}
+const CATEGORY_DOTS = ['bg-sky-500', 'bg-violet-500', 'bg-emerald-500', 'bg-amber-500', 'bg-rose-500', 'bg-slate-500'];
 
 export interface SeatMapProps {
   seats: SeatAvailability[];
@@ -83,7 +63,7 @@ export interface SeatMapProps {
   activeSeatId?: number | null;
   showBusShell?: boolean;
   showHint?: boolean;
-  /** Muestra el precio dentro de la casilla. Se apaga solo cuando estorba. */
+  /** Muestra el precio dentro de la casilla. En el mapa del pasajero va en el tooltip y el resumen. */
   showPrices?: boolean;
 }
 
@@ -98,7 +78,7 @@ export function SeatMap({
   showHint = true,
   showPrices = true,
 }: SeatMapProps) {
-  const orden = useMemo(() => seatTypeOrder(seats), [seats]);
+  const categorias = useMemo(() => seatCategories(seats).map((c) => c.name), [seats]);
 
   // SIN PISO, UNA REJILLA POR PISO. La ficha del portal de empresa no pide la geometria y
   // llega con los asientos de todo el bus; dibujarlos en una sola rejilla haria que el
@@ -107,9 +87,6 @@ export function SeatMap({
   const grupos = useMemo(() => {
     if (deck) return [{ clave: deck.id, deck, asientos: seats.filter((seat) => seat.deck_id === deck.id) }];
 
-    // Se empuja sobre el array que ya esta en el mapa en vez de copiarlo entero en cada
-    // vuelta: copiarlo hacia un array nuevo convertia el agrupado en O(n²) —n(n+1)/2 copias
-    // para n asientos del mismo piso— sin ninguna ventaja. El orden de insercion es el mismo.
     const porPiso = new Map<number, SeatAvailability[]>();
     for (const seat of seats) {
       const clave = seat.deck_number ?? 1;
@@ -125,19 +102,18 @@ export function SeatMap({
   const contenido = (
     <div className="space-y-4">
       {grupos.map((grupo) => (
-        <div key={grupo.clave}>
+        // La clave del piso reinicia la animación: al cambiar de piso, el nuevo entra con un fundido corto.
+        <div key={grupo.clave} className="animate-rise-in">
           {grupos.length > 1 && (
-            <p className="mb-2 text-center text-[10px] font-semibold uppercase tracking-[0.14em] text-slate-400">
-              Piso {grupo.clave}
-            </p>
+            <p className="mb-2 text-center text-[10px] font-semibold uppercase tracking-[0.14em] text-slate-400">Piso {grupo.clave}</p>
           )}
           {/* El bus puede ser mas ancho que un telefono. Se desplaza DENTRO de su caja; la
-              pagina nunca crece a lo ancho. */}
-          <div className="-mx-1 overflow-x-auto px-1 pb-1">
+              pagina nunca crece a lo ancho. El margen superior deja sitio al tooltip de la fila 1. */}
+          <div className="-mx-1 overflow-x-auto px-1 pb-1 pt-9">
             <DeckGrid
               deck={grupo.deck}
               seats={grupo.asientos}
-              orden={orden}
+              categorias={categorias}
               selected={selected}
               activeSeatId={activeSeatId}
               maxSelectable={maxSelectable}
@@ -153,15 +129,17 @@ export function SeatMap({
   return (
     <div>
       {showBusShell ? (
-        <div className="mx-auto w-fit max-w-full overflow-hidden">
-          <div className="rounded-[40px] border border-white/70 bg-white/70 p-2.5 shadow-panel backdrop-blur-md">
-            <div className="rounded-[32px] border border-border/70 bg-white px-3 pb-5 pt-4">
-              <div className="mx-auto mb-3 flex w-fit items-center gap-2 rounded-full bg-brand-50 px-4 py-1.5 ring-1 ring-brand-100">
+        <div className="mx-auto w-fit max-w-full">
+          <div className="rounded-[44px] bg-gradient-to-b from-slate-100 to-slate-50 p-2 ring-1 ring-slate-200/80">
+            <div className="rounded-[36px] bg-white px-3 pb-5 pt-4 shadow-inner ring-1 ring-slate-200/70 sm:px-5">
+              <div className="mx-auto flex w-fit items-center gap-2 rounded-full bg-ink px-4 py-1.5 text-white">
                 <SteeringWheel />
-                <span className="text-[10px] font-semibold uppercase tracking-[0.14em] text-brand-600">Frente</span>
+                <span className="text-[10px] font-semibold uppercase tracking-[0.16em]">Frente del bus</span>
               </div>
               {contenido}
-              <div className="mx-auto mt-4 h-1.5 w-24 rounded-full bg-slate-200" aria-hidden />
+              <div className="mx-auto mt-3 flex w-fit items-center gap-2 text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-300" aria-hidden>
+                <span className="h-px w-8 bg-slate-200" /> Parte trasera <span className="h-px w-8 bg-slate-200" />
+              </div>
             </div>
           </div>
         </div>
@@ -170,7 +148,7 @@ export function SeatMap({
       )}
 
       {showHint && onToggle && (
-        <p className="mt-3 text-center text-xs text-muted">Puedes seleccionar máximo {maxSelectable} asientos</p>
+        <p className="mt-3 text-center text-xs text-muted">Puedes seleccionar como máximo {maxSelectable} {maxSelectable === 1 ? 'asiento' : 'asientos'} por compra</p>
       )}
     </div>
   );
@@ -183,7 +161,7 @@ export function SeatMap({
 function DeckGrid({
   deck,
   seats,
-  orden,
+  categorias,
   selected,
   activeSeatId,
   maxSelectable,
@@ -192,7 +170,7 @@ function DeckGrid({
 }: {
   deck: TripLayoutDeck | null;
   seats: SeatAvailability[];
-  orden: string[];
+  categorias: string[];
   selected: number[];
   activeSeatId: number | null;
   maxSelectable: number;
@@ -200,23 +178,11 @@ function DeckGrid({
   showPrices: boolean;
 }) {
   /**
-   * La geometria del piso se calcula una vez por cambio de DATOS, no en cada render.
-   *
-   * Antes se rehacia entera en cada pasada, y hay una pasada por cada clic en un asiento
-   * porque la seleccion vive en la pantalla y baja por props. Pero la rejilla y el mapa de
-   * casillas ocupadas no dependen de la seleccion: dependen del piso y de los asientos. Por
-   * eso `selected`, `activeSeatId` y `maxSelectable` NO estan en las dependencias; si lo
-   * estuvieran, el `useMemo` no ahorraria nada.
+   * La geometria del piso se calcula una vez por cambio de DATOS, no en cada render: la rejilla
+   * y el mapa de casillas ocupadas dependen del piso y de los asientos, no de la selección.
    */
   const { filas, columnas, ocupadas } = useMemo(() => {
     const elementos = deck?.elements ?? [];
-
-    // La rejilla declarada manda. Solo si no la hay —o si algo quedo fuera de ella— se amplia
-    // con lo que de verdad hay colocado, para no recortar el bus.
-    //
-    // Se recorre con `reduce` en vez de esparcir dos arrays dentro de `Math.max`: el
-    // resultado es el mismo —un array vacio deja el 0 inicial— y evita crear arrays
-    // intermedios y pasar miles de argumentos en un piso grande.
     const filasContenido = elementos.reduce(
       (maximo, elemento) => Math.max(maximo, elemento.row_number + elemento.row_span - 1),
       seats.reduce((maximo, seat) => Math.max(maximo, seat.row_number ?? 0), 0),
@@ -246,20 +212,45 @@ function DeckGrid({
     };
   }, [deck, seats]);
 
+  const gridRef = useRef<HTMLDivElement>(null);
+
+  /**
+   * Teclado: las flechas mueven el foco al asiento vecino (arriba/abajo/izquierda/derecha) saltando
+   * pasillos y huecos. Intro o Espacio eligen, como cualquier botón.
+   */
+  const onKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
+    const deltas: Record<string, [number, number]> = { ArrowUp: [-1, 0], ArrowDown: [1, 0], ArrowLeft: [0, -1], ArrowRight: [0, 1] };
+    const delta = deltas[event.key];
+    const target = event.target as HTMLElement;
+    const fila = Number(target.dataset.row);
+    const columna = Number(target.dataset.col);
+    if (!delta || !fila || !columna) return;
+    for (let paso = 1; paso <= Math.max(filas, columnas); paso += 1) {
+      const next = gridRef.current?.querySelector<HTMLButtonElement>(`[data-row="${fila + delta[0] * paso}"][data-col="${columna + delta[1] * paso}"]`);
+      if (next) {
+        event.preventDefault();
+        next.focus();
+        return;
+      }
+    }
+  };
+
   return (
     <div
-      className="grid gap-1.5"
+      ref={gridRef}
+      onKeyDown={onKeyDown}
+      className="grid gap-1.5 [--seat:38px] sm:gap-2 sm:[--seat:42px]"
       style={{
-        gridTemplateColumns: `20px repeat(${columnas}, 38px)`,
-        gridTemplateRows: `repeat(${filas}, 38px)`,
+        gridTemplateColumns: `18px repeat(${columnas}, var(--seat))`,
+        gridTemplateRows: `repeat(${filas}, var(--seat))`,
       }}
     >
       {Array.from({ length: filas }, (_, indiceFila) => {
         const fila = indiceFila + 1;
         return (
           <Fragmento key={`fila-${fila}`}>
-            <span className="flex items-center justify-end pr-0.5 text-[10px] font-medium tabular-nums text-slate-400">
-              {String(fila).padStart(2, '0')}
+            <span className="flex items-center justify-end pr-0.5 text-[10px] font-medium tabular-nums text-slate-300" aria-hidden>
+              {fila}
             </span>
             {Array.from({ length: columnas }, (_, indiceColumna) => {
               const columna = indiceColumna + 1;
@@ -276,11 +267,12 @@ function DeckGrid({
               }
 
               const seat = casilla.seat;
+              const indice = categorias.indexOf(seat.seat_type_name ?? 'Estándar');
               return (
                 <SeatItem
                   key={seat.id}
                   seat={seat}
-                  tone={toneForSeat(seat, orden)}
+                  tone={categorias.length > 1 ? CATEGORY_DOTS[(indice < 0 ? 0 : indice) % CATEGORY_DOTS.length]! : ''}
                   selected={selected.includes(seat.id)}
                   active={activeSeatId === seat.id}
                   atLimit={selected.length >= maxSelectable && !selected.includes(seat.id)}
@@ -301,42 +293,63 @@ function Fragmento({ children }: { children: React.ReactNode }) {
   return <>{children}</>;
 }
 
-/** Selector de pisos. Se construye con los pisos que devuelve el backend, sin lista fija. */
+/**
+ * Selector de pisos. Se construye con los pisos que devuelve el backend, sin lista fija; con un
+ * solo piso no aparece. Pestañas accesibles: ←/→ cambian de piso.
+ */
 export function DeckSelector({
   decks,
   activeDeckId,
   onChange,
   seatCountByDeck,
+  countSuffix = 'asientos',
   className,
 }: {
   decks: TripLayoutDeck[];
   activeDeckId: number | null;
   onChange: (deckId: number) => void;
   seatCountByDeck: Map<number, number>;
+  /** Texto tras el número de cada pestaña («libres», «asientos»…). */
+  countSuffix?: string;
   className?: string;
 }) {
+  const refs = useRef<Array<HTMLButtonElement | null>>([]);
   if (decks.length <= 1) return null;
+  const index = Math.max(0, decks.findIndex((deck) => deck.id === activeDeckId));
+  const onKey = (event: KeyboardEvent) => {
+    const next = event.key === 'ArrowRight' ? (index + 1) % decks.length : event.key === 'ArrowLeft' ? (index - 1 + decks.length) % decks.length : null;
+    if (next === null) return;
+    event.preventDefault();
+    onChange(decks[next]!.id);
+    refs.current[next]?.focus();
+  };
   return (
-    <div className={cn('flex flex-wrap gap-2', className)} role="tablist" aria-label="Pisos del bus">
-      {decks.map((deck) => {
-        const activo = deck.id === activeDeckId;
-        return (
-          <button
-            key={deck.id}
-            type="button"
-            role="tab"
-            aria-selected={activo}
-            onClick={() => onChange(deck.id)}
-            className={cn(
-              'rounded-control border px-4 py-2 text-left transition',
-              activo ? 'border-brand-500 bg-brand-50 text-brand-700 shadow-sm' : 'border-border bg-white text-slate-600 hover:border-brand-300',
-            )}
-          >
-            <span className="block text-sm font-semibold">{deck.name ?? `Piso ${deck.deck_number}`}</span>
-            <span className="block text-xs text-muted">{seatCountByDeck.get(deck.id) ?? 0} asientos</span>
-          </button>
-        );
-      })}
+    <div className={cn('flex', className)}>
+      <div className="inline-flex gap-1 rounded-2xl bg-slate-100 p-1" role="tablist" aria-label="Pisos del bus" onKeyDown={onKey}>
+        {decks.map((deck, i) => {
+          const activo = i === index;
+          return (
+            <button
+              key={deck.id}
+              ref={(el) => { refs.current[i] = el; }}
+              type="button"
+              role="tab"
+              aria-selected={activo}
+              tabIndex={activo ? 0 : -1}
+              onClick={() => onChange(deck.id)}
+              className={cn(
+                'min-w-[112px] rounded-xl px-4 py-2 text-left transition focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500',
+                activo ? 'bg-white text-ink shadow-sm ring-1 ring-black/5' : 'text-slate-500 hover:text-ink',
+              )}
+            >
+              <span className={cn('block text-sm font-bold', activo && 'text-brand-600')}>{deckLabel(deck)}</span>
+              <span className="block text-xs text-muted">
+                {seatCountByDeck.get(deck.id) ?? 0} {countSuffix}
+              </span>
+            </button>
+          );
+        })}
+      </div>
     </div>
   );
 }
@@ -351,12 +364,10 @@ export function LayoutElement({ element }: { element: TripLayoutDeck['elements']
       title={etiqueta}
       role="img"
       aria-label={`${etiqueta}, fila ${element.row_number}, columna ${element.column_number}`}
-      className={cn('flex flex-col items-center justify-center gap-0.5 rounded-lg border-2', ELEMENT_TONES[element.element_type])}
+      className={cn('flex flex-col items-center justify-center gap-0.5 rounded-xl border', ELEMENT_TONES[element.element_type])}
     >
       <Icono className="h-4 w-4" aria-hidden />
-      {(element.row_span > 1 || element.col_span > 1) && (
-        <span className="px-0.5 text-[9px] font-semibold leading-none">{etiqueta}</span>
-      )}
+      {(element.row_span > 1 || element.col_span > 1) && <span className="px-0.5 text-[9px] font-semibold leading-none">{etiqueta}</span>}
     </div>
   );
 }
@@ -371,6 +382,7 @@ export function SeatItem({
   showPrice,
 }: {
   seat: SeatAvailability;
+  /** Color del marcador de categoría (vacío si el viaje tiene una sola categoría). */
   tone: string;
   selected: boolean;
   active: boolean;
@@ -378,7 +390,7 @@ export function SeatItem({
   onToggle?: (seat: SeatAvailability) => void;
   showPrice: boolean;
 }) {
-  const ocupado = seat.is_taken === 1;
+  const ocupado = Number(seat.is_taken) === 1;
   const inactivo = seat.status !== 'AVAILABLE';
   const elegido = selected || active;
   const bloqueado = !onToggle || ocupado || inactivo || (atLimit && !selected);
@@ -386,45 +398,66 @@ export function SeatItem({
   const estado = ocupado ? 'ocupado' : inactivo ? 'no disponible' : elegido ? 'seleccionado' : 'disponible';
   const precio = Number(seat.price);
   const tipo = seat.seat_type_name ?? 'Estándar';
+  const detalle = `Asiento ${seat.seat_number} · ${tipo}${Number.isFinite(precio) ? ` · ${formatCurrency(precio)}` : ''}`;
 
   const aspecto = elegido
-    ? 'border-brand-600 bg-brand-500 text-white shadow-sm'
+    ? 'border-brand-600 bg-brand-500 text-white shadow-md shadow-brand-500/30'
     : ocupado
-      ? 'border-slate-300 bg-slate-300 text-slate-500'
+      ? 'border-slate-200 bg-slate-100 text-slate-300'
       : inactivo
-        ? 'border-slate-200 bg-slate-100 text-slate-300'
-        : tone;
+        ? 'border-dashed border-slate-200 bg-white text-slate-300'
+        : cn(
+            'border-brand-300 bg-brand-50 text-brand-700',
+            onToggle && !atLimit && 'hover:border-brand-500 hover:bg-brand-100 motion-safe:hover:-translate-y-0.5',
+          );
 
   return (
     <button
       type="button"
-      disabled={bloqueado}
+      disabled={bloqueado && !selected}
       onClick={() => onToggle?.(seat)}
-      title={`Asiento ${seat.seat_number} · ${tipo}${Number.isFinite(precio) ? ` · ${formatCurrency(precio)}` : ''}`}
+      data-row={seat.row_number ?? undefined}
+      data-col={seat.column_number ?? undefined}
       aria-label={
         estado === 'disponible'
           ? `Seleccionar asiento ${seat.seat_number}, ${tipo}, ${formatCurrency(precio)}`
           : `Asiento ${seat.seat_number}, ${tipo}, ${estado}`
       }
-      aria-pressed={selected}
+      aria-pressed={onToggle ? selected : undefined}
       className={cn(
-        'flex flex-col items-center justify-center rounded-lg border-2 leading-none tabular-nums transition',
+        'group relative flex flex-col items-center justify-center rounded-b-md rounded-t-[12px] border-2 leading-none tabular-nums transition duration-150 focus:outline-none focus-visible:ring-2 focus-visible:ring-ink focus-visible:ring-offset-2',
         aspecto,
-        bloqueado && 'cursor-not-allowed',
+        selected && 'animate-seat-pop',
+        bloqueado && !selected && 'cursor-not-allowed',
+        !onToggle && 'cursor-default',
       )}
     >
+      {/* Respaldo del asiento: una barra suave arriba, para que se lea como butaca. */}
+      <span className={cn('absolute inset-x-1.5 top-1 h-1 rounded-full', elegido ? 'bg-white/40' : 'bg-current opacity-25')} aria-hidden />
       {ocupado ? (
         <CrossGlyph />
+      ) : elegido ? (
+        <>
+          <Check className="h-3.5 w-3.5" strokeWidth={3} aria-hidden />
+          <span className="mt-0.5 text-[10px] font-bold">{seat.seat_number}</span>
+        </>
       ) : (
         <>
           <span className="text-[11px] font-bold">{seat.seat_number}</span>
-          {showPrice && Number.isFinite(precio) && (
-            <span className={cn('mt-0.5 text-[8px] font-semibold', elegido ? 'text-white/80' : 'opacity-70')}>
-              {Math.round(precio)}
-            </span>
-          )}
+          {showPrice && Number.isFinite(precio) && <span className="mt-0.5 text-[8px] font-semibold opacity-70">{Math.round(precio)}</span>}
         </>
       )}
+      {tone && !ocupado && <span className={cn('absolute bottom-1 right-1 h-1.5 w-1.5 rounded-full', tone)} aria-hidden />}
+
+      {/* Tooltip (ratón y teclado). En táctil no hace falta: el asiento elegido aparece en el resumen. */}
+      <span
+        role="tooltip"
+        className="pointer-events-none absolute bottom-full left-1/2 z-20 mb-2 hidden -translate-x-1/2 whitespace-nowrap rounded-lg bg-ink px-2.5 py-1.5 text-[11px] font-semibold text-white opacity-0 shadow-elevated transition-opacity duration-150 group-hover:opacity-100 group-focus-visible:opacity-100 sm:block"
+      >
+        {detalle}
+        {ocupado && ' · Ocupado'}
+        {inactivo && !ocupado && ' · No disponible'}
+      </span>
     </button>
   );
 }
@@ -439,7 +472,7 @@ function CrossGlyph() {
 
 function SteeringWheel() {
   return (
-    <svg viewBox="0 0 24 24" className="h-3.5 w-3.5 text-brand-500" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden>
+    <svg viewBox="0 0 24 24" className="h-3.5 w-3.5 text-brand-400" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden>
       <circle cx="12" cy="12" r="9" />
       <circle cx="12" cy="12" r="2.5" />
       <path d="M12 9.5V3M9.8 13.2 4.2 16.5M14.2 13.2l5.6 3.3" />
@@ -448,9 +481,9 @@ function SteeringWheel() {
 }
 
 /**
- * Leyenda construida con lo que el viaje tiene de verdad: una entrada por categoría de
- * asiento presente, con su precio real, y una por tipo de elemento que aparezca en algún
- * piso. Nada de categorías inventadas ni de precios de ejemplo.
+ * Leyenda construida con lo que el viaje tiene de verdad: los estados, una entrada por categoría
+ * de asiento presente (con su precio real, solo si hay más de una) y una por tipo de elemento que
+ * aparezca en algún piso. Nada de categorías inventadas ni de precios de ejemplo.
  */
 export function SeatLegend({
   seats,
@@ -463,51 +496,50 @@ export function SeatLegend({
   inline?: boolean;
   className?: string;
 }) {
-  const { categorias, elementos } = useMemo(() => {
-    const orden = seatTypeOrder(seats);
-    const porTipo = new Map<string, number>();
-    for (const seat of seats) {
-      const tipo = seat.seat_type_name ?? 'Estándar';
-      const precio = Number(seat.price);
-      if (!porTipo.has(tipo) && Number.isFinite(precio)) porTipo.set(tipo, precio);
-    }
-    return {
-      categorias: orden.map((tipo, indice) => ({
-        label: tipo,
-        price: porTipo.get(tipo) ?? null,
-        className: SEAT_TONES[indice % SEAT_TONES.length]!,
-      })),
-      elementos: [...new Set(decks.flatMap((deck) => deck.elements.map((elemento) => elemento.element_type)))],
-    };
-  }, [seats, decks]);
+  const { categorias, elementos } = useMemo(
+    () => ({
+      categorias: seatCategories(seats),
+      elementos: [...new Set(decks.flatMap((deck) => deck.elements.map((elemento) => elemento.element_type)))].filter((tipo) => tipo !== 'EMPTY'),
+    }),
+    [seats, decks],
+  );
 
+  const item = 'flex items-center gap-2 text-sm text-slate-600';
+  const muestra = 'h-5 w-5 shrink-0 rounded-b-[4px] rounded-t-[7px] border-2';
   return (
-    <ul className={cn(inline ? 'flex flex-wrap items-center gap-x-4 gap-y-2' : 'space-y-2.5', className)}>
-      {categorias.map((item) => (
-        <li key={item.label} className="flex items-center gap-2.5 text-sm text-slate-600">
-          <span className={cn('h-[18px] w-[18px] shrink-0 rounded border-2', item.className)} aria-hidden />
-          <span className="flex-1">{item.label}</span>
-          {item.price !== null && <span className="font-semibold tabular-nums text-ink">{formatCurrency(item.price)}</span>}
-        </li>
-      ))}
-      <li className="flex items-center gap-2.5 text-sm text-slate-600">
-        <span className="h-[18px] w-[18px] shrink-0 rounded border-2 border-brand-600 bg-brand-500" aria-hidden />
+    <ul className={cn(inline ? 'flex flex-wrap items-center gap-x-5 gap-y-2' : 'space-y-2.5', className)}>
+      <li className={item}>
+        <span className={cn(muestra, 'border-brand-300 bg-brand-50')} aria-hidden />
+        Disponible
+      </li>
+      <li className={item}>
+        <span className={cn(muestra, 'flex items-center justify-center border-brand-600 bg-brand-500 text-white')} aria-hidden>
+          <Check className="h-3 w-3" strokeWidth={3} />
+        </span>
         Seleccionado
       </li>
-      <li className="flex items-center gap-2.5 text-sm text-slate-600">
-        <span className="h-[18px] w-[18px] shrink-0 rounded border-2 border-slate-300 bg-slate-300" aria-hidden />
-        Asiento no disponible
+      <li className={item}>
+        <span className={cn(muestra, 'flex items-center justify-center border-slate-200 bg-slate-100 text-slate-300')} aria-hidden>
+          <CrossGlyph />
+        </span>
+        Ocupado
       </li>
-      <li className="flex items-center gap-2.5 text-sm text-slate-600">
-        <span className="h-[18px] w-[18px] shrink-0 rounded border-2 border-slate-200 bg-slate-100" aria-hidden />
-        Asiento inactivo
-      </li>
+      {categorias.length > 1 &&
+        categorias.map((categoria, indice) => (
+          <li key={categoria.name} className={item}>
+            <span className={cn('h-2.5 w-2.5 shrink-0 rounded-full', CATEGORY_DOTS[indice % CATEGORY_DOTS.length])} aria-hidden />
+            <span>
+              {categoria.name}
+              {categoria.price !== null && <span className="ml-1 font-semibold tabular-nums text-ink">{formatCurrency(categoria.price)}</span>}
+            </span>
+          </li>
+        ))}
       {elementos.map((tipo) => {
         const Icono = ELEMENT_ICONS[tipo];
         return (
-          <li key={tipo} className="flex items-center gap-2.5 text-sm text-slate-600">
-            <span className={cn('flex h-[18px] w-[18px] shrink-0 items-center justify-center rounded border-2', ELEMENT_TONES[tipo])} aria-hidden>
-              <Icono className="h-2.5 w-2.5" />
+          <li key={tipo} className={item}>
+            <span className={cn('flex h-5 w-5 shrink-0 items-center justify-center rounded-md border', ELEMENT_TONES[tipo])} aria-hidden>
+              <Icono className="h-3 w-3" />
             </span>
             {ELEMENT_LABELS[tipo]}
           </li>

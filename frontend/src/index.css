@@ -54,3 +54,19 @@
     display: none;
   }
 }
+
+/*
+ * Movimiento reducido: si el sistema lo pide, las animaciones decorativas (calendario, carga de la
+ * búsqueda, entrada de resultados, asientos) se quedan en un fundido casi instantáneo. Nada del
+ * contenido depende de una animación para verse.
+ */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 1ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 1ms !important;
+    scroll-behavior: auto !important;
+  }
+}

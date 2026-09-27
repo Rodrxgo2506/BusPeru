@@ -3,7 +3,8 @@ import { useEffect, useMemo, useRef } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { CompanyIdentity } from '@/components/companies/CompanyCard';
 import { decodeSegments } from '@/components/common/TripSearchForm';
-import { Badge, Button, Card, EmptyState, ErrorState, LoadingState } from '@/components/ui';
+import { Badge, Button, Card, EmptyState, ErrorState } from '@/components/ui';
+import { SearchLoading } from '@/components/search/SearchLoading';
 import { useAsync } from '@/hooks/useAsync';
 import { publicService } from '@/services';
 import { formatCurrency, formatDate, formatTime } from '@/utils/format';
@@ -108,7 +109,8 @@ export function ItineraryResultsPage() {
           <ErrorState error={results.error} onRetry={results.reload} />
         </Card>
       ) : results.loading ? (
-        <LoadingState />
+        // Misma carga que la búsqueda de ida: ligada a la petición real, sin esperas artificiales.
+        <SearchLoading origin={drafts[0]?.origin} destination={drafts[drafts.length - 1]?.destination} />
       ) : (
         <div className="space-y-6">
           {(results.data ?? []).map((bloque) => {

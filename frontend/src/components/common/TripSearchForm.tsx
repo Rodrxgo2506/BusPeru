@@ -1,6 +1,7 @@
-import { ArrowRightLeft, BusFront, CalendarDays, Plus, Route as RouteIcon, Search, Trash2 } from 'lucide-react';
+import { ArrowRightLeft, BusFront, Plus, Route as RouteIcon, Search, Trash2 } from 'lucide-react';
 import { useState, type FormEvent, type ReactNode } from 'react';
 import { useNavigate } from 'react-router-dom';
+import { DatePicker } from '@/components/common/DatePicker';
 import { LocationDropdown } from '@/components/common/LocationDropdown';
 import { PassengerSelector } from '@/components/common/PassengerSelector';
 import { Button } from '@/components/ui';
@@ -53,6 +54,10 @@ export function decodeSegments(raw: string | null): SegmentDraft[] {
 /** Máximo de pasajeros si la plataforma no publica `booking.max_seats_per_booking`: el de siempre. */
 const FALLBACK_MAX_PASSENGERS = 6;
 
+/**
+ * Campo de fecha del buscador: el calendario propio de BusPerú (`DatePicker`). Mismo valor
+ * `AAAA-MM-DD` y mismo mínimo que el `<input type="date">` al que sustituye.
+ */
 function DateField({
   label,
   value,
@@ -60,6 +65,7 @@ function DateField({
   onChange,
   appearance = 'field',
   tone = 'light',
+  optional = false,
 }: {
   label: string;
   value: string;
@@ -67,32 +73,19 @@ function DateField({
   onChange: (value: string) => void;
   appearance?: 'field' | 'bar';
   tone?: 'light' | 'onBrand';
+  optional?: boolean;
 }) {
-  const bar = appearance === 'bar';
-  const onBrand = tone === 'onBrand';
   return (
-    <label
-      className={cn(
-        'block',
-        bar ? 'rounded-lg px-3 py-1.5' : 'rounded-control border border-border p-3 focus-within:border-brand-500',
-      )}
-    >
-      <span className={cn('block text-xs font-medium', bar ? 'mb-0.5' : 'mb-1', onBrand ? 'text-white/85' : 'text-muted')}>{label}</span>
-      <span className="flex items-center gap-2">
-        {!bar && <CalendarDays className="h-4 w-4 shrink-0 text-brand-500" aria-hidden />}
-        <input
-          type="date"
-          value={value}
-          min={min}
-          onChange={(event) => onChange(event.target.value)}
-          className={cn(
-            'w-full border-0 bg-transparent p-0 text-sm font-medium focus:outline-none focus:ring-0',
-            onBrand ? 'text-white [color-scheme:dark]' : 'text-ink',
-          )}
-          aria-label={label}
-        />
-      </span>
-    </label>
+    <DatePicker
+      label={label}
+      value={value}
+      min={min}
+      onChange={onChange}
+      appearance={appearance}
+      tone={tone}
+      clearable={optional}
+      placeholder={optional ? 'Opcional' : 'Elegir fecha'}
+    />
   );
 }
 
@@ -100,6 +93,7 @@ export function TripSearchForm({
   cities,
   initialDestination = '',
   initialOrigin = '',
+  initialDate = '',
   variant = 'card',
   tone = 'light',
 }: {
@@ -107,6 +101,8 @@ export function TripSearchForm({
   initialDestination?: string;
   /** FASE 17B · la ficha de destino precarga origen y destino desde el CMS. */
   initialOrigin?: string;
+  /** Fecha de ida inicial (p. ej. al modificar una búsqueda desde los resultados). Por defecto, hoy. */
+  initialDate?: string;
   /** `card`: tarjeta con pestañas (portada). `bar`: una sola fila compacta (ficha de destino). */
   variant?: 'card' | 'bar';
   tone?: 'light' | 'onBrand';
@@ -127,7 +123,7 @@ export function TripSearchForm({
   // Ida e ida y vuelta comparten origen/destino; la vuelta añade su fecha.
   const [origin, setOrigin] = useState(initialOrigin);
   const [destination, setDestination] = useState(initialDestination);
-  const [date, setDate] = useState(todayIso());
+  const [date, setDate] = useState(() => (initialDate && initialDate >= todayIso() ? initialDate : todayIso()));
   const [returnDate, setReturnDate] = useState('');
 
   const [segments, setSegments] = useState<SegmentDraft[]>([
@@ -252,7 +248,7 @@ export function TripSearchForm({
           {divider}
           <DateField label="Fecha salida:" value={date} min={todayIso()} onChange={setDate} appearance="bar" tone={tone} />
           {divider}
-          <DateField label="Fecha retorno:" value={returnDate} min={date || todayIso()} onChange={setReturnDate} appearance="bar" tone={tone} />
+          <DateField label="Fecha retorno:" value={returnDate} min={date || todayIso()} onChange={setReturnDate} appearance="bar" tone={tone} optional />
           {divider}
           <PassengerSelector
             value={passengerCounts}
@@ -377,7 +373,7 @@ export function TripSearchForm({
             <DateField label="Fecha de ida" value={date} min={todayIso()} onChange={setDate} />
 
             {tab === 'ROUND_TRIP' && (
-              <DateField label="Fecha de vuelta" value={returnDate} min={date || todayIso()} onChange={setReturnDate} />
+              <DateField label="Fecha de vuelta" value={returnDate} min={date || todayIso()} onChange={setReturnDate} optional />
             )}
           </div>
         )}

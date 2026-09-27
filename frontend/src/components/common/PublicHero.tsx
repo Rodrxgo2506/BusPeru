@@ -1,4 +1,5 @@
 import type { ReactNode } from 'react';
+import type { Photo } from '@/constants/images';
 import { cn } from '@/utils/cn';
 
 /**
@@ -31,7 +32,7 @@ export function PublicHero({
   eyebrow: string;
   title: string;
   description: string;
-  image: string;
+  image: Photo;
   /** `object-position` de la foto, para encuadrar la parte que interesa de cada imagen. */
   imagePosition?: string;
   /** Remate tipográfico opcional de la derecha. Decorativo: sin enlaces ni acciones. */
@@ -53,13 +54,17 @@ export function PublicHero({
           la imagen ocupa todo el ancho y no hay borde que disolver.
         */}
         <img
-          src={image}
+          src={image.src}
+          srcSet={image.srcSet}
+          sizes="(min-width: 1024px) 55vw, 100vw"
+          width={image.width}
+          height={image.height}
           alt=""
           aria-hidden
           style={{ objectPosition: imagePosition }}
           className="h-full w-full object-cover lg:[-webkit-mask-image:linear-gradient(to_right,transparent_0%,black_40%)] lg:[mask-image:linear-gradient(to_right,transparent_0%,black_40%)]"
           loading="eager"
-          decoding="async"
+          {...{ fetchpriority: 'high' }}
         />
 
         {/* Velos: casi opaco en móvil —ahí el texto va encima— y abierto hacia la derecha en

@@ -150,17 +150,18 @@ export function AuthShell({
         {/* Fotografía de fondo. Va detrás de todo y muy velada: el contenido nunca depende
             de que cargue, porque el texto descansa sobre el propio velo, no sobre la foto. */}
         <div className="pointer-events-none absolute inset-0 -z-10 overflow-hidden">
-          <picture>
-            <source media="(max-width: 640px)" srcSet={authImages.backgroundSmall} />
-            <img
-              src={authImages.background}
-              alt=""
-              aria-hidden
-              className="h-full w-full object-cover object-[60%_62%]"
-              loading="eager"
-              decoding="async"
-            />
-          </picture>
+          <img
+            src={authImages.background.src}
+            srcSet={authImages.background.srcSet}
+            sizes="100vw"
+            width={authImages.background.width}
+            height={authImages.background.height}
+            alt=""
+            aria-hidden
+            className="h-full w-full object-cover object-[60%_62%]"
+            loading="eager"
+            decoding="async"
+          />
 
           {/* En móvil el velo es casi opaco: ahí el formulario ocupa toda la pantalla. */}
           <div className="absolute inset-0 bg-white/[0.93] lg:hidden" aria-hidden />

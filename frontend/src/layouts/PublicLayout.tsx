@@ -171,7 +171,9 @@ export function PublicLayout() {
         )}
       </header>
 
-      <main className="flex-1 pb-16 lg:pb-0">
+      {/* La altura mínima reserva el hueco de la página mientras llega su fragmento de JS: sin ella el pie
+          se pintaba arriba y saltaba después (CLS 0,55 medido en la portada). */}
+      <main className="min-h-[calc(100svh-4rem)] flex-1 pb-16 lg:min-h-[calc(100svh-72px)] lg:pb-0">
         {/* El límite de carga vive aquí y no sobre `<Routes>`: la cabecera y el pie no se despintan. */}
         <RouteSuspense>
           <Outlet />
@@ -272,6 +274,10 @@ function PublicFooter() {
       <div className="border-t border-border">
         <p className="mx-auto max-w-7xl px-4 py-3.5 text-center text-xs text-muted sm:px-6 lg:px-8">
           © {new Date().getFullYear()} BusPerú. Todos los derechos reservados.
+          <span className="mx-1.5" aria-hidden>·</span>
+          <Link to="/informacion#creditos-fotos" className="hover:text-brand-600 hover:underline">
+            Créditos de las fotografías
+          </Link>
         </p>
       </div>
     </footer>

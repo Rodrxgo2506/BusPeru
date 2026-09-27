@@ -12,11 +12,11 @@ import {
   Search,
   ShieldCheck,
 } from 'lucide-react';
-import { useState, type FormEvent, type ReactNode } from 'react';
-import { Link } from 'react-router-dom';
+import { useEffect, useState, type FormEvent, type ReactNode } from 'react';
+import { Link, useLocation } from 'react-router-dom';
 import { PublicHero } from '@/components/common/PublicHero';
 import { Button, Card, Checkbox, Input, Select, Textarea } from '@/components/ui';
-import { helpHeroImage } from '@/constants/images';
+import { helpHeroImage, PHOTO_CREDITS } from '@/constants/images';
 import { useAsync } from '@/hooks/useAsync';
 import { usePageMeta } from '@/hooks/usePageMeta';
 import { ApiError } from '@/services/api';
@@ -47,6 +47,12 @@ const LEGAL_PAGES = [
 
 export function InfoHubPage() {
   usePageMeta({ title: 'Información útil | BusPerú', description: 'Términos, privacidad, cookies, reservas y cancelaciones, pagos y Libro de Reclamaciones de BusPerú.' });
+  // El enlace «Créditos de las fotografías» del pie llega con `#creditos-fotos`: la página se carga en
+  // diferido, así que el salto al ancla se hace cuando ya está montada.
+  const { hash } = useLocation();
+  useEffect(() => {
+    if (hash) document.getElementById(hash.slice(1))?.scrollIntoView({ block: 'start' });
+  }, [hash]);
   return (
     <PublicHero eyebrow="Transparencia" title="Información útil" description="Todo lo que necesitas saber sobre cómo funciona BusPerú." image={helpHeroImage} imagePosition="50% 60%">
       <ul className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
@@ -60,6 +66,30 @@ export function InfoHubPage() {
           </li>
         ))}
       </ul>
+
+      {/* Atribución exigida por las licencias Creative Commons de las fotografías del sitio. */}
+      <section id="creditos-fotos" aria-labelledby="creditos-fotos-titulo" className="mt-10 scroll-mt-24 rounded-card bg-white p-5 shadow-card ring-1 ring-black/5 sm:p-6">
+        <h2 id="creditos-fotos-titulo" className="text-lg font-bold text-ink">Créditos de las fotografías</h2>
+        <p className="mt-1 text-sm text-muted">
+          Fotografías de Wikimedia Commons, usadas redimensionadas y convertidas a WebP. Las publicadas con licencia CC BY-SA se comparten con la misma licencia.
+        </p>
+        <ul className="mt-4 divide-y divide-border text-sm">
+          {PHOTO_CREDITS.map((credit) => (
+            <li key={credit.source} className="flex flex-col gap-0.5 py-2.5 sm:flex-row sm:items-baseline sm:justify-between sm:gap-4">
+              <span className="min-w-0">
+                <a href={credit.source} target="_blank" rel="noopener noreferrer" className="font-semibold text-ink hover:text-brand-600 hover:underline">
+                  {credit.title}
+                </a>
+                <span className="text-muted"> · {credit.author}</span>
+                <span className="block text-xs text-slate-400">{credit.usedIn}</span>
+              </span>
+              <a href={credit.licenseUrl} target="_blank" rel="noopener noreferrer" className="shrink-0 text-xs font-semibold text-brand-600 hover:underline">
+                {credit.license}
+              </a>
+            </li>
+          ))}
+        </ul>
+      </section>
     </PublicHero>
   );
 }

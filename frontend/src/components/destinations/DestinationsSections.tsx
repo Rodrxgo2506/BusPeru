@@ -1,7 +1,7 @@
 import { ChevronRight, MapPin } from 'lucide-react';
 import { useState } from 'react';
 import { Link } from 'react-router-dom';
-import { destinationImage, fallbackDestinationImage } from '@/constants/images';
+import { DESTINATION_CARD_SIZES, destinationImage, fallbackDestinationImage, remotePhoto } from '@/constants/images';
 import { mediaUrl } from '@/services/api';
 import type { PublicDestinationCard } from '@/types';
 import { formatPriceFrom } from '@/utils/destination-view';
@@ -43,7 +43,11 @@ export function DestinationTile({
     >
       <div className="relative aspect-[16/10] overflow-hidden bg-slate-100">
         <img
-          src={src}
+          src={src.src}
+          srcSet={src.srcSet || undefined}
+          sizes={DESTINATION_CARD_SIZES}
+          width={src.width}
+          height={src.height}
           alt={`Vista de ${city}`}
           loading="lazy"
           decoding="async"
@@ -103,7 +107,9 @@ export function DestinationTileSkeleton() {
  */
 export function DestinationCatalogCard({ destination }: { destination: PublicDestinationCard }) {
   const [failed, setFailed] = useState(false);
-  const image = failed ? fallbackDestinationImage : mediaUrl(destination.hero_image) ?? fallbackDestinationImage;
+  const remota = mediaUrl(destination.hero_image);
+  // La foto del destino viene de la API (una sola variante); sin foto o si falla, la de reserva con sus variantes.
+  const image = failed || !remota ? fallbackDestinationImage : remotePhoto(remota);
   const price = formatPriceFrom(destination.price_from);
 
   return (
@@ -112,7 +118,11 @@ export function DestinationCatalogCard({ destination }: { destination: PublicDes
       className="group relative flex aspect-[5/4] min-h-[14rem] w-full flex-col justify-end overflow-hidden rounded-card bg-slate-800 text-white shadow-card ring-1 ring-black/5 transition duration-300 hover:-translate-y-1 hover:shadow-elevated focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-500"
     >
       <img
-        src={image}
+        src={image.src}
+        srcSet={image.srcSet || undefined}
+        sizes={DESTINATION_CARD_SIZES}
+        width={image.width}
+        height={image.height}
         alt={`Vista de ${destination.name}`}
         loading="lazy"
         decoding="async"
