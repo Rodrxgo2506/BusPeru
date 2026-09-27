@@ -97,6 +97,13 @@ router.put(
     const user = requireAuth(req);
     const data = req.body as Record<string, unknown>;
 
+    // Documento y fecha de nacimiento: solo se completan si están vacíos (regla en `completeIdentity`).
+    // Va antes que el resto: si se rechaza (409/403), no se guarda nada de la petición. Se audita el hecho,
+    // nunca los valores.
+    if (await authService.completeIdentity(user, data as authService.IdentityInput)) {
+      await recordAudit(req, { action: 'UPDATE', entityType: 'users', entityId: user.id, description: 'Completó su documento de identidad o su fecha de nacimiento' });
+    }
+
     // Lista blanca explícita de columnas. Zod ya descarta las claves desconocidas, pero el
     // nombre de columna se interpola en el SQL: no debe depender de lo que llegue en el cuerpo.
     const columns = PROFILE_COLUMNS.filter((column) => data[column] !== undefined);

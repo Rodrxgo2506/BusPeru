@@ -113,7 +113,7 @@ describe('12B · fechas de liquidación, sesiones y secretos', () => {
 
     it('cambiar la contraseña sigue invalidando todas las sesiones (BP-18) y recuperar la cuenta sigue funcionando', async () => {
       const email = `f12b-${Date.now()}@test.pe`;
-      assert.equal((await post('/auth/register', { first_name: 'Rita', last_name: 'Prueba', email, password: TEST_PASSWORD })).status, 201);
+      assert.equal((await post('/auth/register', { first_name: 'Rita', last_name: 'Prueba', email, password: TEST_PASSWORD, document_type: 'DNI', document_number: '12345678', birth_date: '1999-05-17' })).status, 201);
       const a = (await post('/auth/login', { email, password: TEST_PASSWORD })).body.data.token as string;
       const b = (await post('/auth/login', { email, password: TEST_PASSWORD })).body.data.token as string;
       const nueva = `${TEST_PASSWORD}X9`;

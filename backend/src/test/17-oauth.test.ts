@@ -1430,6 +1430,7 @@ describe('Inicio de sesión con Google / Microsoft', () => {
     it('el registro normal sigue creando cuentas sin proveedor', async () => {
       const res = await post('/auth/register', {
         first_name: 'Registro', last_name: 'Normal', email: 'registro.normal@oauth.test', password: 'PruebaSegura1',
+        document_type: 'DNI', document_number: '12345678', birth_date: '1999-05-17',
       });
       assert.equal(res.status, 201);
 

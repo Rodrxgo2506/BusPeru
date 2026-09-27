@@ -11,6 +11,7 @@ import {
   Gift,
   IdCard,
   LayoutList,
+  Lock,
   MapPin,
   Pencil,
   Phone,
@@ -31,6 +32,7 @@ import { ApiError } from '@/services/api';
 import { authService, dashboardService, oauthService } from '@/services';
 import { PROVIDER_LABELS } from '@/pages/auth/AuthShell';
 import { formatCurrency, formatDate, formatDateTime, formatNumber } from '@/utils/format';
+import { buildIdentityUpdate, DOCUMENT_TYPE_OPTIONS, editableIdentity, formatBirthDate, formatIdentityDocument } from '@/utils/identity';
 
 /**
  * Mockup 11. Fields the schema does not have (document, birth date, country, travel
@@ -62,6 +64,10 @@ export function CustomerProfilePage() {
   const [savingPassword, setSavingPassword] = useState(false);
 
   const totals = summary.data?.totals ?? {};
+  // Documento y fecha de nacimiento (022): se completan UNA vez; luego quedan fijos (el backend lo impone).
+  const identity = editableIdentity(user);
+  const documento = formatIdentityDocument(user?.document_type, user?.document_number);
+  const nacimiento = formatBirthDate(user?.birth_date);
   const verified = Boolean(user?.email_verified_at);
 
   const savePassword = async (event: FormEvent) => {
@@ -139,8 +145,8 @@ export function CustomerProfilePage() {
             <Field icon={<User />} label="Nombres" value={user?.first_name} />
             <Field icon={<Phone />} label="Teléfono" value={user?.phone} />
             <Field icon={<Contact />} label="Apellidos" value={user?.last_name} />
-            <Field icon={<IdCard />} label="Documento de identidad" missing />
-            <Field icon={<CalendarDays />} label="Fecha de nacimiento" missing />
+            <Field icon={<IdCard />} label="Documento de identidad" value={documento} missing={!documento} />
+            <Field icon={<CalendarDays />} label="Fecha de nacimiento" value={nacimiento} missing={!nacimiento} />
             <Field icon={<MapPin />} label="País" missing />
             <Field icon={<User />} label="Estado de la cuenta" value={<StatusBadge status={user?.status} />} />
             <Field icon={<CalendarDays />} label="Miembro desde" value={formatDate(user?.created_at)} />
@@ -267,9 +273,40 @@ export function CustomerProfilePage() {
           { name: 'first_name', label: 'Nombres', required: true },
           { name: 'last_name', label: 'Apellidos', required: true },
           { name: 'phone', label: 'Teléfono', type: 'tel', full: true },
+          // Solo mientras estén vacíos: se registran una vez y después ya no se ofrecen para editar.
+          ...(identity.document
+            ? [
+                { name: 'document_type', label: 'Tipo de documento', type: 'select' as const, options: DOCUMENT_TYPE_OPTIONS },
+                { name: 'document_number', label: 'Número de documento', hint: 'DNI: 8 dígitos. CE o pasaporte: letras y números. Solo se registra una vez.' },
+              ]
+            : []),
+          ...(identity.birthDate
+            ? [{ name: 'birth_date', label: 'Fecha de nacimiento', placeholder: 'DD/MM/AAAA', hint: 'Ej: 17/05/1999. Solo se registra una vez.', full: true }]
+            : []),
         ]}
+        extra={
+          !identity.document || !identity.birthDate ? (
+            <div className="rounded-control border border-border bg-slate-50 px-3.5 py-3 text-sm text-slate-600">
+              <p className="flex items-center gap-2 font-semibold text-ink">
+                <Lock className="h-4 w-4 text-slate-400" aria-hidden /> Datos de identidad registrados
+              </p>
+              <dl className="mt-2 space-y-1">
+                {!identity.document && (
+                  <div className="flex flex-wrap gap-x-2"><dt className="text-muted">Documento:</dt><dd className="font-medium">{documento}</dd></div>
+                )}
+                {!identity.birthDate && (
+                  <div className="flex flex-wrap gap-x-2"><dt className="text-muted">Fecha de nacimiento:</dt><dd className="font-medium">{nacimiento}</dd></div>
+                )}
+              </dl>
+              <p className="mt-2 text-xs text-muted">Una vez registrados no se pueden cambiar desde el perfil.</p>
+            </div>
+          ) : undefined
+        }
         onSubmit={async (values) => {
-          await authService.updateProfile(values);
+          const { document_type: _t, document_number: _n, birth_date: _b, ...perfil } = values;
+          const { payload, errors } = buildIdentityUpdate(values, user);
+          if (Object.keys(errors).length > 0) throw new ApiError(422, 'Revisa los datos marcados', errors);
+          await authService.updateProfile({ ...perfil, ...payload });
           await refresh();
           toast.success('Los cambios se guardaron correctamente.');
         }}

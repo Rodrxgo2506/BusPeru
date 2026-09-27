@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { identityFields, normalizeIdentity, refineIdentity, requiredIdentityFields } from './identity.validators';
 
 const password = z
   .string()
@@ -18,13 +19,22 @@ export const loginSchema = z.object({
   password: z.string().min(1, 'La contraseña es obligatoria'),
 });
 
-export const registerSchema = z.object({
-  first_name: z.string().trim().min(2, 'Ingresa tus nombres').max(100),
-  last_name: z.string().trim().min(2, 'Ingresa tus apellidos').max(100),
-  email: z.string().email('Correo electrónico inválido').max(150),
-  phone: z.string().trim().max(30).optional().nullable(),
-  password,
-});
+/**
+ * Registro de CLIENTE. Documento (tipo + número) y fecha de nacimiento son OBLIGATORIOS (migración 022):
+ * formato por tipo, fecha real y no futura, igual que en el formulario. Solo aquí: las columnas admiten NULL
+ * para las cuentas antiguas y las de Google/Microsoft, que los completan una vez desde su perfil.
+ */
+export const registerSchema = z
+  .object({
+    first_name: z.string().trim().min(2, 'Ingresa tus nombres').max(100),
+    last_name: z.string().trim().min(2, 'Ingresa tus apellidos').max(100),
+    email: z.string().email('Correo electrónico inválido').max(150),
+    phone: z.string().trim().max(30).optional().nullable(),
+    password,
+    ...requiredIdentityFields,
+  })
+  .superRefine(refineIdentity)
+  .transform(normalizeIdentity);
 
 export const registerCompanySchema = z.object({
   company: z.object({
@@ -45,12 +55,20 @@ export const registerCompanySchema = z.object({
   }),
 });
 
-export const updateProfileSchema = z.object({
-  first_name: z.string().trim().min(2).max(100).optional(),
-  last_name: z.string().trim().min(2).max(100).optional(),
-  phone: z.string().trim().max(30).nullable().optional(),
-  avatar_url: z.string().trim().url('URL inválida').max(500).nullable().optional(),
-});
+/**
+ * Edición del propio perfil. Documento y fecha de nacimiento solo se pueden COMPLETAR si están vacíos
+ * (cuentas antiguas o creadas por Google/Microsoft); lo hace cumplir `completeIdentity`, no el cliente.
+ */
+export const updateProfileSchema = z
+  .object({
+    first_name: z.string().trim().min(2).max(100).optional(),
+    last_name: z.string().trim().min(2).max(100).optional(),
+    phone: z.string().trim().max(30).nullable().optional(),
+    avatar_url: z.string().trim().url('URL inválida').max(500).nullable().optional(),
+    ...identityFields,
+  })
+  .superRefine(refineIdentity)
+  .transform(normalizeIdentity);
 
 const resetEmail = z.string().trim().toLowerCase().email('Correo electrónico inválido').max(150);
 

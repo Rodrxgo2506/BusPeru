@@ -2,7 +2,10 @@ import { execute, query, queryOne } from '../config/database';
 import { businessNow } from '../utils/businessTime';
 import type { AuthenticatedUser, RoleName, User } from '../types/entities';
 
-const USER_COLUMNS = `u.id, u.role_id, u.first_name, u.last_name, u.email, u.phone, u.avatar_url,
+// Documento y fecha de nacimiento (022) viajan SOLO en la sesión del propio usuario (`/auth/me`, login,
+// registro). Los listados de usuarios, reservas o empresas usan sus propias columnas y no los incluyen.
+const USER_COLUMNS = `u.id, u.role_id, u.first_name, u.last_name, u.email, u.phone,
+  u.document_type, u.document_number, DATE_FORMAT(u.birth_date, '%Y-%m-%d') AS birth_date, u.avatar_url,
   u.status, u.email_verified_at, u.last_login_at, u.created_at, u.updated_at`;
 
 interface UserWithHash extends User {

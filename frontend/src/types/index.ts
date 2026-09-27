@@ -31,6 +31,11 @@ export interface AuthUser {
   last_name: string;
   email: string;
   phone: string | null;
+  /** Solo en la sesión propia (`/auth/me`). NULL en cuentas antiguas o creadas por Google/Microsoft. */
+  document_type: 'DNI' | 'CE' | 'PASAPORTE' | null;
+  document_number: string | null;
+  /** `AAAA-MM-DD`. */
+  birth_date: string | null;
   avatar_url: string | null;
   status: UserStatus;
   email_verified_at: string | null;

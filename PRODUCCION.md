@@ -188,9 +188,9 @@ VITE_API_URL=https://api.tu-dominio/api npm run build   # o definirla en fronten
 
 1. Importar `database/schema/Dump20260831.sql`.
 2. **Hacer un backup** antes de migrar (sección 9).
-3. Aplicar **todas** las migraciones de `database/migrations/`, **de la `001` a la `021`, una detrás de otra y en ese
+3. Aplicar **todas** las migraciones de `database/migrations/`, **de la `001` a la `022`, una detrás de otra y en ese
    orden**, sin saltarse ninguna. La lista con los comandos está en el README (sección *Migraciones*). La última es
-   `021-complaint-book.sql`. En AWS se hace con `infra/aws/scripts/apply-migrations.sh` (base vacía) o
+   `022-users-identity.sql`. En AWS se hace con `infra/aws/scripts/apply-migrations.sh` (base vacía) o
    `apply-one-migration.sh` (base existente); inventario completo en `docs/production/MIGRATIONS.md`.
 4. **Verificar el esquema resultante** antes de arrancar el backend (ver abajo).
 
@@ -205,7 +205,7 @@ Obligatorias para el código actual, porque se consultan en cada petición o en 
 | **`020-company-public-profiles.sql`** y **`021-complaint-book.sql`** | Perfil público de empresas (4 tablas) y Libro de Reclamaciones (3 tablas + claves `legal.*` en `NULL`) (F18-19) | El Libro de Reclamaciones (público y bandejas) y `/api/public/legal` responden 500 y la verificación del esquema falla. Las tablas de la `020` ya no las usa la aplicación (perfiles públicos retirados) pero forman parte del esquema de referencia |
 
 `001` no toca el esquema: concede `reviews.update` al rol `COMPANY_ADMIN`, sin el cual las empresas no pueden moderar
-reseñas. Las migraciones `001` y de la `010` a la `021` son **reejecutables** (comprueban antes de actuar: `017`
+reseñas. Las migraciones `001` y de la `010` a la `022` son **reejecutables** (comprueban antes de actuar: `017`
 consulta `information_schema` y no hace nada si la columna ya existe); aun así, cada una debe aplicarse una sola vez y
 en orden.
 
@@ -462,7 +462,7 @@ las comprobaciones— está en `docs/production/STAGING-RUNBOOK.md` (F18-03).
 2. **Configurar los secretos** en el gestor del despliegue (sección 2). Nunca en el repositorio.
 3. **Preparar la base**: importar el dump y crear el usuario de la aplicación con privilegios mínimos (sección 5).
 4. **Hacer un backup** (sección 9).
-5. **Aplicar las migraciones `001` a `021` en orden** (sección 3, *Base de datos*).
+5. **Aplicar las migraciones `001` a `022` en orden** (sección 3, *Base de datos*).
 6. **Verificar el esquema**, en particular `users.sessions_valid_from` (sección 3).
 7. **Configurar y arrancar el backend** con `NODE_ENV=production`: si falta o sobra algo, la guarda lo impide y lo dice.
    `GET /api/ready` debe responder `200`.

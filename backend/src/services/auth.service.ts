@@ -9,6 +9,7 @@ import type { AuthenticatedUser, RoleName } from '../types/entities';
 import { ApiError } from '../utils/ApiError';
 import { hashPassword, sessionFingerprint, signToken, verifyPassword } from '../utils/security';
 import type { LoginInput, RegisterCompanyInput, RegisterInput } from '../validators/auth.validators';
+import type { IdentityDocumentType } from '../validators/identity.validators';
 
 export interface AuthResult {
   token: string;
@@ -82,9 +83,12 @@ export async function registerCustomer(input: RegisterInput): Promise<AuthResult
   const passwordHash = await hashPassword(input.password);
 
   const result = await execute(
-    `INSERT INTO users (role_id, first_name, last_name, email, phone, password_hash, status)
-     VALUES (?, ?, ?, ?, ?, ?, 'ACTIVE')`,
-    [roleId, input.first_name, input.last_name, input.email, input.phone ?? null, passwordHash],
+    `INSERT INTO users (role_id, first_name, last_name, email, phone, document_type, document_number, birth_date, password_hash, status)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'ACTIVE')`,
+    [
+      roleId, input.first_name, input.last_name, input.email, input.phone ?? null,
+      input.document_type, input.document_number, input.birth_date, passwordHash,
+    ],
   );
 
   const user = await loadAuthenticatedUser(result.insertId);
@@ -94,6 +98,62 @@ export async function registerCustomer(input: RegisterInput): Promise<AuthResult
     token: signToken({ sub: user.id, roleId: user.role_id, role: user.role, pwd: sessionFingerprint(passwordHash) }),
     user,
   };
+}
+
+export interface IdentityInput {
+  document_type?: IdentityDocumentType;
+  document_number?: string;
+  birth_date?: string;
+}
+
+const DOCUMENTO_FIJO = 'Tu documento de identidad ya está registrado y no se puede cambiar desde el perfil';
+const NACIMIENTO_FIJO = 'Tu fecha de nacimiento ya está registrada y no se puede cambiar desde el perfil';
+
+/**
+ * El CLIENTE completa su documento y su fecha de nacimiento UNA sola vez (cuentas antiguas o creadas por
+ * Google/Microsoft, que nacen sin ellos). Una vez guardados no se cambian desde el perfil: no hay todavía
+ * un flujo de soporte para corregirlos.
+ *
+ * La regla la hace cumplir la base: el UPDATE solo escribe si la columna sigue vacía (`IS NULL`), así que
+ * dos peticiones simultáneas no pueden pisarse. Reenviar exactamente lo que ya está guardado no es un
+ * cambio y no falla. Devuelve si se guardó algo nuevo.
+ */
+export async function completeIdentity(user: AuthenticatedUser, input: IdentityInput): Promise<boolean> {
+  const pideDocumento = input.document_type !== undefined && input.document_number !== undefined;
+  const pideNacimiento = input.birth_date !== undefined;
+  if (!pideDocumento && !pideNacimiento) return false;
+  if (user.role !== 'CUSTOMER') throw ApiError.forbidden('Solo los clientes registran su documento y su fecha de nacimiento');
+
+  const actual = await queryOne<{ document_type: string | null; document_number: string | null; birth_date: string | null }>(
+    "SELECT document_type, document_number, DATE_FORMAT(birth_date, '%Y-%m-%d') AS birth_date FROM users WHERE id = ? LIMIT 1",
+    [user.id],
+  );
+  if (!actual) throw ApiError.notFound('Usuario no encontrado');
+
+  let guardado = false;
+  if (pideDocumento) {
+    const mismo = actual.document_type === input.document_type && actual.document_number === input.document_number;
+    if (actual.document_type !== null || actual.document_number !== null) {
+      if (!mismo) throw ApiError.conflict(DOCUMENTO_FIJO);
+    } else {
+      const r = await execute(
+        'UPDATE users SET document_type = ?, document_number = ? WHERE id = ? AND document_type IS NULL AND document_number IS NULL',
+        [input.document_type, input.document_number, user.id],
+      );
+      if (r.affectedRows !== 1) throw ApiError.conflict(DOCUMENTO_FIJO);
+      guardado = true;
+    }
+  }
+  if (pideNacimiento) {
+    if (actual.birth_date !== null) {
+      if (actual.birth_date !== input.birth_date) throw ApiError.conflict(NACIMIENTO_FIJO);
+    } else {
+      const r = await execute('UPDATE users SET birth_date = ? WHERE id = ? AND birth_date IS NULL', [input.birth_date, user.id]);
+      if (r.affectedRows !== 1) throw ApiError.conflict(NACIMIENTO_FIJO);
+      guardado = true;
+    }
+  }
+  return guardado;
 }
 
 /**

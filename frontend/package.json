@@ -9,7 +9,7 @@
     "preview": "vite preview",
     "typecheck": "tsc --noEmit",
     "lint": "eslint . --max-warnings 0",
-    "test": "node --test src/config/api-url.test.ts src/utils/search-helpers.test.ts src/services/response-cache.test.ts src/services/refresh-status.test.ts src/utils/complaint-book.test.ts src/utils/seo.test.ts src/utils/calendar.test.ts src/utils/trip-results.test.ts src/utils/seat-map.test.ts"
+    "test": "node --test src/config/api-url.test.ts src/utils/search-helpers.test.ts src/services/response-cache.test.ts src/services/refresh-status.test.ts src/utils/complaint-book.test.ts src/utils/seo.test.ts src/utils/calendar.test.ts src/utils/trip-results.test.ts src/utils/seat-map.test.ts src/utils/identity.test.ts"
   },
   "dependencies": {
     "lucide-react": "^0.469.0",

@@ -71,10 +71,11 @@ mysql -u root -p busperu < database/migrations/018-fk-on-update-restrict-mariadb
 mysql -u root -p busperu < database/migrations/019-bank-accounts-encryption.sql
 mysql -u root -p busperu < database/migrations/020-company-public-profiles.sql
 mysql -u root -p busperu < database/migrations/021-complaint-book.sql
+mysql -u root -p busperu < database/migrations/022-users-identity.sql
 ```
 
-**La cadena actual va de la `001` a la `021`** y se aplica completa, en orden y sin saltarse ninguna. La suite de
-tests aplica de la `002` a la `021` sobre `busperu_test` y reproduce en su preparación el cambio de datos de `001`.
+**La cadena actual va de la `001` a la `022`** y se aplica completa, en orden y sin saltarse ninguna. La suite de
+tests aplica de la `002` a la `022` sobre `busperu_test` y reproduce en su preparación el cambio de datos de `001`.
 Hasta la `014`, la base tiene **46 tablas**:
 `012` elimina los índices `idx_bookings_code` e `idx_coupons_code`, duplicados de sus índices únicos (auditoría H-19);
 `013` pone UNIQUE sobre `settlement_items.financial_transaction_id` —un movimiento no puede estar en dos
@@ -104,6 +105,10 @@ datos (sin `DROP`) como parte del esquema de referencia.
 `021` (F18-19) crea `complaint_book_counters`, `complaint_book_entries` y `complaint_book_events` (Libro de
 Reclamaciones virtual) y las claves `legal.*` de `system_settings` **en `NULL`** (datos del proveedor pendientes). Con
 ellas el esquema queda en **56 tablas y 645 columnas** (`infra/aws/scripts/schema-reference.json`).
+`022` (Parte B) no crea tablas: añade a `users` `document_type` y `document_number` (`VARCHAR(20) NULL`) y
+`birth_date` (`DATE NULL`), sin índices ni claves únicas. Las filas existentes quedan en `NULL` (cuentas anteriores y
+cuentas creadas con Google/Microsoft). Con ella el esquema queda en **56 tablas y 648 columnas**;
+`schema-reference.json` sigue siendo la huella de 001→021 y debe regenerarse al aplicar la `022`.
 
 > **Estado de `012`, `013` y `014`:** la suite las aplica en `busperu_test` y **ya están aplicadas en la base
 > `busperu`** de este equipo (46 tablas, FASE 13, con backup previo). Cualquier otra base —en particular la de
@@ -129,8 +134,13 @@ ellas el esquema queda en **56 tablas y 645 columnas** (`infra/aws/scripts/schem
 > 10.11 (la suite las aplica). **No se han aplicado a `busperu`, `busperu_staging` ni producción.** Son obligatorias antes
 > de desplegar el código de F18-19: el Libro de Reclamaciones y los datos legales las consultan, y la verificación del
 > esquema de referencia las espera (las de la `020` ya no las usa la aplicación).
+>
+> **Estado de `022`:** creada en la Parte B y aplicada solo en `busperu_test` y `busperu_1011_test` (la suite la
+> aplica). **No se ha aplicado a `busperu`, `busperu_staging` ni producción.** **Es obligatoria antes de desplegar el
+> código de la Parte B**: el middleware de autenticación lee las tres columnas en cada petición autenticada, y sin
+> ellas todas fallan.
 
-`010` a `021` son reejecutables (`017` y `018` consultan `information_schema`; `019` usa `ADD COLUMN IF NOT EXISTS`; `020` y `021` usan `CREATE TABLE IF NOT EXISTS` e `INSERT IGNORE`; ninguna hace nada si ya está aplicada).
+`010` a `022` son reejecutables (`017`, `018` y `022` consultan `information_schema`; `019` usa `ADD COLUMN IF NOT EXISTS`; `020` y `021` usan `CREATE TABLE IF NOT EXISTS` e `INSERT IGNORE`; ninguna hace nada si ya está aplicada).
 F18-18 lo comprobó reaplicando las 19 sobre una base 10.11 ya migrada: 19/19 sin error y la misma huella de esquema.
 `001-permiso-resenas-company-admin.sql` es distinta: no cambia el esquema, concede `reviews.update` al rol
 `COMPANY_ADMIN` en `role_permissions` (también es idempotente), y la suite no ejecuta el archivo sino que reproduce ese

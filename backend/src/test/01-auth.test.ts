@@ -127,8 +127,11 @@ describe('Autenticación y sesión', () => {
   });
 
   it('impide registrar un correo ya existente', async () => {
+    // Registro completo y válido (documento y fecha son obligatorios desde la migración 022): lo único
+    // que falla es el correo repetido.
     const dup = await post('/auth/register', {
       first_name: 'Duplicado', last_name: 'Prueba', email: 'cliente@test.pe', password: TEST_PASSWORD,
+      document_type: 'DNI', document_number: '12345678', birth_date: '1999-05-17',
     });
     assert.equal(dup.status, 409);
   });
@@ -144,8 +147,10 @@ describe('Autenticación y sesión', () => {
   });
 
   it('exige contraseñas con mayúscula y número', async () => {
+    // Todo lo demás es válido: el 422 sale de la contraseña, no de un dato ausente.
     const weak = await post('/auth/register', {
       first_name: 'Debil', last_name: 'Prueba', email: `debil-${Date.now()}@test.pe`, password: 'todominuscula',
+      document_type: 'DNI', document_number: '12345678', birth_date: '1999-05-17',
     });
     assert.equal(weak.status, 422);
   });

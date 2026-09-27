@@ -1,9 +1,10 @@
-# Migraciones de base de datos — inventario vigente (F18-19)
+# Migraciones de base de datos — inventario vigente (Parte B)
 
-> Fuente de verdad: `database/migrations/`. La cadena vigente va de la **001 a la 021**. Antes de F18-18, algunos
+> Fuente de verdad: `database/migrations/`. La cadena vigente va de la **001 a la 022**. Antes de F18-18, algunos
 > textos históricos decían «001–014» o «001→018». Todos esos rangos quedaron atrás: los añadidos se hicieron en
-> FASE 17 (015–016), F17C-SEC-10 (017), F18-02B (018), F18-07 (019) y F18-19 (020–021). Ni F18-18 ni F18-19
-> **ejecutaron ninguna migración en producción** (no existe base de producción) ni en `busperu_staging`.
+> FASE 17 (015–016), F17C-SEC-10 (017), F18-02B (018), F18-07 (019), F18-19 (020–021) y Parte B (022). Ni F18-18 ni F18-19
+> **ejecutaron ninguna migración en producción** (no existe base de producción) ni en `busperu_staging`. La Parte B
+> tampoco: la `022` solo se ha aplicado en las bases de pruebas locales.
 
 ## Resumen
 
@@ -30,12 +31,16 @@
 | 019 | `019-bank-accounts-encryption.sql` | `company_bank_accounts`: `account_number_encrypted`, `account_number_last4`, `interbank_code_encrypted`, `interbank_code_last4`; `account_number` admite `NULL`. La app cifra con AES-256-GCM (`INTEGRATIONS_ENCRYPTION_KEY`). **No borra datos en claro**: eso lo hace `npm run bank:encrypt` (cifrar, verificar y purgar) cuando hay filas previas | — | sí (`ADD COLUMN IF NOT EXISTS`) | las columnas nuevas pueden quedarse; el código anterior no las usa |
 | 020 | `020-company-public-profiles.sql` | Perfil público de empresas (F18-19; **retirado de la aplicación**, las tablas se conservan sin uso): `company_profiles` (1:1 con `companies`, `slug` único), `company_services`, `company_agencies` (horarios semanales y especiales en JSON, coordenadas con CHECK de rango) y `company_gallery_images`. Todas con columnas de moderación (`review_status`, `published_content` = instantánea pública, `suspended_at`…). JSON como `longtext` + `CHECK json_valid`; FK `ON DELETE CASCADE/SET NULL ON UPDATE RESTRICT` (compatible con 10.11) | +4 → **53** | sí (`CREATE TABLE IF NOT EXISTS`) | `DROP TABLE` de las 4 (orden en la cabecera del archivo) con el código anterior; se pierden los perfiles |
 | 021 | `021-complaint-book.sql` | Libro de Reclamaciones virtual (F18-19): `complaint_book_counters` (correlativo por año), `complaint_book_entries` (campos del Anexo I del DS 011-2011-PCM, plazo y respuesta) y `complaint_book_events` (historial). Añade `legal.business_name`, `legal.ruc`, `legal.address`, `legal.email`, `legal.phone` en `system_settings` **con valor `NULL`** (dato pendiente; no se inventa) | +3 → **56** | sí (`CREATE TABLE IF NOT EXISTS`, `INSERT IGNORE`) | **No se debe revertir con datos**: las hojas se conservan al menos 2 años (DS 011-2011-PCM art. 12). Sin datos: `DROP TABLE` de las 3 y borrar las 5 claves `legal.*` |
+| 022 | `022-users-identity.sql` | Identidad del cliente (Parte B): `users.document_type` y `users.document_number` (`VARCHAR(20) NULL`) y `users.birth_date` (`DATE NULL`). Sin índices, `UNIQUE` ni FK. Las filas existentes quedan en `NULL`; no copia `passenger_document`. **El middleware de autenticación las lee en cada petición** | — | sí (`information_schema`) | las columnas pueden quedarse; el código anterior no las usa |
 
 Esquema resultante (dump + 001→021): **56 tablas, 645 columnas, 253 índices, 96 FK y 25 CHECK**, en utf8mb4_unicode_ci.
 Es la huella de `infra/aws/scripts/schema-reference.json`, que comprueba `schema-fingerprint.cjs` (regenerada en F18-19
 sobre MariaDB 10.11.19 con una instalación limpia en `busperu_1011_ref`). La referencia anterior (001→019: 49 tablas,
-496 columnas, 221 índices, 81 FK, 12 CHECK) queda anotada en el campo `origen`. **Consecuencia:** `busperu_staging`
-(001→019) dará diferencias con la referencia nueva hasta que se le apliquen 020 y 021.
+496 columnas, 221 índices, 81 FK, 12 CHECK) queda anotada en el campo `origen`.
+
+Con la `022` (dump + 001→022) el esquema pasa a **56 tablas y 648 columnas**; índices, FK y CHECK no cambian.
+`schema-reference.json` **sigue siendo la huella de 001→021**: hay que regenerarla antes de verificar con
+`schema-fingerprint.cjs` una base que ya tenga la `022` (si no, dará diferencias en `users`).
 
 ## Qué cambió respecto a la documentación histórica
 
@@ -50,17 +55,18 @@ sobre MariaDB 10.11.19 con una instalación limpia en `busperu_1011_ref`). La re
 
 | Base | Estado | Evidencia |
 | --- | --- | --- |
-| `busperu` (desarrollo local) | 001→014 aplicadas (FASE 13); 015→021 no aplicadas (el README lo indica por migración) | README §Migraciones |
-| `busperu_test` / `busperu_1011_test` | la suite las reconstruye (dump + 002→021) en cada ejecución | `backend/src/test/helpers/database.ts`; 2194/2194 en 10.4 y 10.11 (F18-19) |
+| `busperu` (desarrollo local) | 001→014 aplicadas (FASE 13); 015→022 no aplicadas (el README lo indica por migración) | README §Migraciones |
+| `busperu_test` / `busperu_1011_test` | la suite las reconstruye (dump + 002→022) en cada ejecución | `backend/src/test/helpers/database.ts`; 2200/2200 en 10.4 y 10.11 (Parte B) |
 | `busperu_1011_ref` (local, 10.11.19) | dump + 001→021, instalación limpia | origen de la referencia de esquema de F18-19 |
-| `busperu_staging` | 001→019 · **020 y 021 pendientes** | F18-07A (019 con `apply-one-migration.sh`). F18-19 no la tocó: 020 y 021 se aplicarán con `apply-one-migration.sh`, una por una y con snapshot previo, cuando se autorice desplegar F18-19 |
-| `busperu_prod` | **no existe** | se instalará vacía con `apply-migrations.sh` (dump + 001→021) |
+| `busperu_staging` | 001→021 · **022 pendiente** | F18-07A (019 con `apply-one-migration.sh`); huella idéntica a la referencia 001→021 (645 columnas) en el despliegue de la Fase 3. La `022` se aplicará con `apply-one-migration.sh`, con snapshot previo, cuando se autorice desplegar la Parte B |
+| `busperu_prod` | **no existe** | se instalará vacía con `apply-migrations.sh` (dump + 001→022) |
 
 ## Idempotencia y orden (verificado en F18-17/F18-18; repetido en F18-19)
 
-- **Orden:** numérico estricto. `apply-migrations.sh` exige exactamente 21 (F18-19), sin `--force`, y se detiene en el primer error. `apply-one-migration.sh` acepta una base con 49 (001→019), 53 (+020) o 56 (+021) tablas.
+- **Orden:** numérico estricto. `apply-migrations.sh` exige exactamente 22 (Parte B; 21 en F18-19), sin `--force`, y se detiene en el primer error. `apply-one-migration.sh` acepta una base con 49 (001→019), 53 (+020) o 56 (+021) tablas; la `022` no crea tablas, así que se aplica sobre una de 56.
 - **Reaplicación:** las 19 se ejecutaron de nuevo sobre `busperu_1011_test` (MariaDB 10.11.19) ya migrada: **19/19 sin error** y la huella del esquema siguió idéntica. Ninguna duplica columnas, índices ni filas.
   En F18-19 se repitió con las 21 sobre `busperu_1011_ref` ya migrada: **21/21 sin error** y huella idéntica a la referencia nueva.
+  En la Parte B, el bucle de `apply-migrations.sh` sobre una base local desechable aplicó las 22 (recuento 22 = 22) y la `022` se reejecutó dos veces sin error y sin cambios.
 - **Operaciones destructivas:**
   - Ninguna tiene `DROP TABLE`, `TRUNCATE` ni `DELETE` masivo ejecutables (en 020 y 021 la vuelta atrás está solo comentada en la cabecera).
   - Los `DROP INDEX` / `DROP FOREIGN KEY` de 010–013 y 018 están guardados por `information_schema` y recrean el objeto equivalente.

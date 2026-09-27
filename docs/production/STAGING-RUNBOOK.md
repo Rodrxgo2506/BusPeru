@@ -169,7 +169,7 @@ ni leer otras bases ni `mysql.user`; `busperu_migrator` tampoco puede crear base
 
 ---
 
-## 5. Esquema: dump y migraciones 001 → 021
+## 5. Esquema: dump y migraciones 001 → 022
 
 ```bash
 sudo DB_HOST=<DatabaseEndpoint> bash /opt/busperu/current/infra/aws/scripts/apply-migrations.sh
@@ -177,7 +177,7 @@ sudo DB_HOST=<DatabaseEndpoint> bash /opt/busperu/current/infra/aws/scripts/appl
 
 Se ejecuta como `busperu_migrator`, **sin `--force`**, y se detiene en el primer error. Antes
 comprueba que el servidor sea MariaDB 10.11 con el modo estricto esperado y que la base esté vacía.
-Resultado esperado: dump + 21 migraciones OK y 56 tablas (F18-19; eran 19 y 49 hasta F18-18).
+Resultado esperado: dump + 22 migraciones OK y 56 tablas (Parte B; 21 en F18-19; eran 19 y 49 hasta F18-18).
 
 Verificación obligatoria frente a la referencia (`schema-reference.json`, regenerada en MariaDB 10.11.19 en F18-19):
 
