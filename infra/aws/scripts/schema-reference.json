@@ -1,8 +1,8 @@
 {
-  "origen": "F18-19 · MariaDB 10.11.19 · dump Dump20260831.sql + migraciones 001→021 (020 = perfiles públicos de empresas: +4 tablas; 021 = Libro de Reclamaciones: +3 tablas y 5 ajustes legal.* en NULL). Referencia anterior (001→019, F18-07): tablas 49 · columnas 496 [13a439ac3096] · índices 221 [8cecf83a85ba] · fks 81 [dd9f630fb43f] · checks 12 [e598da78a1e9]",
+  "origen": "Parte B · MariaDB 10.11.19 · instalación limpia (busperu_1011_ref022): dump Dump20260831.sql + migraciones 001→022 (022 = identidad del cliente: users.document_type, users.document_number, users.birth_date, NULL, sin índices, FK ni CHECK). Referencia anterior (001→021, F18-19): tablas 56 · columnas 645 [e970d1328474] · índices 253 [0ab3681cfa99] · fks 96 [5fc422fb71e2] · checks 25 [7087d7d9c88d]. Antes (001→019, F18-07): tablas 49 · columnas 496 [13a439ac3096] · índices 221 [8cecf83a85ba] · fks 81 [dd9f630fb43f] · checks 12 [e598da78a1e9]",
   "sql_mode": "STRICT_TRANS_TABLES,ERROR_FOR_DIVISION_BY_ZERO,NO_AUTO_CREATE_USER,NO_ENGINE_SUBSTITUTION",
   "tablas": 56,
-  "columnas": {"total": 645, "huella": "e970d1328474"},
+  "columnas": {"total": 648, "huella": "371644103882"},
   "indices": {"total": 253, "huella": "0ab3681cfa99"},
   "fks": {"total": 96, "huella": "5fc422fb71e2"},
   "checks": {"total": 25, "huella": "7087d7d9c88d"}

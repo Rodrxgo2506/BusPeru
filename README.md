@@ -107,8 +107,9 @@ Reclamaciones virtual) y las claves `legal.*` de `system_settings` **en `NULL`**
 ellas el esquema queda en **56 tablas y 645 columnas** (`infra/aws/scripts/schema-reference.json`).
 `022` (Parte B) no crea tablas: añade a `users` `document_type` y `document_number` (`VARCHAR(20) NULL`) y
 `birth_date` (`DATE NULL`), sin índices ni claves únicas. Las filas existentes quedan en `NULL` (cuentas anteriores y
-cuentas creadas con Google/Microsoft). Con ella el esquema queda en **56 tablas y 648 columnas**;
-`schema-reference.json` sigue siendo la huella de 001→021 y debe regenerarse al aplicar la `022`.
+cuentas creadas con Google/Microsoft). Con ella el esquema queda en **56 tablas y 648 columnas**, que es la huella
+actual de `infra/aws/scripts/schema-reference.json` (regenerada en la Parte B sobre MariaDB 10.11.19 con una
+instalación limpia 001→022).
 
 > **Estado de `012`, `013` y `014`:** la suite las aplica en `busperu_test` y **ya están aplicadas en la base
 > `busperu`** de este equipo (46 tablas, FASE 13, con backup previo). Cualquier otra base —en particular la de
@@ -130,10 +131,11 @@ cuentas creadas con Google/Microsoft). Con ella el esquema queda en **56 tablas 
 > **Estado de `019`:** creada en F18-07, aplicada en `busperu_test`, en MariaDB 10.11 y en `busperu_staging`. Cualquier
 > otra base la necesita antes del código actual, que ya escribe los datos bancarios cifrados.
 
-> **Estado de `020` y `021`:** creadas en F18-19 y aplicadas solo en `busperu_test` y en la validación sobre MariaDB
-> 10.11 (la suite las aplica). **No se han aplicado a `busperu`, `busperu_staging` ni producción.** Son obligatorias antes
-> de desplegar el código de F18-19: el Libro de Reclamaciones y los datos legales las consultan, y la verificación del
-> esquema de referencia las espera (las de la `020` ya no las usa la aplicación).
+> **Estado de `020` y `021`:** creadas en F18-19, aplicadas en `busperu_test`, en la validación sobre MariaDB 10.11 y
+> **en `busperu_staging`** (su huella coincidió con la referencia 001→021 en el despliegue de la Fase 3). **No se han
+> aplicado a `busperu` ni a producción.** Son obligatorias antes de desplegar el código de F18-19: el Libro de
+> Reclamaciones y los datos legales las consultan, y la verificación del esquema de referencia las espera (las de la
+> `020` ya no las usa la aplicación).
 >
 > **Estado de `022`:** creada en la Parte B y aplicada solo en `busperu_test` y `busperu_1011_test` (la suite la
 > aplica). **No se ha aplicado a `busperu`, `busperu_staging` ni producción.** **Es obligatoria antes de desplegar el

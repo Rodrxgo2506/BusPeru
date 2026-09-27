@@ -33,14 +33,12 @@
 | 021 | `021-complaint-book.sql` | Libro de Reclamaciones virtual (F18-19): `complaint_book_counters` (correlativo por año), `complaint_book_entries` (campos del Anexo I del DS 011-2011-PCM, plazo y respuesta) y `complaint_book_events` (historial). Añade `legal.business_name`, `legal.ruc`, `legal.address`, `legal.email`, `legal.phone` en `system_settings` **con valor `NULL`** (dato pendiente; no se inventa) | +3 → **56** | sí (`CREATE TABLE IF NOT EXISTS`, `INSERT IGNORE`) | **No se debe revertir con datos**: las hojas se conservan al menos 2 años (DS 011-2011-PCM art. 12). Sin datos: `DROP TABLE` de las 3 y borrar las 5 claves `legal.*` |
 | 022 | `022-users-identity.sql` | Identidad del cliente (Parte B): `users.document_type` y `users.document_number` (`VARCHAR(20) NULL`) y `users.birth_date` (`DATE NULL`). Sin índices, `UNIQUE` ni FK. Las filas existentes quedan en `NULL`; no copia `passenger_document`. **El middleware de autenticación las lee en cada petición** | — | sí (`information_schema`) | las columnas pueden quedarse; el código anterior no las usa |
 
-Esquema resultante (dump + 001→021): **56 tablas, 645 columnas, 253 índices, 96 FK y 25 CHECK**, en utf8mb4_unicode_ci.
-Es la huella de `infra/aws/scripts/schema-reference.json`, que comprueba `schema-fingerprint.cjs` (regenerada en F18-19
-sobre MariaDB 10.11.19 con una instalación limpia en `busperu_1011_ref`). La referencia anterior (001→019: 49 tablas,
-496 columnas, 221 índices, 81 FK, 12 CHECK) queda anotada en el campo `origen`.
-
-Con la `022` (dump + 001→022) el esquema pasa a **56 tablas y 648 columnas**; índices, FK y CHECK no cambian.
-`schema-reference.json` **sigue siendo la huella de 001→021**: hay que regenerarla antes de verificar con
-`schema-fingerprint.cjs` una base que ya tenga la `022` (si no, dará diferencias en `users`).
+Esquema resultante (dump + 001→022): **56 tablas, 648 columnas, 253 índices, 96 FK y 25 CHECK**, en utf8mb4_unicode_ci.
+Es la huella de `infra/aws/scripts/schema-reference.json`, que comprueba `schema-fingerprint.cjs` (regenerada en la
+Parte B sobre MariaDB 10.11.19 con una instalación limpia en `busperu_1011_ref022`): columnas `371644103882`, índices
+`0ab3681cfa99`, FK `5fc422fb71e2` y CHECK `7087d7d9c88d`. Las referencias anteriores (001→021 de F18-19: 645 columnas
+y las mismas huellas de índices, FK y CHECK; 001→019: 49 tablas, 496 columnas, 221 índices, 81 FK, 12 CHECK) quedan
+anotadas en el campo `origen`. Una base con 001→021 y sin la `022` da diferencias en columnas (645): es lo esperado.
 
 ## Qué cambió respecto a la documentación histórica
 

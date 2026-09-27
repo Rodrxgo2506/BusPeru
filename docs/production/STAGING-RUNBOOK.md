@@ -179,7 +179,8 @@ Se ejecuta como `busperu_migrator`, **sin `--force`**, y se detiene en el primer
 comprueba que el servidor sea MariaDB 10.11 con el modo estricto esperado y que la base esté vacía.
 Resultado esperado: dump + 22 migraciones OK y 56 tablas (Parte B; 21 en F18-19; eran 19 y 49 hasta F18-18).
 
-Verificación obligatoria frente a la referencia (`schema-reference.json`, regenerada en MariaDB 10.11.19 en F18-19):
+Verificación obligatoria frente a la referencia (`schema-reference.json`, regenerada en MariaDB 10.11.19 en la Parte B
+con una instalación limpia 001→022):
 
 ```bash
 umask 077; f=$(mktemp)
@@ -190,15 +191,17 @@ DB_HOST=<endpoint> DB_USER=busperu_migrator DB_PASSWORD_FILE="$f" DB_NAME=busper
 shred -u "$f"
 ```
 
-Compara columnas, índices, claves ajenas y CHECKs con `schema-reference.json` (645 / 253 / 96 / 25 desde F18-19; con
-001→019 eran 496 / 221 / 81 / 12, y 492 columnas hasta la 018) y
+Compara columnas, índices, claves ajenas y CHECKs con `schema-reference.json` (648 / 253 / 96 / 25 desde la Parte B,
+con 56 tablas; con 001→021 eran 645 / 253 / 96 / 25, con 001→019 496 / 221 / 81 / 12, y 492 columnas hasta la 018) y
 comprueba las reglas de F18-02B: columnas generadas STORED, `ON UPDATE RESTRICT` en
 `fk_integrations_company` y `fk_bus_layouts_bus`, colación `utf8mb4_unicode_ci` y columnas JSON como
 texto. Cualquier diferencia detiene el despliegue.
 
-> **`busperu_staging` existente (F18-19):** está en 001→019. Antes de desplegar el código de F18-19 hay que aplicarle
-> `020-company-public-profiles.sql` y después `021-complaint-book.sql` con `apply-one-migration.sh` (una por una, con
-> snapshot previo) y pasar la huella. Hasta entonces, la huella nueva da diferencias: es lo esperado.
+> **`busperu_staging` existente (Parte B):** tiene **001→021 aplicadas** (su huella coincidió con la referencia
+> 001→021 en el despliegue de la Fase 3) y la **`022` pendiente**. Antes de desplegar el código de la Parte B hay que
+> aplicarle `022-users-identity.sql` con `apply-one-migration.sh` (con snapshot previo y el paquete nuevo extraído en
+> un directorio temporal, como en §5.1) y pasar la huella: después de la `022` se esperan **56 tablas, 648 columnas,
+> 253 índices, 96 FK y 25 CHECK**. Hasta entonces, la huella nueva da diferencias en columnas (645): es lo esperado.
 
 ### 5.1 Base que ya existe: migración 019 y cifrado de los datos bancarios (F18-07)
 
