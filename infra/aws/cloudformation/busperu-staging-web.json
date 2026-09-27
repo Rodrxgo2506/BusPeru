@@ -283,6 +283,45 @@
         }
       }
     },
+    "ApiMediaInvalidationPolicy": {
+      "Type": "AWS::IAM::Policy",
+      "Properties": {
+        "PolicyName": {
+          "Fn::Sub": "busperu-${EnvName}-api-media-invalidation"
+        },
+        "Roles": [
+          {
+            "Fn::Sub": "busperu-${EnvName}-app-role"
+          }
+        ],
+        "PolicyDocument": {
+          "Version": "2012-10-17",
+          "Statement": [
+            {
+              "Sid": "InvalidarMediaPublicaRetirada",
+              "Effect": "Allow",
+              "Action": "cloudfront:CreateInvalidation",
+              "Resource": {
+                "Fn::Sub": "arn:${AWS::Partition}:cloudfront::${AWS::AccountId}:distribution/${ApiDistribution}"
+              }
+            }
+          ]
+        }
+      }
+    },
+    "ApiMediaDistributionIdParam": {
+      "Type": "AWS::SSM::Parameter",
+      "Properties": {
+        "Name": {
+          "Fn::Sub": "/busperu/${EnvName}/app/CDN_MEDIA_DISTRIBUTION_ID"
+        },
+        "Type": "String",
+        "Value": {
+          "Ref": "ApiDistribution"
+        },
+        "Description": "Distribucion de CloudFront de la API: se invalida /api/public/media/<ref> al retirar una imagen publica"
+      }
+    },
     "WebDistribution": {
       "Type": "AWS::CloudFront::Distribution",
       "Properties": {

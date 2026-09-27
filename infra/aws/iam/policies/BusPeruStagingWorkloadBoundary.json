@@ -118,6 +118,12 @@
         "events:RemoveTargets"
       ],
       "Resource": "arn:aws:events:*:*:rule/AwsDataLifecycleRule.managed-cwe.*"
+    },
+    {
+      "Sid": "InvalidarMedia",
+      "Effect": "Allow",
+      "Action": "cloudfront:CreateInvalidation",
+      "Resource": "arn:aws:cloudfront::{{ACCOUNT_ID}}:distribution/*"
     }
   ]
 }

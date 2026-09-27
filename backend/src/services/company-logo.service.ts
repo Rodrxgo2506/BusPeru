@@ -4,6 +4,7 @@ import { ApiError } from '../utils/ApiError';
 import { recordAudit } from './audit.service';
 import { resolveCompanyId } from './company-document.service';
 import { deletePublicFile, storePublicImage, type UploadedFile } from './file-storage.service';
+import { retirePublicFiles } from './media-cdn.service';
 
 /**
  * Logotipo de la empresa (F17C-COMPANY-LOGO-01).
@@ -60,7 +61,8 @@ export async function setLogo(req: Request, file: UploadedFile | undefined, requ
     });
 
     // Solo cuando el cambio está confirmado: si se borrase antes, un fallo dejaría a la empresa sin logo.
-    deletePublicFile(previous);
+    // El anterior se retira también de CloudFront (el nuevo es un nombre nuevo: no hay nada que invalidar).
+    await retirePublicFiles([previous]);
     await recordAudit(req, {
       action: 'UPDATE',
       entityType: 'companies',
@@ -83,7 +85,7 @@ export async function removeLogo(req: Request, requestedCompanyId?: unknown): Pr
 
   if (company.logo_url) {
     await execute('UPDATE companies SET logo_url = NULL WHERE id = ?', [companyId]);
-    deletePublicFile(company.logo_url);
+    await retirePublicFiles([company.logo_url]);
     await recordAudit(req, {
       action: 'UPDATE',
       entityType: 'companies',

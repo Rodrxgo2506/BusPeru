@@ -21,6 +21,11 @@
 //     un nombre aleatorio que no se reutiliza y el origen ya responde `immutable`; se cachea en el borde con una
 //     política propia SIN Authorization, cookies ni query string en la clave, y solo GET/HEAD. El resto de /api/*
 //     sigue sin caché.
+//   · Fase 3 · invalidación de esa caché al retirar una imagen: la API (rol busperu-staging-app-role) puede
+//     pedir `cloudfront:CreateInvalidation` SOLO sobre la distribución de la API, y su id le llega por SSM
+//     (/busperu/staging/app/CDN_MEDIA_DISTRIBUTION_ID, que lee render-env.sh). El límite de permisos del rol
+//     (BusPeruStagingWorkloadBoundary, infra/aws/iam) admite esa única acción. Actualizar la pila exige
+//     `--capabilities CAPABILITY_IAM`.
 //   · El ALB sigue sin ser público: su SG admite además la prefix list de CloudFront (solo puerto 80) y
 //     el oyente reenvía SOLO si llega la cabecera secreta de origen que pone la distribución API, o si
 //     viene de las IP de operador ya aprobadas; todo lo demás recibe 403.
@@ -52,6 +57,9 @@ export const MANAGED = {
 export const ORIGIN_HEADER = 'X-BusPeru-Origin';
 /** Fase 2 · único camino de la API que CloudFront puede guardar: imágenes públicas con nombre inmutable. */
 export const API_MEDIA_PATH = '/api/public/media/*';
+/** Fase 3 · rol con el que corre la API (pila principal) y parámetro por el que recibe el id de la distribución. */
+export const APP_ROLE = 'busperu-${EnvName}-app-role';
+export const MEDIA_DISTRIBUTION_PARAM = '/busperu/${EnvName}/app/CDN_MEDIA_DISTRIBUTION_ID';
 /**
  * F18-19B (F-01) · códigos de error que CloudFront guarda por defecto (ErrorCachingMinTTL 10 s) aunque la política
  * de caché sea TTL 0. En las distribuciones de la API se fijan a 0 s, sin página de sustitución.
@@ -194,6 +202,34 @@ const template = {
             QueryStringsConfig: { QueryStringBehavior: 'none' },
           },
         },
+      },
+    },
+    // Fase 3 · al retirar una imagen pública la API invalida SU ruta. Permiso mínimo: una acción, sobre esta
+    // distribución de la API y nada más; va en el rol de la aplicación, acotado además por su límite de permisos.
+    ApiMediaInvalidationPolicy: {
+      Type: 'AWS::IAM::Policy',
+      Properties: {
+        PolicyName: sub('busperu-${EnvName}-api-media-invalidation'),
+        Roles: [sub(APP_ROLE)],
+        PolicyDocument: {
+          Version: '2012-10-17',
+          Statement: [{
+            Sid: 'InvalidarMediaPublicaRetirada',
+            Effect: 'Allow',
+            Action: 'cloudfront:CreateInvalidation',
+            Resource: sub('arn:${AWS::Partition}:cloudfront::${AWS::AccountId}:distribution/${ApiDistribution}'),
+          }],
+        },
+      },
+    },
+    // Id de la distribución para la API, en la ruta que render-env.sh vuelca en su entorno. No es secreto.
+    ApiMediaDistributionIdParam: {
+      Type: 'AWS::SSM::Parameter',
+      Properties: {
+        Name: sub(MEDIA_DISTRIBUTION_PARAM),
+        Type: 'String',
+        Value: ref('ApiDistribution'),
+        Description: 'Distribucion de CloudFront de la API: se invalida /api/public/media/<ref> al retirar una imagen publica',
       },
     },
     WebDistribution: {

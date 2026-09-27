@@ -11,6 +11,7 @@ import {
   type BrandingAsset,
   type UploadedFile,
 } from './file-storage.service';
+import { retirePublicFiles } from './media-cdn.service';
 import { SLUG_PATTERN } from '../validators/destination.validators';
 
 /**
@@ -80,7 +81,7 @@ async function replaceImage(req: Request, target: ImageTable, id: number, file: 
     deletePublicFile(stored.reference);
     throw error;
   }
-  if (previous !== stored.reference) deletePublicFile(previous);
+  if (previous !== stored.reference) await retirePublicFiles([previous]);
 
   await recordAudit(req, {
     action: 'UPDATE',
@@ -103,7 +104,7 @@ async function removeImage(req: Request, target: ImageTable, id: number): Promis
     await connection.query(`UPDATE ${target.table} SET ${target.column} = NULL WHERE id = ?`, [id]);
     return rows[0]!.reference;
   });
-  deletePublicFile(previous);
+  await retirePublicFiles([previous]);
 
   if (previous) {
     await recordAudit(req, {
@@ -141,11 +142,11 @@ export async function prepareDestinationDelete(id: number, previous: Row): Promi
 }
 
 export async function cleanupDeletedFiles(_id: number, _previous: Row, prepared: unknown): Promise<void> {
-  if (Array.isArray(prepared)) prepared.forEach(deletePublicFile);
+  if (Array.isArray(prepared)) await retirePublicFiles(prepared);
 }
 
 export async function cleanupAttractionImage(_id: number, previous: Row): Promise<void> {
-  deletePublicFile(previous.image);
+  await retirePublicFiles([previous.image]);
 }
 
 /* ------------------------------------------------------------------ orden */
@@ -288,7 +289,7 @@ export async function setBrandingAsset(req: Request, asset: BrandingAsset, file:
     deletePublicFile(stored.reference);
     throw error;
   }
-  if (previous !== stored.reference) deletePublicFile(previous);
+  if (previous !== stored.reference) await retirePublicFiles([previous]);
 
   await recordAudit(req, {
     action: 'UPDATE',
@@ -302,7 +303,7 @@ export async function setBrandingAsset(req: Request, asset: BrandingAsset, file:
 
 export async function removeBrandingAsset(req: Request, asset: BrandingAsset): Promise<BrandingReferences> {
   const previous = await writeBrandingReference(asset, null);
-  deletePublicFile(previous);
+  await retirePublicFiles([previous]);
   if (previous) {
     await recordAudit(req, {
       action: 'UPDATE',

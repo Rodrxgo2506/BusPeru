@@ -18,6 +18,7 @@
     "test:coverage": "tsx src/test/run.ts --coverage"
   },
   "dependencies": {
+    "@aws-sdk/client-cloudfront": "^3.1141.0",
     "bcryptjs": "^2.4.3",
     "cors": "^2.8.5",
     "dotenv": "^16.4.7",

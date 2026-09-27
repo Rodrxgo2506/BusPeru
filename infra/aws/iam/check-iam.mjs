@@ -101,6 +101,13 @@ for (const nombre of ['trust-policy']) {
 for (const s of politicas.BusPeruStagingWorkloadBoundary.Statement) {
   for (const a of lista(s.Action)) if (a.startsWith('iam:') || a === '*' || /:\*$/.test(a)) fallo(`boundary/${s.Sid}: ${a}`);
 }
+// Fase 3 · CloudFront en el límite: solo CreateInvalidation, solo distribuciones de esta cuenta y sin comodín de servicio.
+for (const s of politicas.BusPeruStagingWorkloadBoundary.Statement) {
+  const cf = lista(s.Action).filter((a) => a.startsWith('cloudfront:'));
+  if (cf.length === 0) continue;
+  if (cf.length !== lista(s.Action).length || cf.some((a) => a !== 'cloudfront:CreateInvalidation')) fallo(`boundary/${s.Sid}: CloudFront solo admite CreateInvalidation (${cf.join(', ')})`);
+  if (JSON.stringify(lista(s.Resource)) !== JSON.stringify(['arn:aws:cloudfront::{{ACCOUNT_ID}}:distribution/*'])) fallo(`boundary/${s.Sid}: CloudFront solo sobre distribuciones de la cuenta (${JSON.stringify(s.Resource)})`);
+}
 
 // En el repositorio, la cuenta va siempre como marcador.
 for (const f of readdirSync(new URL('./policies/', import.meta.url))) {

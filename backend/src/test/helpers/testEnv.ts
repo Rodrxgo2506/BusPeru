@@ -32,5 +32,8 @@ process.env.RATE_LIMIT_AUTH = process.env.RATE_LIMIT_AUTH ?? '100000';
 // El correo nunca sale de la suite: el transporte en memoria retiene los mensajes para
 // poder comprobarlos sin depender de un servidor SMTP.
 process.env.MAIL_TRANSPORT = 'memory';
+// Ni CloudFront: sin distribución no se pide ninguna invalidación real. La suite que la prueba
+// (86-media-cdn-invalidacion) fija un id ficticio y sustituye el transporte.
+process.env.CDN_MEDIA_DISTRIBUTION_ID = '';
 // Sin cooldown de reenvío los tests no tendrían que esperar 45 segundos reales.
 process.env.PASSWORD_RESET_RESEND_COOLDOWN_SECONDS = process.env.PASSWORD_RESET_RESEND_COOLDOWN_SECONDS ?? '0';

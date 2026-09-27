@@ -11,7 +11,7 @@
 // 3) Que el JSON escrito coincida con el generador.
 
 import { readFileSync } from 'node:fs';
-import template, { API_ERROR_CODES, API_MEDIA_PATH, MANAGED, ORIGIN_HEADER } from './build-web-template.mjs';
+import template, { API_ERROR_CODES, API_MEDIA_PATH, APP_ROLE, MANAGED, MEDIA_DISTRIBUTION_PARAM, ORIGIN_HEADER } from './build-web-template.mjs';
 
 const problemas = [];
 const fallo = (m) => problemas.push(m);
@@ -48,7 +48,9 @@ for (const [n, r] of Object.entries(R)) if (r.Condition && !(r.Condition in C)) 
 // ---------------------------------------------------------------------------- reglas
 const tipos = Object.values(R).map((r) => r.Type).sort();
 const PERMITIDOS = new Set(['AWS::S3::Bucket', 'AWS::S3::BucketPolicy', 'AWS::CloudFront::OriginAccessControl', 'AWS::CloudFront::Function',
-  'AWS::CloudFront::CachePolicy', 'AWS::CloudFront::Distribution', 'AWS::EC2::SecurityGroupIngress', 'AWS::ElasticLoadBalancingV2::ListenerRule']);
+  'AWS::CloudFront::CachePolicy', 'AWS::CloudFront::Distribution', 'AWS::EC2::SecurityGroupIngress', 'AWS::ElasticLoadBalancingV2::ListenerRule',
+  // Fase 3 · solo con las reglas de más abajo: una política IAM mínima y el parámetro SSM con el id de la distribución.
+  'AWS::IAM::Policy', 'AWS::SSM::Parameter']);
 for (const t of tipos) if (!PERMITIDOS.has(t)) fallo(`tipo de recurso no previsto: ${t}`);
 if (JSON.stringify(P.EnvName.AllowedValues) !== '["staging"]') fallo('EnvName debe admitir solo staging');
 
@@ -94,6 +96,25 @@ else {
   if (k.CookiesConfig.CookieBehavior !== 'none') fallo('api/media: sin cookies en la clave de caché');
   if (k.QueryStringsConfig.QueryStringBehavior !== 'none') fallo('api/media: sin query string en la clave de caché');
   if (!(media.MaxTTL > 0 && media.MaxTTL <= 604800)) fallo(`api/media: MaxTTL en el borde entre 1 s y 7 días (hay ${media.MaxTTL})`);
+}
+// Fase 3 · invalidación: UNA política IAM, UNA acción, SOLO la distribución de la API, SOLO el rol de la app.
+const iam = Object.entries(R).filter(([, r]) => r.Type.startsWith('AWS::IAM::'));
+if (iam.length !== 1 || iam[0][0] !== 'ApiMediaInvalidationPolicy' || iam[0][1].Type !== 'AWS::IAM::Policy') fallo(`iam: solo se admite la política ApiMediaInvalidationPolicy (hay ${iam.map(([n, r]) => `${n}:${r.Type}`).join(', ')})`);
+const inval = R.ApiMediaInvalidationPolicy?.Properties;
+if (inval) {
+  if (JSON.stringify(inval.Roles) !== JSON.stringify([{ 'Fn::Sub': APP_ROLE }])) fallo(`iam: la política solo va en el rol de la aplicación (${JSON.stringify(inval.Roles)})`);
+  const st = inval.PolicyDocument.Statement;
+  if (st.length !== 1 || st[0].Effect !== 'Allow' || st[0].NotAction || st[0].NotResource || st[0].Condition) fallo('iam: una sola declaración Allow, sin NotAction/NotResource');
+  const acciones = [].concat(st[0].Action);
+  if (acciones.length !== 1 || acciones[0] !== 'cloudfront:CreateInvalidation') fallo(`iam: solo cloudfront:CreateInvalidation (hay ${acciones.join(', ')})`);
+  if (JSON.stringify(st[0].Resource) !== JSON.stringify({ 'Fn::Sub': 'arn:${AWS::Partition}:cloudfront::${AWS::AccountId}:distribution/${ApiDistribution}' })) fallo(`iam: el recurso debe ser exactamente la distribución de la API (${JSON.stringify(st[0].Resource)})`);
+}
+const param = R.ApiMediaDistributionIdParam?.Properties;
+if (!param || R.ApiMediaDistributionIdParam.Type !== 'AWS::SSM::Parameter') fallo('falta el parámetro SSM con el id de la distribución de la API');
+else {
+  if (JSON.stringify(param.Name) !== JSON.stringify({ 'Fn::Sub': MEDIA_DISTRIBUTION_PARAM })) fallo(`ssm: nombre inesperado ${JSON.stringify(param.Name)}`);
+  if (param.Type !== 'String') fallo('ssm: el id no es secreto, tipo String');
+  if (JSON.stringify(param.Value) !== '{"Ref":"ApiDistribution"}') fallo('ssm: el valor debe ser el id de la distribución de la API (no la web)');
 }
 if (web.Origins.length !== 1 || !web.Origins[0].OriginAccessControlId || web.Origins[0].S3OriginConfig?.OriginAccessIdentity !== '') fallo('web: el único origen debe ser S3 con OAC');
 const errores = (web.CustomErrorResponses ?? []).map((e) => `${e.ErrorCode}>${e.ResponseCode}${e.ResponsePagePath}`).sort().join();
@@ -144,4 +165,4 @@ if (problemas.length) {
   for (const p of problemas) console.error(`  - ${p}`);
   process.exit(1);
 }
-console.log(`PASS · ${Object.keys(R).length} recursos (${[...new Set(tipos)].length} tipos) · referencias, bucket privado + OAC, HTTPS, fallback solo en la web, API sin caché salvo ${API_MEDIA_PATH} (clave sin Authorization), ALB con 403 final, sin secretos`);
+console.log(`PASS · ${Object.keys(R).length} recursos (${[...new Set(tipos)].length} tipos) · referencias, bucket privado + OAC, HTTPS, fallback solo en la web, API sin caché salvo ${API_MEDIA_PATH} (clave sin Authorization), invalidación solo de la API y solo para el rol de la app, ALB con 403 final, sin secretos`);

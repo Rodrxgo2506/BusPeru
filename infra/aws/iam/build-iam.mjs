@@ -287,6 +287,9 @@ export const boundary = {
     { Sid: 'DlmReglas', Effect: 'Allow',
       Action: ['events:PutRule', 'events:DeleteRule', 'events:DescribeRule', 'events:EnableRule', 'events:DisableRule', 'events:ListTargetsByRule', 'events:PutTargets', 'events:RemoveTargets'],
       Resource: 'arn:aws:events:*:*:rule/AwsDataLifecycleRule.managed-cwe.*' },
+    // Fase 3 · techo de la invalidación de /api/public/media/*: solo CreateInvalidation. El límite no conoce el id; la
+    // política del rol (pila busperu-staging-web) lo concede SOLO sobre la distribución de la API. Efectivo = intersección.
+    { Sid: 'InvalidarMedia', Effect: 'Allow', Action: 'cloudfront:CreateInvalidation', Resource: `arn:aws:cloudfront::${CUENTA}:distribution/*` },
   ],
 };
 

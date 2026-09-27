@@ -148,6 +148,15 @@ export const env = {
      */
     dir: process.env.STORAGE_DIR ?? 'storage',
   },
+  cdn: {
+    /**
+     * Distribución de CloudFront que sirve `/api/public/media/*` con caché larga. Al retirar una imagen
+     * pública se invalida su ruta en ESTA distribución (ver `media-cdn.service.ts`). En staging la escribe
+     * la pila `busperu-staging-web` en `/busperu/staging/app/CDN_MEDIA_DISTRIBUTION_ID`; sin valor (local,
+     * pruebas, producción mientras no tenga caché de media) no se invalida nada.
+     */
+    mediaDistributionId: process.env.CDN_MEDIA_DISTRIBUTION_ID ?? '',
+  },
   passwordReset: {
     /** Minutos de validez del código de 6 dígitos (mockup 10: 15 minutos). */
     codeTtlMinutes: Number(process.env.PASSWORD_RESET_CODE_TTL_MINUTES ?? 15),
