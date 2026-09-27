@@ -1,8 +1,9 @@
 import { Armchair, Check, DoorOpen, Footprints, Square, Users } from 'lucide-react';
-import { useMemo, useRef, type KeyboardEvent } from 'react';
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ComponentType, type FocusEvent, type KeyboardEvent, type PointerEvent } from 'react';
+import { createPortal } from 'react-dom';
 import type { LayoutElementType, SeatAvailability, TripLayoutDeck } from '@/types';
 import { formatCurrency } from '@/utils/format';
-import { deckLabel, seatCategories } from '@/utils/seat-map';
+import { deckLabel, placeTooltip, seatCategories, type TooltipPlacement } from '@/utils/seat-map';
 import { cn } from '@/utils/cn';
 
 /**
@@ -21,10 +22,14 @@ import { cn } from '@/utils/cn';
  * (`trip_seat_type_prices` o `trips.base_price`); esta pantalla solo lo muestra.
  */
 
-const ELEMENT_ICONS: Record<LayoutElementType, typeof Armchair> = {
+/**
+ * `Armchair` (lucide-react) es el icono de los ASIENTOS; el puesto del conductor usa el volante del propio
+ * mapa para que nunca se confunda con un asiento a la venta.
+ */
+const ELEMENT_ICONS: Record<LayoutElementType, ComponentType<{ className?: string }>> = {
   BATHROOM: Users,
   STAIRS: Footprints,
-  DRIVER: Armchair,
+  DRIVER: SteeringWheel,
   DOOR: DoorOpen,
   EMPTY: Square,
 };
@@ -80,6 +85,34 @@ export function SeatMap({
 }: SeatMapProps) {
   const categorias = useMemo(() => seatCategories(seats).map((c) => c.name), [seats]);
 
+  /**
+   * UN tooltip por mapa, pintado en un portal (ver `SeatTooltip`): el asiento solo lleva su texto en
+   * `data-tip`. Aparece con el ratón encima o con el foco del teclado; en táctil no hace falta (el asiento
+   * elegido sale en el resumen). Al cambiar de piso o de datos se cierra.
+   */
+  const [tipAnchor, setTipAnchor] = useState<HTMLElement | null>(null);
+  useEffect(() => setTipAnchor(null), [seats, deck]);
+  const asientoDe = (target: EventTarget | null) => (target instanceof Element ? target.closest<HTMLElement>('[data-tip]') : null);
+  const tipHandlers = {
+    onPointerOver: (event: PointerEvent<HTMLDivElement>) => {
+      if (event.pointerType !== 'mouse') return;
+      const asiento = asientoDe(event.target);
+      if (asiento) setTipAnchor(asiento);
+    },
+    onPointerOut: (event: PointerEvent<HTMLDivElement>) => {
+      const asiento = asientoDe(event.target);
+      if (asiento && !(event.relatedTarget instanceof Node && asiento.contains(event.relatedTarget))) setTipAnchor((actual) => (actual === asiento ? null : actual));
+    },
+    onFocus: (event: FocusEvent<HTMLDivElement>) => {
+      const asiento = asientoDe(event.target);
+      if (asiento?.matches(':focus-visible')) setTipAnchor(asiento);
+    },
+    onBlur: (event: FocusEvent<HTMLDivElement>) => {
+      const asiento = asientoDe(event.target);
+      setTipAnchor((actual) => (actual === asiento ? null : actual));
+    },
+  };
+
   // SIN PISO, UNA REJILLA POR PISO. La ficha del portal de empresa no pide la geometria y
   // llega con los asientos de todo el bus; dibujarlos en una sola rejilla haria que el
   // asiento (1,1) del piso de arriba tapara al (1,1) del de abajo y desaparecieran asientos
@@ -100,7 +133,7 @@ export function SeatMap({
   }, [seats, deck]);
 
   const contenido = (
-    <div className="space-y-4">
+    <div className="space-y-4" {...tipHandlers}>
       {grupos.map((grupo) => (
         // La clave del piso reinicia la animación: al cambiar de piso, el nuevo entra con un fundido corto.
         <div key={grupo.clave} className="animate-rise-in">
@@ -108,8 +141,8 @@ export function SeatMap({
             <p className="mb-2 text-center text-[10px] font-semibold uppercase tracking-[0.14em] text-slate-400">Piso {grupo.clave}</p>
           )}
           {/* El bus puede ser mas ancho que un telefono. Se desplaza DENTRO de su caja; la
-              pagina nunca crece a lo ancho. El margen superior deja sitio al tooltip de la fila 1. */}
-          <div className="-mx-1 overflow-x-auto px-1 pb-1 pt-9">
+              pagina nunca crece a lo ancho. El tooltip va en un portal: esta caja no lo recorta. */}
+          <div className="-mx-1 overflow-x-auto px-1 pb-1 pt-3">
             <DeckGrid
               deck={grupo.deck}
               seats={grupo.asientos}
@@ -146,6 +179,8 @@ export function SeatMap({
       ) : (
         contenido
       )}
+
+      <SeatTooltip anchor={tipAnchor} />
 
       {showHint && onToggle && (
         <p className="mt-3 text-center text-xs text-muted">Puedes seleccionar como máximo {maxSelectable} {maxSelectable === 1 ? 'asiento' : 'asientos'} por compra</p>
@@ -403,7 +438,7 @@ export function SeatItem({
   const aspecto = elegido
     ? 'border-brand-600 bg-brand-500 text-white shadow-md shadow-brand-500/30'
     : ocupado
-      ? 'border-slate-200 bg-slate-100 text-slate-300'
+      ? 'border-slate-200 bg-slate-100 text-slate-400'
       : inactivo
         ? 'border-dashed border-slate-200 bg-white text-slate-300'
         : cn(
@@ -418,6 +453,7 @@ export function SeatItem({
       onClick={() => onToggle?.(seat)}
       data-row={seat.row_number ?? undefined}
       data-col={seat.column_number ?? undefined}
+      data-tip={`${detalle}${ocupado ? ' · Ocupado' : inactivo ? ' · No disponible' : ''}`}
       aria-label={
         estado === 'disponible'
           ? `Seleccionar asiento ${seat.seat_number}, ${tipo}, ${formatCurrency(precio)}`
@@ -425,54 +461,102 @@ export function SeatItem({
       }
       aria-pressed={onToggle ? selected : undefined}
       className={cn(
-        'group relative flex flex-col items-center justify-center rounded-b-md rounded-t-[12px] border-2 leading-none tabular-nums transition duration-150 focus:outline-none focus-visible:ring-2 focus-visible:ring-ink focus-visible:ring-offset-2',
+        'relative flex flex-col items-center justify-center rounded-b-md rounded-t-[12px] border-2 leading-none tabular-nums transition duration-150 focus:outline-none focus-visible:ring-2 focus-visible:ring-ink focus-visible:ring-offset-2',
         aspecto,
         selected && 'animate-seat-pop',
         bloqueado && !selected && 'cursor-not-allowed',
         !onToggle && 'cursor-default',
       )}
     >
-      {/* Respaldo del asiento: una barra suave arriba, para que se lea como butaca. */}
-      <span className={cn('absolute inset-x-1.5 top-1 h-1 rounded-full', elegido ? 'bg-white/40' : 'bg-current opacity-25')} aria-hidden />
-      {ocupado ? (
-        <CrossGlyph />
-      ) : elegido ? (
-        <>
-          <Check className="h-3.5 w-3.5" strokeWidth={3} aria-hidden />
-          <span className="mt-0.5 text-[10px] font-bold">{seat.seat_number}</span>
-        </>
-      ) : (
-        <>
-          <span className="text-[11px] font-bold">{seat.seat_number}</span>
-          {showPrice && Number.isFinite(precio) && <span className="mt-0.5 text-[8px] font-semibold opacity-70">{Math.round(precio)}</span>}
-        </>
-      )}
+      {/* Icono de asiento (lucide `Armchair`) y, DEBAJO, el número: el icono nunca lo tapa. */}
+      <Armchair className={cn('shrink-0', showPrice ? 'h-3.5 w-3.5' : 'h-4 w-4 sm:h-[18px] sm:w-[18px]', ocupado && 'opacity-70')} strokeWidth={2} aria-hidden />
+      <span className="mt-0.5 text-[10px] font-bold sm:text-[11px]">{seat.seat_number}</span>
+      {showPrice && !ocupado && Number.isFinite(precio) && <span className="mt-px text-[8px] font-semibold opacity-70">{Math.round(precio)}</span>}
+      {/* El estado no depende solo del color: ✓ si está elegido, ✕ si está ocupado. */}
+      {elegido && <StateBadge tone="bg-ink text-white"><Check className="h-2.5 w-2.5" strokeWidth={3.5} /></StateBadge>}
+      {ocupado && <StateBadge tone="bg-slate-400 text-white"><CrossGlyph className="h-2 w-2" /></StateBadge>}
       {tone && !ocupado && <span className={cn('absolute bottom-1 right-1 h-1.5 w-1.5 rounded-full', tone)} aria-hidden />}
 
-      {/* Tooltip (ratón y teclado). En táctil no hace falta: el asiento elegido aparece en el resumen. */}
-      <span
-        role="tooltip"
-        className="pointer-events-none absolute bottom-full left-1/2 z-20 mb-2 hidden -translate-x-1/2 whitespace-nowrap rounded-lg bg-ink px-2.5 py-1.5 text-[11px] font-semibold text-white opacity-0 shadow-elevated transition-opacity duration-150 group-hover:opacity-100 group-focus-visible:opacity-100 sm:block"
-      >
-        {detalle}
-        {ocupado && ' · Ocupado'}
-        {inactivo && !ocupado && ' · No disponible'}
-      </span>
     </button>
   );
 }
 
-function CrossGlyph() {
+/**
+ * Tooltip del asiento. Vive en un portal con `position: fixed`, así que el `overflow-x-auto` del mapa
+ * (necesario para que un bus ancho no ensanche la página) no lo corta: ni en las columnas extremas ni en
+ * la primera fila. `placeTooltip` lo mantiene entero dentro de la ventana y la flecha apunta al asiento.
+ * Se recoloca al hacer scroll o redimensionar. El `aria-label` del asiento sigue siendo lo que se lee.
+ */
+function SeatTooltip({ anchor }: { anchor: HTMLElement | null }) {
+  const ref = useRef<HTMLDivElement>(null);
+  const [pos, setPos] = useState<TooltipPlacement | null>(null);
+  const texto = anchor?.dataset.tip ?? '';
+
+  useLayoutEffect(() => {
+    if (!anchor) {
+      setPos(null);
+      return;
+    }
+    const place = () => {
+      const tip = ref.current;
+      if (!tip || !anchor.isConnected) {
+        setPos(null);
+        return;
+      }
+      const r = anchor.getBoundingClientRect();
+      setPos(placeTooltip({ left: r.left, top: r.top, width: r.width, height: r.height }, { width: tip.offsetWidth, height: tip.offsetHeight }, { width: window.innerWidth, height: window.innerHeight }));
+    };
+    place();
+    window.addEventListener('resize', place);
+    window.addEventListener('scroll', place, true);
+    return () => {
+      window.removeEventListener('resize', place);
+      window.removeEventListener('scroll', place, true);
+    };
+  }, [anchor, texto]);
+
+  if (!anchor || !texto) return null;
+  return createPortal(
+    <div
+      ref={ref}
+      role="tooltip"
+      style={{ position: 'fixed', left: pos?.left ?? 0, top: pos?.top ?? 0, visibility: pos ? 'visible' : 'hidden' }}
+      className="pointer-events-none z-[70] w-max max-w-[min(18rem,calc(100vw-16px))] whitespace-normal break-words rounded-lg bg-ink px-2.5 py-1.5 text-center text-[11px] font-semibold leading-snug text-white shadow-elevated"
+    >
+      {/* Texto COMPLETO: sin elipsis ni recorte; si no cabe en una línea, se parte en varias. */}
+      {texto}
+      {pos && (
+        <span
+          aria-hidden
+          style={{ left: pos.arrowLeft }}
+          className={cn('absolute h-2 w-2 -translate-x-1/2 rotate-45 bg-ink', pos.placement === 'top' ? '-bottom-1' : '-top-1')}
+        />
+      )}
+    </div>,
+    document.body,
+  );
+}
+
+/** Insignia de estado en la esquina del asiento (dentro del margen del mapa, así no se recorta). */
+function StateBadge({ tone, children }: { tone: string; children: React.ReactNode }) {
   return (
-    <svg viewBox="0 0 24 24" className="h-3 w-3" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" aria-hidden>
+    <span className={cn('absolute -right-1 -top-1 flex h-3.5 w-3.5 items-center justify-center rounded-full ring-2 ring-white', tone)} aria-hidden>
+      {children}
+    </span>
+  );
+}
+
+function CrossGlyph({ className = 'h-3 w-3' }: { className?: string }) {
+  return (
+    <svg viewBox="0 0 24 24" className={className} fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" aria-hidden>
       <path d="M6 6l12 12M18 6 6 18" />
     </svg>
   );
 }
 
-function SteeringWheel() {
+function SteeringWheel({ className = 'h-3.5 w-3.5 text-brand-400' }: { className?: string }) {
   return (
-    <svg viewBox="0 0 24 24" className="h-3.5 w-3.5 text-brand-400" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden>
+    <svg viewBox="0 0 24 24" className={className} fill="none" stroke="currentColor" strokeWidth="2" aria-hidden>
       <circle cx="12" cy="12" r="9" />
       <circle cx="12" cy="12" r="2.5" />
       <path d="M12 9.5V3M9.8 13.2 4.2 16.5M14.2 13.2l5.6 3.3" />
@@ -505,22 +589,26 @@ export function SeatLegend({
   );
 
   const item = 'flex items-center gap-2 text-sm text-slate-600';
-  const muestra = 'h-5 w-5 shrink-0 rounded-b-[4px] rounded-t-[7px] border-2';
+  const muestra = 'relative flex h-6 w-6 shrink-0 items-center justify-center rounded-b-[4px] rounded-t-[7px] border-2';
   return (
     <ul className={cn(inline ? 'flex flex-wrap items-center gap-x-5 gap-y-2' : 'space-y-2.5', className)}>
       <li className={item}>
-        <span className={cn(muestra, 'border-brand-300 bg-brand-50')} aria-hidden />
+        <span className={cn(muestra, 'border-brand-300 bg-brand-50 text-brand-700')} aria-hidden>
+          <Armchair className="h-3.5 w-3.5" />
+        </span>
         Disponible
       </li>
       <li className={item}>
-        <span className={cn(muestra, 'flex items-center justify-center border-brand-600 bg-brand-500 text-white')} aria-hidden>
-          <Check className="h-3 w-3" strokeWidth={3} />
+        <span className={cn(muestra, 'border-brand-600 bg-brand-500 text-white')} aria-hidden>
+          <Armchair className="h-3.5 w-3.5" />
+          <StateBadge tone="bg-ink text-white"><Check className="h-2.5 w-2.5" strokeWidth={3.5} /></StateBadge>
         </span>
         Seleccionado
       </li>
       <li className={item}>
-        <span className={cn(muestra, 'flex items-center justify-center border-slate-200 bg-slate-100 text-slate-300')} aria-hidden>
-          <CrossGlyph />
+        <span className={cn(muestra, 'border-slate-200 bg-slate-100 text-slate-400')} aria-hidden>
+          <Armchair className="h-3.5 w-3.5 opacity-70" />
+          <StateBadge tone="bg-slate-400 text-white"><CrossGlyph className="h-2 w-2" /></StateBadge>
         </span>
         Ocupado
       </li>

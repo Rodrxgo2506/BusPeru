@@ -17,6 +17,10 @@
 //     CloudFront son de toda la distribución: con la API dentro, sus 403/404 llegarían como index.html.
 //     Sin ella el SPA (HTTPS) no podría llamar a un ALB HTTP (contenido mixto) y la guarda del build
 //     rechaza VITE_API_URL con http.
+//     Única excepción cacheable: `/api/public/media/*` (fotos públicas de destinos, logos y marca). Su URL lleva
+//     un nombre aleatorio que no se reutiliza y el origen ya responde `immutable`; se cachea en el borde con una
+//     política propia SIN Authorization, cookies ni query string en la clave, y solo GET/HEAD. El resto de /api/*
+//     sigue sin caché.
 //   · El ALB sigue sin ser público: su SG admite además la prefix list de CloudFront (solo puerto 80) y
 //     el oyente reenvía SOLO si llega la cabecera secreta de origen que pone la distribución API, o si
 //     viene de las IP de operador ya aprobadas; todo lo demás recibe 403.
@@ -46,6 +50,8 @@ export const MANAGED = {
   allViewerExceptHost: 'b689b0a8-53d0-40ab-baf2-68738e2966ac',
 };
 export const ORIGIN_HEADER = 'X-BusPeru-Origin';
+/** Fase 2 · único camino de la API que CloudFront puede guardar: imágenes públicas con nombre inmutable. */
+export const API_MEDIA_PATH = '/api/public/media/*';
 /**
  * F18-19B (F-01) · códigos de error que CloudFront guarda por defecto (ErrorCachingMinTTL 10 s) aunque la política
  * de caché sea TTL 0. En las distribuciones de la API se fijan a 0 s, sin página de sustitución.
@@ -167,6 +173,29 @@ const template = {
         },
       },
     },
+    // Fotos públicas de la API (`/api/public/media/*`). La clave de caché es solo la ruta: sin Authorization, sin
+    // cookies y sin query string, así ninguna respuesta queda ligada a una sesión. El origen responde
+    // `public, max-age=31536000, immutable`; en el borde se guarda como mucho 7 días (una imagen retirada deja de
+    // servirse sola en ese plazo sin invalidar), y el navegador conserva el año que pide el origen.
+    ApiMediaCachePolicy: {
+      Type: 'AWS::CloudFront::CachePolicy',
+      Properties: {
+        CachePolicyConfig: {
+          Name: sub('busperu-${EnvName}-api-media'),
+          Comment: 'Solo /api/public/media/*: imagenes publicas con nombre inmutable; clave sin Authorization, cookies ni query',
+          MinTTL: 0,
+          DefaultTTL: 86400,
+          MaxTTL: 604800,
+          ParametersInCacheKeyAndForwardedToOrigin: {
+            EnableAcceptEncodingGzip: false,
+            EnableAcceptEncodingBrotli: false,
+            HeadersConfig: { HeaderBehavior: 'none' },
+            CookiesConfig: { CookieBehavior: 'none' },
+            QueryStringsConfig: { QueryStringBehavior: 'none' },
+          },
+        },
+      },
+    },
     WebDistribution: {
       Type: 'AWS::CloudFront::Distribution',
       Properties: {
@@ -228,6 +257,18 @@ const template = {
             Compress: true,
             FunctionAssociations: funcion,
           },
+          // Fase 2 · la única ruta cacheable de la API. Mismo origen (con su cabecera secreta) y la misma restricción
+          // por IP; sin política de petición al origen: al ALB solo llega la ruta, nunca Authorization ni cookies.
+          CacheBehaviors: [{
+            PathPattern: API_MEDIA_PATH,
+            TargetOriginId: 'api-alb',
+            ViewerProtocolPolicy: 'https-only',
+            AllowedMethods: ['GET', 'HEAD'],
+            CachedMethods: ['GET', 'HEAD'],
+            CachePolicyId: ref('ApiMediaCachePolicy'),
+            Compress: false,
+            FunctionAssociations: funcion,
+          }],
           // F18-19B (F-01): sin esto CloudFront guarda ~10 s los errores de la API (404, 403, 5xx…) aunque la
           // política de caché sea TTL 0, y un perfil recién aprobado seguía respondiendo «no encontrado».
           // Solo el TTL del error: sin ResponsePagePath ni ResponseCode, el error llega tal cual (nunca index.html).

@@ -4,6 +4,7 @@ import {
   deckLabel,
   freeSeatsByDeck,
   isSeatSelectable,
+  placeTooltip,
   seatCategories,
   seatState,
   selectionSummary,
@@ -91,5 +92,59 @@ describe('asientos · resumen y total', () => {
       { name: 'Cama', price: 90 },
       { name: 'Semicama', price: 60 },
     ]);
+  });
+});
+
+describe('asientos · tooltip (portal, nunca recortado)', () => {
+  const vista = { width: 390, height: 844 };
+  const tip = { width: 238, height: 30 };
+  const asiento = (left: number, top = 400) => ({ left, top, width: 38, height: 38 });
+  const dentro = (p: { left: number }) => p.left >= 8 && p.left + tip.width <= vista.width - 8;
+
+  it('asiento central: centrado encima, con la flecha en el centro', () => {
+    const p = placeTooltip(asiento(176), tip, vista);
+    assert.equal(p.placement, 'top');
+    assert.equal(p.left, Math.round(176 + 19 - 119));
+    assert.equal(p.top, 400 - 8 - 30);
+    assert.equal(p.arrowLeft, 119);
+    assert.ok(dentro(p));
+  });
+  it('columna extrema izquierda: se desliza a la derecha y la flecha sigue apuntando al asiento', () => {
+    const a = asiento(20);
+    const p = placeTooltip(a, tip, vista);
+    assert.equal(p.left, 8);
+    assert.ok(dentro(p));
+    assert.equal(p.left + p.arrowLeft, a.left + a.width / 2);
+  });
+  it('columna extrema derecha: se desliza a la izquierda sin salirse', () => {
+    const a = asiento(340);
+    const p = placeTooltip(a, tip, vista);
+    assert.equal(p.left, 390 - 8 - 238);
+    assert.ok(dentro(p));
+    assert.equal(p.left + p.arrowLeft, a.left + a.width / 2);
+  });
+  it('primera fila pegada arriba: va debajo del asiento', () => {
+    const p = placeTooltip(asiento(176, 10), tip, vista);
+    assert.equal(p.placement, 'bottom');
+    assert.equal(p.top, 10 + 38 + 8);
+  });
+  it('última fila pegada abajo: sigue encima del asiento y dentro de la ventana', () => {
+    const p = placeTooltip(asiento(176, 844 - 38 - 4), tip, vista);
+    assert.equal(p.placement, 'top');
+    assert.ok(p.top >= 8 && p.top + tip.height <= 844 - 38 - 4);
+  });
+  it('texto partido en varias líneas (tooltip alto): cabe arriba o, si no, debajo; nunca fuera de la ventana', () => {
+    const alto = { width: 288, height: 58 };
+    const arriba = placeTooltip(asiento(20, 300), alto, vista);
+    assert.equal(arriba.placement, 'top');
+    assert.ok(arriba.top >= 8 && arriba.left >= 8 && arriba.left + alto.width <= 390 - 8);
+    const debajo = placeTooltip(asiento(340, 40), alto, vista);
+    assert.equal(debajo.placement, 'bottom');
+    assert.ok(debajo.top + alto.height <= 844 - 8 && debajo.left + alto.width <= 390 - 8);
+  });
+  it('texto más ancho que la ventana: queda al margen y la flecha dentro del tooltip', () => {
+    const p = placeTooltip(asiento(0), { width: 500, height: 30 }, vista);
+    assert.equal(p.left, 8);
+    assert.ok(p.arrowLeft >= 10 && p.arrowLeft <= 490);
   });
 });

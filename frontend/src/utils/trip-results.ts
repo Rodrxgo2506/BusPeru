@@ -108,3 +108,9 @@ export function arrivalDayOffset(departure: string, arrival: string | null | und
   if (!/^\d{4}-\d{2}-\d{2}$/.test(d) || !/^\d{4}-\d{2}-\d{2}$/.test(a)) return 0;
   return Math.round((Date.UTC(+a.slice(0, 4), +a.slice(5, 7) - 1, +a.slice(8, 10)) - Date.UTC(+d.slice(0, 4), +d.slice(5, 7) - 1, +d.slice(8, 10))) / 86400000);
 }
+
+/** Texto del «+N» de la hora de llegada (título y lectores de pantalla); null si llega el mismo día. */
+export function arrivalDayNote(offset: number): string | null {
+  if (!(offset > 0)) return null;
+  return offset === 1 ? 'Llega al día siguiente' : `Llega ${offset} días después`;
+}

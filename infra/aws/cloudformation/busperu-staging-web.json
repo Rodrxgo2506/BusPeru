@@ -256,6 +256,33 @@
         }
       }
     },
+    "ApiMediaCachePolicy": {
+      "Type": "AWS::CloudFront::CachePolicy",
+      "Properties": {
+        "CachePolicyConfig": {
+          "Name": {
+            "Fn::Sub": "busperu-${EnvName}-api-media"
+          },
+          "Comment": "Solo /api/public/media/*: imagenes publicas con nombre inmutable; clave sin Authorization, cookies ni query",
+          "MinTTL": 0,
+          "DefaultTTL": 86400,
+          "MaxTTL": 604800,
+          "ParametersInCacheKeyAndForwardedToOrigin": {
+            "EnableAcceptEncodingGzip": false,
+            "EnableAcceptEncodingBrotli": false,
+            "HeadersConfig": {
+              "HeaderBehavior": "none"
+            },
+            "CookiesConfig": {
+              "CookieBehavior": "none"
+            },
+            "QueryStringsConfig": {
+              "QueryStringBehavior": "none"
+            }
+          }
+        }
+      }
+    },
     "WebDistribution": {
       "Type": "AWS::CloudFront::Distribution",
       "Properties": {
@@ -430,6 +457,44 @@
               ]
             }
           },
+          "CacheBehaviors": [
+            {
+              "PathPattern": "/api/public/media/*",
+              "TargetOriginId": "api-alb",
+              "ViewerProtocolPolicy": "https-only",
+              "AllowedMethods": [
+                "GET",
+                "HEAD"
+              ],
+              "CachedMethods": [
+                "GET",
+                "HEAD"
+              ],
+              "CachePolicyId": {
+                "Ref": "ApiMediaCachePolicy"
+              },
+              "Compress": false,
+              "FunctionAssociations": {
+                "Fn::If": [
+                  "RestrictViewers",
+                  [
+                    {
+                      "EventType": "viewer-request",
+                      "FunctionARN": {
+                        "Fn::GetAtt": [
+                          "ViewerAllowlist",
+                          "FunctionARN"
+                        ]
+                      }
+                    }
+                  ],
+                  {
+                    "Ref": "AWS::NoValue"
+                  }
+                ]
+              }
+            }
+          ],
           "CustomErrorResponses": [
             {
               "ErrorCode": 400,

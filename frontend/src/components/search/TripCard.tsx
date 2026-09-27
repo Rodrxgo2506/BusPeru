@@ -2,9 +2,10 @@ import { ArrowRight, BadgeCheck, BedDouble, Bus, Heart, Snowflake, Star, Tv, Usb
 import type { CSSProperties } from 'react';
 import { Link } from 'react-router-dom';
 import { CompanyIdentity } from '@/components/companies/CompanyCard';
+import { ArrivalDayBadge } from '@/components/search/ArrivalDayBadge';
 import type { PublicTrip } from '@/types';
 import { durationBetween, formatCurrency, formatTime, parseJsonArray } from '@/utils/format';
-import { arrivalDayOffset, availabilityLabel, availabilityLevel } from '@/utils/trip-results';
+import { availabilityLabel, availabilityLevel } from '@/utils/trip-results';
 import { cn } from '@/utils/cn';
 
 /** Iconos de las comodidades que ya declara cada bus (`buses.amenities`). Las desconocidas llevan uno neutro. */
@@ -39,7 +40,6 @@ export function TripCard({
   const amenities = parseJsonArray(trip.amenities);
   const available = Number(trip.seats_available ?? 0);
   const level = availabilityLevel(available);
-  const plusDays = arrivalDayOffset(trip.departure_datetime, trip.arrival_datetime);
   const duration = durationBetween(trip.departure_datetime, trip.arrival_datetime);
 
   return (
@@ -121,11 +121,7 @@ export function TripCard({
             <div className="text-right">
               <p className="text-2xl font-extrabold tabular-nums leading-none text-ink sm:text-[28px]">
                 {formatTime(trip.arrival_datetime)}
-                {plusDays > 0 && (
-                  <sup className="ml-0.5 text-xs font-bold text-brand-600" title={`Llega ${plusDays === 1 ? 'al día siguiente' : `${plusDays} días después`}`}>
-                    +{plusDays}
-                  </sup>
-                )}
+                <ArrivalDayBadge departure={trip.departure_datetime} arrival={trip.arrival_datetime} />
               </p>
               <p className="mt-1.5 text-sm font-semibold text-slate-700">{trip.destination_city}</p>
               <p className="ml-auto max-w-[10rem] truncate text-xs text-muted" title={trip.destination_terminal ?? undefined}>{trip.destination_terminal}</p>

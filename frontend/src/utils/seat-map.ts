@@ -87,3 +87,36 @@ export function seatCategories(seats: readonly SeatLike[]): Array<{ name: string
   }
   return [...map.entries()].map(([name, price]) => ({ name, price })).sort((a, b) => a.name.localeCompare(b.name, 'es'));
 }
+
+export interface Box {
+  left: number;
+  top: number;
+  width: number;
+  height: number;
+}
+
+export interface TooltipPlacement {
+  left: number;
+  top: number;
+  placement: 'top' | 'bottom';
+  /** Posición horizontal de la flecha dentro del tooltip: siempre apunta al centro del asiento. */
+  arrowLeft: number;
+}
+
+/**
+ * Dónde pintar el tooltip de un asiento (coordenadas de la ventana, para `position: fixed`).
+ *
+ * Centrado sobre el asiento; si no cabe a lo ancho se desliza hasta quedar entero dentro de la ventana
+ * (columnas extremas) y la flecha sigue señalando el asiento. Si arriba no hay sitio (primera fila pegada
+ * al borde) va debajo. Como se pinta en un portal, ningún contenedor con `overflow` lo recorta.
+ */
+export function placeTooltip(anchor: Box, tip: { width: number; height: number }, viewport: { width: number; height: number }, margin = 8, gap = 8): TooltipPlacement {
+  const centro = anchor.left + anchor.width / 2;
+  const maxLeft = Math.max(margin, viewport.width - margin - tip.width);
+  const left = Math.min(Math.max(margin, centro - tip.width / 2), maxLeft);
+  const arriba = anchor.top - gap - tip.height;
+  const placement = arriba >= margin || anchor.top + anchor.height + gap + tip.height > viewport.height - margin ? 'top' : 'bottom';
+  const top = placement === 'top' ? arriba : anchor.top + anchor.height + gap;
+  const arrowLeft = Math.min(Math.max(10, centro - left), Math.max(10, tip.width - 10));
+  return { left: Math.round(left), top: Math.round(top), placement, arrowLeft: Math.round(arrowLeft) };
+}

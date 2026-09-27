@@ -3,6 +3,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { CompanyIdentity } from '@/components/companies/CompanyCard';
 import { DeckSelector, SeatLegend, SeatMap } from '@/components/common/SeatMap';
+import { ArrivalDayBadge } from '@/components/search/ArrivalDayBadge';
 import { Button, Card, ErrorState } from '@/components/ui';
 import { TARJETA_FLOTANTE as FLOTANTE, TravelBackdrop } from '@/components/common/TravelBackdrop';
 import { useAsync } from '@/hooks/useAsync';
@@ -259,7 +260,10 @@ export function SeatSelectionPage() {
               <span className="my-1 h-px w-full bg-slate-200" aria-hidden />
             </div>
             <div className="text-right">
-              <p className="text-xl font-extrabold tabular-nums text-ink sm:text-2xl">{formatTime(data.arrival_datetime)}</p>
+              <p className="text-xl font-extrabold tabular-nums text-ink sm:text-2xl">
+                {formatTime(data.arrival_datetime)}
+                <ArrivalDayBadge departure={data.departure_datetime} arrival={data.arrival_datetime} />
+              </p>
               <p className="text-sm font-semibold text-slate-700">{data.destination_city}</p>
             </div>
           </div>

@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import {
+  arrivalDayNote,
   arrivalDayOffset,
   availabilityLabel,
   availabilityLevel,
@@ -57,6 +58,25 @@ describe('resultados · duración y llegada', () => {
   it('+1 cuando se llega al día siguiente', () => {
     assert.equal(arrivalDayOffset('2026-09-27 20:00:00', '2026-09-28 06:00:00'), 1);
     assert.equal(arrivalDayOffset('2026-09-27 08:00:00', '2026-09-27 20:00:00'), 0);
+  });
+  it('+1 del resumen de asientos: sale de las fechas reales, nunca se inventa', () => {
+    // El caso de la pantalla de asientos: 27 SEP 20:00 → 28 SEP 14:00.
+    assert.equal(arrivalDayOffset('2026-09-27 20:00:00', '2026-09-28 14:00:00'), 1);
+    assert.equal(arrivalDayNote(1), 'Llega al día siguiente');
+    // Por un minuto sí cambia de día; 23 h 59 min dentro del mismo día, no.
+    assert.equal(arrivalDayOffset('2026-09-27 23:59:00', '2026-09-28 00:01:00'), 1);
+    assert.equal(arrivalDayOffset('2026-09-27 00:00:00', '2026-09-27 23:59:00'), 0);
+    // Cambio de mes y de año, y viajes de más de un día.
+    assert.equal(arrivalDayOffset('2026-09-30 22:00:00', '2026-10-01 05:00:00'), 1);
+    assert.equal(arrivalDayOffset('2026-12-31 21:00:00', '2027-01-01 09:00:00'), 1);
+    assert.equal(arrivalDayOffset('2026-09-27 20:00:00', '2026-09-29 08:00:00'), 2);
+    assert.equal(arrivalDayNote(2), 'Llega 2 días después');
+    // Sin llegada o con fechas que no se entienden: nada de «+N».
+    assert.equal(arrivalDayOffset('2026-09-27 20:00:00', null), 0);
+    assert.equal(arrivalDayOffset('2026-09-27 20:00:00', undefined), 0);
+    assert.equal(arrivalDayOffset('2026-09-27 20:00:00', 'mañana'), 0);
+    assert.equal(arrivalDayNote(0), null);
+    assert.equal(arrivalDayNote(-1), null);
   });
 });
 

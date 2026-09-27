@@ -5,12 +5,13 @@
 // 1) Referencias: todo Ref / GetAtt / Sub / Condition apunta a algo que existe.
 // 2) Reglas de F18-09: solo staging; bucket privado (BPA completo, sin lectura pública, solo la
 //    distribución web por OAC); sin dominio ni certificado propio; HTTPS hacia el navegador; fallback
-//    de SPA solo en la distribución web; la API sin caché y sin páginas de error; el ALB solo gana la
+//    de SPA solo en la distribución web; la API sin caché (salvo /api/public/media/*, con clave sin
+//    Authorization, cookies ni query) y sin páginas de error; el ALB solo gana la
 //    prefix list de CloudFront en el 80 (ningún CIDR nuevo) y el oyente acaba en un 403; sin secretos.
 // 3) Que el JSON escrito coincida con el generador.
 
 import { readFileSync } from 'node:fs';
-import template, { API_ERROR_CODES, MANAGED, ORIGIN_HEADER } from './build-web-template.mjs';
+import template, { API_ERROR_CODES, API_MEDIA_PATH, MANAGED, ORIGIN_HEADER } from './build-web-template.mjs';
 
 const problemas = [];
 const fallo = (m) => problemas.push(m);
@@ -71,7 +72,28 @@ for (const [n, d] of [['web', web], ['api', api]]) {
   if (d.Aliases) fallo(`${n}: sin dominio en F18-09 (Aliases prohibido)`);
   if (JSON.stringify(d.ViewerCertificate) !== '{"CloudFrontDefaultCertificate":true}') fallo(`${n}: solo el certificado por defecto de CloudFront`);
   if (!['redirect-to-https', 'https-only'].includes(d.DefaultCacheBehavior.ViewerProtocolPolicy)) fallo(`${n}: permite HTTP al navegador`);
-  if (d.CacheBehaviors) fallo(`${n}: comportamientos adicionales no previstos`);
+  if (n === 'web' && d.CacheBehaviors) fallo(`${n}: comportamientos adicionales no previstos`);
+}
+// Fase 2 · la API tiene UN comportamiento adicional y solo uno: las imágenes públicas de /api/public/media/*.
+const extras = api.CacheBehaviors ?? [];
+if (extras.length !== 1) fallo(`api: se espera exactamente 1 comportamiento adicional (hay ${extras.length})`);
+for (const b of extras) {
+  if (b.PathPattern !== API_MEDIA_PATH) fallo(`api: comportamiento cacheable fuera de ${API_MEDIA_PATH} (${b.PathPattern})`);
+  if (b.TargetOriginId !== 'api-alb') fallo('api/media: debe ir al mismo origen ALB (con la cabecera secreta)');
+  if (b.ViewerProtocolPolicy !== 'https-only') fallo('api/media: solo HTTPS');
+  if (JSON.stringify(b.AllowedMethods) !== '["GET","HEAD"]' || JSON.stringify(b.CachedMethods) !== '["GET","HEAD"]') fallo('api/media: solo GET y HEAD');
+  if (JSON.stringify(b.CachePolicyId) !== '{"Ref":"ApiMediaCachePolicy"}') fallo('api/media: debe usar ApiMediaCachePolicy');
+  if (b.OriginRequestPolicyId) fallo('api/media: sin política de petición al origen (no se reenvía Authorization ni cookies)');
+  if (JSON.stringify(b.FunctionAssociations) !== JSON.stringify(api.DefaultCacheBehavior.FunctionAssociations)) fallo('api/media: debe tener la misma restricción de visitantes que el resto de la API');
+}
+const media = R.ApiMediaCachePolicy?.Properties.CachePolicyConfig;
+if (!media) fallo('falta ApiMediaCachePolicy');
+else {
+  const k = media.ParametersInCacheKeyAndForwardedToOrigin;
+  if (k.HeadersConfig.HeaderBehavior !== 'none' || k.HeadersConfig.Headers) fallo('api/media: ninguna cabecera (tampoco Authorization) en la clave de caché');
+  if (k.CookiesConfig.CookieBehavior !== 'none') fallo('api/media: sin cookies en la clave de caché');
+  if (k.QueryStringsConfig.QueryStringBehavior !== 'none') fallo('api/media: sin query string en la clave de caché');
+  if (!(media.MaxTTL > 0 && media.MaxTTL <= 604800)) fallo(`api/media: MaxTTL en el borde entre 1 s y 7 días (hay ${media.MaxTTL})`);
 }
 if (web.Origins.length !== 1 || !web.Origins[0].OriginAccessControlId || web.Origins[0].S3OriginConfig?.OriginAccessIdentity !== '') fallo('web: el único origen debe ser S3 con OAC');
 const errores = (web.CustomErrorResponses ?? []).map((e) => `${e.ErrorCode}>${e.ResponseCode}${e.ResponsePagePath}`).sort().join();
@@ -122,4 +144,4 @@ if (problemas.length) {
   for (const p of problemas) console.error(`  - ${p}`);
   process.exit(1);
 }
-console.log(`PASS · ${Object.keys(R).length} recursos (${[...new Set(tipos)].length} tipos) · referencias, bucket privado + OAC, HTTPS, fallback solo en la web, API sin caché, ALB con 403 final, sin secretos`);
+console.log(`PASS · ${Object.keys(R).length} recursos (${[...new Set(tipos)].length} tipos) · referencias, bucket privado + OAC, HTTPS, fallback solo en la web, API sin caché salvo ${API_MEDIA_PATH} (clave sin Authorization), ALB con 403 final, sin secretos`);
