@@ -117,8 +117,11 @@ await check('usuarios sintéticos COMPANY_ADMIN, OPERATOR (de la empresa sintét
 });
 
 g = 'Flujo de compra (CUSTOMER)';
+// Contrato real de GET /public/trips: ciudad de origen, ciudad de destino y día de salida del viaje de ida
+// creado por esta prueba (no acepta origin_id/destination_id: sin filtro se recibiría solo la 1.ª página).
+const busquedaIda = () => new URLSearchParams({ origin: c.ciudadA, destination: c.ciudadB, date: c.fIda.slice(0, 10) });
 await check('búsqueda pública de ida', async () => {
-  const r = exige(await pedir('GET', `/public/trips?origin_id=${c.a}&destination_id=${c.b}`), 200, 'búsqueda');
+  const r = exige(await pedir('GET', `/public/trips?${busquedaIda()}`), 200, 'búsqueda');
   assert(filas(r.datos).some((t) => t.id === c.ida), 'el viaje no aparece'); return `viaje ${c.ida} encontrado`;
 });
 await check('búsqueda de itinerario ida y vuelta', async () => {
@@ -207,7 +210,7 @@ g = 'Retirada de los datos de la prueba';
 await check('empresa sintética INACTIVE: fuera de la portada y de la búsqueda', async () => {
   assert(c.empresa, 'no llegó a crearse la empresa');
   exige(await pedir('PUT', `/companies/${c.empresa}`, { token: tAdmin, cuerpo: { status: 'INACTIVE' } }), 200, 'desactivar');
-  const r = exige(await pedir('GET', `/public/trips?origin_id=${c.a}&destination_id=${c.b}`), 200, 'búsqueda');
+  const r = exige(await pedir('GET', `/public/trips?${busquedaIda()}`), 200, 'búsqueda');
   assert(!filas(r.datos).some((t) => t.id === c.ida), 'el viaje sigue apareciendo en la búsqueda');
   const d = exige(await pedir('GET', '/public/destinations'), 200, 'destinos');
   assert(!JSON.stringify(d.datos).includes(c.ciudadB), 'la ciudad sintética sigue en la portada');
